@@ -7,14 +7,16 @@
                 "${workspaceFolder}/include/dummy_headers",
                 "${workspaceFolder}/mm-decomp/include",
                 "${workspaceFolder}/mm-decomp/src",
-                "${workspaceFolder}/mm-decomp/extracted/n64-us"
+                "${workspaceFolder}/mm-decomp/extracted/n64-us",
+                "${workspaceFolder}/mnsg/include",
+                "${workspaceFolder}/mnsg/include/libultra"
             ],
             "defines": [
                 "F3DEX_GBI_2",
                 "_LANGUAGE_C",
                 "MIPS"
             ],
-            "compilerPath": "clang",
+            "compilerPath": "/opt/homebrew/Cellar/llvm/21.1.0/bin/clang",
             "cStandard": "c99",
             "intelliSenseMode": "clang-x86"
         }

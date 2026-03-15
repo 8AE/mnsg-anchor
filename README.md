@@ -23,6 +23,7 @@ You'll also need to grab a build of the `RecompModTool` utility from the release
 * Next, run the `RecompModTool` utility with `mod.toml` as the first argument and the build dir (`build` in the case of this template) as the second argument.
   * This will produce your mod's `.nrm` file in the build folder.
   * If you're on MacOS, you may need to specify the path to the `clang` and `ld.lld` binaries using the `CC` and `LD` environment variables, respectively.
+* Alternatively, run `./build_mod.sh` to execute both steps (`make` and `./RecompModTool mod.toml build`) in one command.
 
 ### Updating the Mystical Ninja Starring Goemon Decompilation Submodule
 Mods can also be made with newer versions of the Mystical Ninja Starring Goemon decompilation instead of the commit targeted by this repo's submodule.
