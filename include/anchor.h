@@ -146,6 +146,19 @@ extern "C"
     int anchor_update_client_state(const char *state_json);
 
     /**
+     * @brief Report the local player's current room to the room.
+     *
+     * Reads the 16-bit game room ID, looks up the corresponding area name (e.g.
+     * "Oedo Town", "Ghost Toys Castle"), and broadcasts it as @p currentRoom in
+     * an UPDATE_CLIENT_STATE packet.  Only sends when the room ID actually changes
+     * so it is safe to call every game frame.
+     *
+     * @param room_id  The 16-bit room/scene ID from D_800C7AB2.
+     * @return 1 if a packet was sent, 0 otherwise.
+     */
+    int anchor_set_local_room(unsigned int room_id);
+
+    /**
      * @brief Signal to the server whether a save file is currently loaded.
      *
      * Set to 1 once the player's save is loaded; teammates can then request your

@@ -276,6 +276,18 @@ int anchor_update_client_state(const char *state_json)
     return result;
 }
 
+int anchor_set_local_room(unsigned int room_id)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_U32("room_id", room_id);
+    REPY_FN_EXEC_CACHE(anchor_set_local_room_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.set_local_room(room_id)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_set_save_loaded(int is_loaded)
 {
     REPY_FN_SETUP;

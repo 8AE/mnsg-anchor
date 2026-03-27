@@ -30,6 +30,9 @@
 #include "recompui.h"
 #include "anchor.h"
 
+/* Current scene/room ID – written by the game engine each frame. */
+extern unsigned short D_800C7AB2;
+
 /* =========================================================================
    Tunables
    ========================================================================= */
@@ -44,7 +47,7 @@
 #define MAX_PLAYERS 32
 
 /** Width of the player-list panel in DP units. */
-#define PANEL_WIDTH 220.0f
+#define PANEL_WIDTH 280.0f
 
 /* =========================================================================
    Colour constants
@@ -58,6 +61,9 @@ static const RecompuiColor COLOR_GREEN = {80, 200, 80, 255};
 static const RecompuiColor COLOR_RED = {220, 60, 60, 255};
 static const RecompuiColor COLOR_GOLD = {220, 190, 60, 255};
 static const RecompuiColor COLOR_ACCENT_BG = {20, 20, 20, 200};
+
+/* Last room ID we sent to Python; 0xFFFF = "not sent yet". */
+static unsigned short s_prev_room_id = 0xFFFF;
 
 /* =========================================================================
    Notification context
@@ -207,6 +213,16 @@ void anchor_ui_show_notification(const char *msg, int is_success)
 RECOMP_HOOK_RETURN("func_80002040_2C40")
 void anchor_ui_update(void)
 {
+    /* ----- Room-ID tracking (runs every frame, even when disconnected) ---- */
+    {
+        unsigned short cur_room = D_800C7AB2;
+        if (cur_room != s_prev_room_id)
+        {
+            s_prev_room_id = cur_room;
+            anchor_set_local_room((unsigned int)cur_room);
+        }
+    }
+
     /* ----- Notification countdown ---------------------------------------- */
     if (s_notif_timer > 0)
     {

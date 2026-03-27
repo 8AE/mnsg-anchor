@@ -72,12 +72,71 @@ _send_lock = threading.Lock()
 # Background receiver thread.
 _rx_thread: "threading.Thread | None" = None
 
+# Last room ID sent to the server (avoids redundant state updates).
+_local_room_id: int = -1
+
 ###############################################################################
 # Constants
 ###############################################################################
 
 DEFAULT_HOST: str = "anchor.hm64.org"
 DEFAULT_PORT: int = 43383
+
+###############################################################################
+# Room ID → area name lookup table
+# Sourced from MNSGRecompRando apworld/Logic/ files.
+###############################################################################
+
+_ROOM_NAMES: "dict[int, str]" = {}
+
+
+def _build_room_names() -> None:
+    t = _ROOM_NAMES
+    # Oedo Castle (interior)
+    for rid in [0x000, 0x002, 0x003, 0x004, 0x005, 0x006, 0x007, 0x008, 0x009,
+                0x00A, 0x00B, 0x00C, 0x00D, 0x00E, 0x00F, 0x010, 0x011, 0x012,
+                0x014, 0x015, 0x016, 0x01A, 0x028]:
+        t[rid] = "Oedo Castle"
+    # Ghost Toys Castle
+    for rid in [0x02F, 0x030, 0x031, 0x032, 0x033, 0x034, 0x035, 0x036, 0x039,
+                0x03A, 0x03B, 0x03C, 0x03E, 0x03F, 0x040, 0x041, 0x042, 0x043,
+                0x044, 0x045, 0x046, 0x049]:
+        t[rid] = "Ghost Toys Castle"
+    # Festival Temple Castle
+    for rid in [0x05A, 0x05B, 0x05C, 0x05D, 0x05E, 0x05F, 0x060, 0x061, 0x062,
+                0x063, 0x064, 0x065, 0x066, 0x067, 0x068, 0x069, 0x06A, 0x06B,
+                0x06C, 0x06D, 0x06E, 0x06F, 0x070, 0x071]:
+        t[rid] = "Festival Temple Castle"
+    # Gourmet Submarine
+    for rid in [0x081, 0x082, 0x083, 0x085, 0x086, 0x087, 0x089, 0x08A, 0x08B,
+                0x08C, 0x08D, 0x08E, 0x090, 0x091, 0x094, 0x095, 0x096, 0x097,
+                0x098, 0x099, 0x09D]:
+        t[rid] = "Gourmet Submarine"
+    # Gorgeous Music Castle
+    for rid in [0x0A8, 0x0A9, 0x0AA, 0x0AB, 0x0AC, 0x0AD, 0x0AE, 0x0AF,
+                0x0B0, 0x0B1, 0x0B2, 0x0B3, 0x0B4, 0x0B5, 0x0B6, 0x0B7,
+                0x0B8, 0x0B9, 0x0BA, 0x0BB, 0x0BC, 0x0BD, 0x0BE, 0x0BF,
+                0x0C0, 0x0C1]:
+        t[rid] = "Gorgeous Music Castle"
+    # Kai Highway / Mt. Fuji
+    for rid in [0x12C, 0x12D, 0x12E, 0x12F, 0x1B1, 0x1D2]:
+        t[rid] = "Kai / Mt. Fuji"
+    # Oedo Town overworld
+    for rid in [0x15E, 0x15F, 0x160, 0x161, 0x162, 0x163, 0x1D1, 0x1E0]:
+        t[rid] = "Oedo Town"
+    # Oedo Castle exterior / approaches
+    for rid in [0x164, 0x165, 0x166]:
+        t[rid] = "Oedo Castle Exterior"
+    # Zazen Town
+    for rid in [0x167, 0x168, 0x169, 0x16A, 0x16B, 0x16C, 0x16D, 0x16E,
+                0x16F, 0x170, 0x171, 0x172, 0x173]:
+        t[rid] = "Zazen Town"
+    # Folkypoke Village
+    for rid in [0x175, 0x176, 0x177, 0x178, 0x1B8]:
+        t[rid] = "Folkypoke Village"
+
+
+_build_room_names()
 
 ###############################################################################
 # Internal helpers
@@ -102,7 +161,7 @@ def _send_raw(packet: dict) -> bool:
 
 def _recv_loop() -> None:
     """Background thread: read null-terminated packets and push to _recv_queue."""
-    global _connected, _client_id, _server_message, _disabled
+    global _connected, _client_id, _server_message, _disabled, _local_room_id
     buf = b""
     while _connected and _sock is not None:
         try:
@@ -155,10 +214,14 @@ def _recv_loop() -> None:
                             cs = s.get("clientState", s)
                             name = cs.get("name", "") or s.get("name", f"Player{cid}")
                             online = bool(cs.get("online", True))
-                            new_players[cid] = {"name": name, "teamId": cs.get("teamId", ""), "online": online, "self": bool(s.get("self"))}
+                            location = cs.get("currentRoom", "")
+                            new_players[cid] = {"name": name, "teamId": cs.get("teamId", ""), "online": online, "self": bool(s.get("self")), "location": location}
                     with _player_states_lock:
                         _player_states.clear()
                         _player_states.update(new_players)
+                    # Reset so the next set_local_room() call re-broadcasts our room
+                    # even if the room ID hasn't changed (our entry was just rebuilt).
+                    _local_room_id = -1
 
                 # Update a single player's status when they broadcast their state.
                 if ptype == "UPDATE_CLIENT_STATE":
@@ -170,9 +233,12 @@ def _recv_loop() -> None:
                                 if "name" in cs:
                                     _player_states[cid]["name"] = cs["name"]
                                 _player_states[cid]["online"] = bool(cs.get("online", True))
+                                if "currentRoom" in cs:
+                                    _player_states[cid]["location"] = cs["currentRoom"]
                             else:
                                 name = cs.get("name", f"Player{cid}")
-                                _player_states[cid] = {"name": name, "teamId": cs.get("teamId", ""), "online": bool(cs.get("online", True)), "self": False}
+                                location = cs.get("currentRoom", "")
+                                _player_states[cid] = {"name": name, "teamId": cs.get("teamId", ""), "online": bool(cs.get("online", True)), "self": False, "location": location}
 
                 # Enqueue for C-side polling via poll_packet().
                 _recv_queue.put(raw)
@@ -187,7 +253,8 @@ def _recv_loop() -> None:
 
 def _do_disconnect() -> None:
     """Close the socket and mark as disconnected (idempotent)."""
-    global _sock, _connected
+    global _sock, _connected, _local_room_id
+    _local_room_id = -1
     _connected = False
     s = _sock
     _sock = None
@@ -497,6 +564,36 @@ def send_custom_packet(
     return _send_raw(packet)
 
 
+def set_local_room(room_id: int) -> bool:
+    """
+    Report this client's current room ID to the Anchor server.
+
+    Looks up the area name in the built-in table and broadcasts it as
+    ``currentRoom`` in an UPDATE_CLIENT_STATE packet.  Only sends when the
+    room actually changes to avoid flooding the server.
+
+    Also updates the local player's own entry in ``_player_states`` immediately
+    so the player list shows our own location without waiting for a server echo.
+
+    Args:
+        room_id: The 16-bit room/scene ID read from the game (D_800C7AB2).
+
+    Returns True if a packet was sent, False otherwise.
+    """
+    global _local_room_id
+    if not _connected:
+        return False
+    if room_id == _local_room_id:
+        return False
+    _local_room_id = room_id
+    area_name = _ROOM_NAMES.get(room_id, "")
+    # Update our own local entry immediately – the server won't echo us back.
+    with _player_states_lock:
+        if _client_id in _player_states:
+            _player_states[_client_id]["location"] = area_name
+    return update_client_state(json.dumps({"currentRoom": area_name}))
+
+
 def send_game_complete() -> bool:
     """Signal to the server that the game has been completed."""
     return _send_raw({"type": "GAME_COMPLETE", "clientId": _client_id})
@@ -537,5 +634,9 @@ def get_player_names_json() -> str:
         entries = []
         for _k, v in sorted(_player_states.items()):
             prefix = "[+] " if v.get("online", True) else "[-] "
-            entries.append(prefix + v["name"])
+            name_str = prefix + v["name"]
+            loc = v.get("location", "")
+            if loc:
+                name_str += " - " + loc
+            entries.append(name_str)
     return json.dumps(entries, separators=(",", ":"))
