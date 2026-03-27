@@ -254,6 +254,34 @@ extern "C"
      */
     int anchor_request_stats(void);
 
+    /* =========================================================================
+       Player list
+       ========================================================================= */
+
+    /**
+     * @brief Return a JSON array of player name strings for everyone in the room.
+     *
+     * Example return value: ``["Alice","Bob","Player3"]``
+     *
+     * Returns ``"[]"`` when not connected or the room is empty.
+     *
+     * The returned string is allocated in recompiled memory and must be freed
+     * by the caller with recomp_free().
+     */
+    char *anchor_get_player_names_json(void);
+
+    /* =========================================================================
+       UI helpers
+       ========================================================================= */
+
+    /**
+     * @brief Display a brief connection notification banner on screen.
+     *
+     * @param msg        UTF-8 message to show.  Pass NULL for a default string.
+     * @param is_success Non-zero => green accent (success); zero => red (failed).
+     */
+    void anchor_ui_show_notification(const char *msg, int is_success);
+
 #ifdef __cplusplus
 }
 #endif

@@ -98,11 +98,13 @@ REPY_ON_POST_INIT void anchor_init(void)
     {
         recomp_printf("[Anchor] Auto-connect failed (host=%s port=%d room=%s)\n",
                       cfg_host, cfg_port, cfg_room_id);
+        anchor_ui_show_notification("Anchor: connection failed.", 0);
     }
     else
     {
         recomp_printf("[Anchor] Connected to %s:%d  room=%s  player=%s  team=%s\n",
                       cfg_host, cfg_port, cfg_room_id, cfg_player_name, cfg_team_id);
+        anchor_ui_show_notification("Connected to Anchor!", 1);
     }
 
     /* -- 5. Free config strings (recomp_free_config_string, not recomp_free). */
@@ -406,4 +408,19 @@ int anchor_request_stats(void)
     int result = (int)REPY_FN_GET_BOOL("result");
     REPY_FN_CLEANUP;
     return result;
+}
+
+/* =========================================================================
+   Player list
+   ========================================================================= */
+
+char *anchor_get_player_names_json(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_get_player_names_json_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.get_player_names_json()\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result; /* caller must recomp_free() */
 }

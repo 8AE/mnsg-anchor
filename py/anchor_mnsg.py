@@ -62,6 +62,10 @@ _recv_queue: "queue.Queue[str]" = queue.Queue()
 # Latest SERVER_MESSAGE text (consumed on read).
 _server_message: str = ""
 
+# Map of clientId -> client state dict, updated from ALL_CLIENT_STATE packets.
+_player_states: "dict[int, dict]" = {}
+_player_states_lock = threading.Lock()
+
 # Lock protecting _sock writes to prevent concurrent send races.
 _send_lock = threading.Lock()
 
@@ -138,14 +142,37 @@ def _recv_loop() -> None:
                     logger.info("anchor_mnsg: SERVER_MESSAGE: %s", _server_message)
                     # Fall through so game code can also react if desired.
 
-                # Track our own assigned client ID from ALL_CLIENT_STATE.
+                # Track our own assigned client ID and player list from ALL_CLIENT_STATE.
                 if ptype == "ALL_CLIENT_STATE":
                     states = packet.get("state", [])
+                    new_players: dict = {}
                     for s in states:
+                        cid = s.get("clientId", 0)
                         if s.get("self"):
-                            cid = s.get("clientId", 0)
                             if cid:
                                 _client_id = cid
+                        if cid:
+                            cs = s.get("clientState", s)
+                            name = cs.get("name", "") or s.get("name", f"Player{cid}")
+                            online = bool(cs.get("online", True))
+                            new_players[cid] = {"name": name, "teamId": cs.get("teamId", ""), "online": online, "self": bool(s.get("self"))}
+                    with _player_states_lock:
+                        _player_states.clear()
+                        _player_states.update(new_players)
+
+                # Update a single player's status when they broadcast their state.
+                if ptype == "UPDATE_CLIENT_STATE":
+                    cid = packet.get("clientId", 0)
+                    if cid:
+                        cs = packet.get("clientState", {})
+                        with _player_states_lock:
+                            if cid in _player_states:
+                                if "name" in cs:
+                                    _player_states[cid]["name"] = cs["name"]
+                                _player_states[cid]["online"] = bool(cs.get("online", True))
+                            else:
+                                name = cs.get("name", f"Player{cid}")
+                                _player_states[cid] = {"name": name, "teamId": cs.get("teamId", ""), "online": bool(cs.get("online", True)), "self": False}
 
                 # Enqueue for C-side polling via poll_packet().
                 _recv_queue.put(raw)
@@ -169,6 +196,8 @@ def _do_disconnect() -> None:
             s.close()
         except Exception:
             pass
+    with _player_states_lock:
+        _player_states.clear()
 
 
 ###############################################################################
@@ -491,3 +520,22 @@ def set_team(new_team_id: str) -> bool:
     global _team_id
     _team_id = new_team_id
     return update_client_state(json.dumps({"teamId": new_team_id}))
+
+
+def get_player_names_json() -> str:
+    """
+    Return a JSON array of player name strings for all clients currently in the
+    room (including ourselves), sorted by client ID.
+
+    Each entry is prefixed with a status indicator:
+      ``[+] Name``  – player is online / connected
+      ``[-] Name``  – player is offline / disconnected
+
+    Returns ``'[]'`` when not connected or the room is empty.
+    """
+    with _player_states_lock:
+        entries = []
+        for _k, v in sorted(_player_states.items()):
+            prefix = "[+] " if v.get("online", True) else "[-] "
+            entries.append(prefix + v["name"])
+    return json.dumps(entries, separators=(",", ":"))
