@@ -5,27 +5,30 @@
 
 # Unique ID of this mod. Pick something long enough that it'll never be the same as any other mod.
 # The name displayed in the mod management menu is separate from this so this doesn't need to be human readable.
-id = "mnsg_recomp_mod_template"
+id = "mnsg_anchor_client"
 
 # Version of this mod.
-version = "1.0.0"
+version = "0.1.0"
 
 # The name that will show up for this mod in the mod menu. This should be human readable.
-display_name = "Test Mod"
+display_name = "Anchor Co-op Client"
 
 # The description that will show up when this mod is displayed in the mod menu. This should be human readable.
-description =  """
-This is an example mod for Mystical Ninja Starring Goemon: Recompiled that can be used as a template for creating mods. \
-When this mod is enabled, a string of text will appear in the top left corner of the screen.
+description = """
+Adds Anchor co-op support to Mystical Ninja Starring Goemon: Recompiled. \
+Connect to an Anchor server to sync items, flags, and save states with teammates. \
+Requires the RecompExternalPython (REPY) extlib for networking. \
 
-For more details, see https://github.com/klorfmorf/MNSGRecompModTemplate."""
+Default public server: anchor.hm64.org:43383"""
 
 # A short description that will show up in this mod's entry in the mod list. This should be human readable and kept short
 # to prevent it from being cut off due to the limited space.
-short_description = "Display a string of text in the top left corner of the screen."
+short_description = "Anchor co-op client – sync items and flags with teammates."
 
 # Authors of this mod.
-authors = [ "Your name here" ]
+authors = ["Your name here"]
+
+# Anchor co-op for MNSG – uses RecompExternalPython (REPY) for TCP networking.
 
 # ID of the target recomp game.
 game_id = "mnsg"
@@ -35,14 +38,16 @@ minimum_recomp_version = "0.1.0"
 
 # Dependency mods. Each entry is the mod's ID and then an optional minimum version of the dependency mod.
 dependencies = [
-# Example dependency:
-#    "modname:1.0.0"
+    # RecompExternalPython (REPY) v2.0.0 – provides the embedded Python 3.14 interpreter
+    # used for TCP networking with the Anchor server.
+    # https://github.com/LT-Schmiddy/zelda64recomp-python-extlibs-mod
+    "RecompExternalPython_API:2.0.0",
 ]
 
 # Native libraries (e.g. DLLs) and the functions they export.
 native_libraries = [
-# Example native library:
-#    { name = "my_native_library", funcs = ["my_native_library_function"] }
+    # Example native library:
+    #    { name = "my_native_library", funcs = ["my_native_library_function"] }
 ]
 
 # Inputs to the mod tool.
@@ -52,38 +57,61 @@ native_libraries = [
 elf_path = "build/mod.elf"
 
 # Output mod filename.
-mod_filename = "mnsg_recomp_mod_template"
+mod_filename = "mnsg_anchor_client"
 
 # Reference symbol files.
 func_reference_syms_file = "Goemon64RecompSyms/mnsg.us.syms.toml"
-data_reference_syms_files = [ "Goemon64RecompSyms/mnsg.us.datasyms.toml" ]
+data_reference_syms_files = ["Goemon64RecompSyms/mnsg.us.datasyms.toml"]
 
 # Additional files to include in the mod.
-additional_files = [ ]
+# anchor_mnsg.py is the Python TCP client for the Anchor co-op server.
+# It is embedded in the .nrm and importable thanks to REPY_PREINIT_ADD_NRM_TO_ALL_INTERPRETERS.
+additional_files = ["py/anchor_mnsg.py"]
 
 [[manifest.config_options]]
-id = "enum_option"
-name = "Enum Option"
-description = "Test enum config option"
+id = "anchor_auto_connect"
+name = "Auto-Connect on Start"
+description = "Automatically connect to the Anchor server when the game loads."
 type = "Enum"
-options = [ "First", "Second" ]
-default = "First"
+options = ["Enabled", "Disabled"]
+default = "Enabled"
 
 [[manifest.config_options]]
-id = "number_option"
-name = "Number Option"
-description = "Test number config option."
-type = "Number"
-min = 0
-max = 10
-step = 0.1
-precision = 1
-percent = false
-default = 1
-
-[[manifest.config_options]]
-id = "string_option"
-name = "String Option"
-description = "Test string config option."
+id = "anchor_host"
+name = "Server Address"
+description = "Hostname or IP address of the Anchor server. Leave blank to use the public default (anchor.hm64.org)."
 type = "String"
-default = "Lorem Ipsum"
+default = "localhost"
+
+[[manifest.config_options]]
+id = "anchor_port"
+name = "Server Port"
+description = "TCP port of the Anchor server."
+type = "Number"
+min = 1
+max = 65535
+step = 1
+precision = 0
+percent = false
+default = 43383
+
+[[manifest.config_options]]
+id = "anchor_room_id"
+name = "Room ID"
+description = "Room to join on the Anchor server. Other players must use the same room to play together."
+type = "String"
+default = "mnsg-recomp"
+
+[[manifest.config_options]]
+id = "anchor_player_name"
+name = "Player Name"
+description = "Your display name shown to other players in the room."
+type = "String"
+default = "Player"
+
+[[manifest.config_options]]
+id = "anchor_team_id"
+name = "Team ID"
+description = "Team identifier within the room. Players on the same team share save states and flag queues."
+type = "String"
+default = "default"
