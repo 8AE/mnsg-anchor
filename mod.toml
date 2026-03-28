@@ -16,7 +16,9 @@ display_name = "Anchor Co-op Client"
 # The description that will show up when this mod is displayed in the mod menu. This should be human readable.
 description = """
 Adds Anchor co-op support to Mystical Ninja Starring Goemon: Recompiled. \
-Connect to an Anchor server to sync items, flags, and save states with teammates. \
+A setup screen appears at startup so you can enter your server address, room, \
+name and team before playing. Use the NET button (bottom-left corner) at any \
+time to disconnect or change connection settings. \
 Requires the RecompExternalPython (REPY) extlib for networking. \
 
 Default public server: anchor.hm64.org:43383"""
@@ -69,24 +71,16 @@ data_reference_syms_files = ["Goemon64RecompSyms/mnsg.us.datasyms.toml"]
 additional_files = ["py/anchor_mnsg.py"]
 
 [[manifest.config_options]]
-id = "anchor_auto_connect"
-name = "Auto-Connect on Start"
-description = "Automatically connect to the Anchor server when the game loads."
-type = "Enum"
-options = ["Enabled", "Disabled"]
-default = "Enabled"
-
-[[manifest.config_options]]
 id = "anchor_host"
-name = "Server Address"
-description = "Hostname or IP address of the Anchor server. Leave blank to use the public default (anchor.hm64.org)."
+name = "Server Address (default)"
+description = "Default hostname or IP pre-filled in the startup connection screen."
 type = "String"
 default = "localhost"
 
 [[manifest.config_options]]
 id = "anchor_port"
-name = "Server Port"
-description = "TCP port of the Anchor server."
+name = "Server Port (default)"
+description = "Default TCP port pre-filled in the startup connection screen."
 type = "Number"
 min = 1
 max = 65535
@@ -97,22 +91,22 @@ default = 43383
 
 [[manifest.config_options]]
 id = "anchor_room_id"
-name = "Room ID"
-description = "Room to join on the Anchor server. Other players must use the same room to play together."
+name = "Room ID (default)"
+description = "Default room ID pre-filled in the startup connection screen."
 type = "String"
 default = "mnsg-recomp"
 
 [[manifest.config_options]]
 id = "anchor_player_name"
-name = "Player Name"
-description = "Your display name shown to other players in the room."
+name = "Player Name (default)"
+description = "Default player name pre-filled in the startup connection screen."
 type = "String"
 default = "Player"
 
 [[manifest.config_options]]
 id = "anchor_team_id"
-name = "Team ID"
-description = "Team identifier within the room. Players on the same team share save states and flag queues."
+name = "Team ID (default)"
+description = "Default team ID pre-filled in the startup connection screen."
 type = "String"
 default = "default"
 

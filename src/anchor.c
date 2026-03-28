@@ -32,7 +32,6 @@
 
 #include "modding.h"
 #include "recomputils.h" /* also defines NULL and recomp_get_mod_file_path */
-#include "recompconfig.h"
 #include "anchor.h"
 #include "repy_api.h"
 
@@ -63,55 +62,13 @@ REPY_PREINIT_ADD_NRM_TO_ALL_INTERPRETERS;
 
 REPY_ON_POST_INIT void anchor_init(void)
 {
-    /* -- 1. Preload Python module so later calls are instant. ------------- */
+    /* Preload the Python module so the first real call is instant.
+     * Connection is now handled by the startup UI in anchor_connect_ui.c –
+     * the player fills in their settings interactively before the game
+     * begins, rather than reading values from the mod config file.         */
     REPY_FN_SETUP;
     REPY_FN_EXEC_CACHE(anchor_preload_code, "import anchor_mnsg\n");
     REPY_FN_CLEANUP;
-
-    /* -- 2. Check auto-connect preference. -------------------------------- */
-    /* recomp_get_config_u32 for Enum returns the 0-based option index.
-     * options = ["Enabled", "Disabled"]  =>  0 = Enabled, 1 = Disabled     */
-    unsigned long auto_connect_idx = recomp_get_config_u32("anchor_auto_connect");
-    if (auto_connect_idx != 0)
-    {
-        /* Auto-connect disabled – nothing more to do. */
-        return;
-    }
-
-    /* -- 3. Read connection parameters from mod config. ------------------- */
-    char *cfg_host = recomp_get_config_string("anchor_host");
-    char *cfg_room_id = recomp_get_config_string("anchor_room_id");
-    char *cfg_player_name = recomp_get_config_string("anchor_player_name");
-    char *cfg_team_id = recomp_get_config_string("anchor_team_id");
-    int cfg_port = (int)recomp_get_config_double("anchor_port");
-
-    /* -- 4. Attempt connection. ------------------------------------------- */
-    int ok = anchor_connect(
-        cfg_host,
-        cfg_port,
-        cfg_room_id,
-        cfg_player_name,
-        0, /* client_id = 0 means request a fresh ID from the server */
-        cfg_team_id);
-
-    if (!ok)
-    {
-        recomp_printf("[Anchor] Auto-connect failed (host=%s port=%d room=%s)\n",
-                      cfg_host, cfg_port, cfg_room_id);
-        anchor_ui_show_notification("Anchor: connection failed.", 0);
-    }
-    else
-    {
-        recomp_printf("[Anchor] Connected to %s:%d  room=%s  player=%s  team=%s\n",
-                      cfg_host, cfg_port, cfg_room_id, cfg_player_name, cfg_team_id);
-        anchor_ui_show_notification("Connected to Anchor!", 1);
-    }
-
-    /* -- 5. Free config strings (recomp_free_config_string, not recomp_free). */
-    recomp_free_config_string(cfg_host);
-    recomp_free_config_string(cfg_room_id);
-    recomp_free_config_string(cfg_player_name);
-    recomp_free_config_string(cfg_team_id);
 }
 
 /* =========================================================================

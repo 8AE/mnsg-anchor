@@ -26,10 +26,13 @@
 #include "recompui.h"
 #include "anchor.h"
 
-/* Provided by item_sync.c – applies a flag locally and broadcasts it. */
+/* Provided by item_sync.c */
 void item_sync_force_flag(const char *name);
-/* Variant that writes a specific value (e.g. weapon tiers 1=Silver, 2=Gold). */
 void item_sync_force_flag_val(const char *name, int val);
+
+/* NET toggle button callback provided by anchor_connect_ui.c */
+extern void anchor_connect_ui_net_btn_callback(RecompuiResource res,
+                                               const RecompuiEventData *ev, void *ud);
 
 /* =========================================================================
    Flag / item entry table
@@ -302,25 +305,30 @@ static void debug_init_ui(void)
     {
         RecompuiResource root = recompui_context_root(s_toggle_ctx);
 
-        /* Full-screen wrapper so right/bottom absolute positioning works. */
-        RecompuiResource screen = recompui_create_element(s_toggle_ctx, root);
-        recompui_set_position(screen, POSITION_ABSOLUTE);
-        recompui_set_left(screen, 0.0f, UNIT_PERCENT);
-        recompui_set_top(screen, 0.0f, UNIT_PERCENT);
-        recompui_set_width(screen, 100.0f, UNIT_PERCENT);
-        recompui_set_height(screen, 100.0f, UNIT_PERCENT);
-
+        /* Button placed directly as an absolute child of root.
+         * A full-screen wrapper would intercept clicks for other contexts. */
         RecompuiResource btn = recompui_create_button(
-            s_toggle_ctx, screen, "DBG", BUTTONSTYLE_SECONDARY);
+            s_toggle_ctx, root, "DBG", BUTTONSTYLE_SECONDARY);
         recompui_set_position(btn, POSITION_ABSOLUTE);
-        recompui_set_right(btn, 12.0f, UNIT_DP);
-        recompui_set_bottom(btn, 12.0f, UNIT_DP);
+        recompui_set_bottom(btn, 12.0f, UNIT_DP); /* bottom-left */
+        recompui_set_left(btn, 12.0f, UNIT_DP);
         recompui_set_font_size(btn, 13.0f, UNIT_DP);
         recompui_set_background_color(btn, &C_TOGGLE_BG);
         recompui_set_border_color(btn, &C_BORDER);
         recompui_set_cursor(btn, CURSOR_POINTER);
         recompui_set_tab_index(btn, TAB_INDEX_NONE);
         recompui_register_callback(btn, on_toggle_clicked, 0);
+
+        /* NET button shares this context so both buttons are at the same Z-level. */
+        RecompuiResource net_btn = recompui_create_button(
+            s_toggle_ctx, root, "NET", BUTTONSTYLE_SECONDARY);
+        recompui_set_position(net_btn, POSITION_ABSOLUTE);
+        recompui_set_bottom(net_btn, 12.0f, UNIT_DP); /* bottom-right */
+        recompui_set_right(net_btn, 12.0f, UNIT_DP);
+        recompui_set_font_size(net_btn, 13.0f, UNIT_DP);
+        recompui_set_cursor(net_btn, CURSOR_POINTER);
+        recompui_set_tab_index(net_btn, TAB_INDEX_NONE);
+        recompui_register_callback(net_btn, anchor_connect_ui_net_btn_callback, 0);
     }
     recompui_close_context(s_toggle_ctx);
     /* show is deferred to the frame hook via s_toggle_visible flag */
@@ -496,6 +504,31 @@ static void debug_init_ui(void)
     }
     recompui_close_context(s_modal_ctx);
     /* Modal stays hidden until the toggle button is clicked. */
+}
+
+/* =========================================================================
+   Public utility
+   ========================================================================= */
+
+/**
+ * Re-raise the toggle-button context to the top of the recompui Z-order.
+ *
+ * recompui_show_context() bumps a context to the top of the Z-stack every
+ * time it is called.  Whenever any other context is shown after s_toggle_ctx
+ * (e.g. the player-list panel in anchor_ui.c), the toggle buttons end up
+ * below it and stop receiving mouse events.  Call this function after
+ * showing any persistent HUD context to restore correct ordering.
+ */
+void debug_ui_bump_toggle_ctx(void)
+{
+    /* recompui_show_context errors if the context is already visible, so we
+     * must hide it first before re-showing to move it to the top of the
+     * Z-stack.  Only do this once the toggle is actually visible.          */
+    if (s_initialized && s_toggle_visible && s_toggle_ctx != RECOMPUI_NULL_CONTEXT)
+    {
+        recompui_hide_context(s_toggle_ctx);
+        recompui_show_context(s_toggle_ctx);
+    }
 }
 
 /* =========================================================================

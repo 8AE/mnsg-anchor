@@ -35,6 +35,10 @@
 #include "icon_sasuke.h"
 #include "icon_yae.h"
 
+/* Provided by debug.c – re-raises the toggle-button context to the top of
+ * the recompui Z-stack after any other persistent context is shown.         */
+extern void debug_ui_bump_toggle_ctx(void);
+
 /* Current scene/room ID – written by the game engine each frame. */
 extern unsigned short D_800C7AB2;
 
@@ -341,6 +345,24 @@ void anchor_ui_show_notification(const char *msg, int is_success)
 RECOMP_HOOK_RETURN("func_80002040_2C40")
 void anchor_ui_update(void)
 {
+    /* ----- One-time eager context creation --------------------------------
+     * plist_ctx must be created BEFORE debug.c creates its toggle context so
+     * that the toggle context sits at a higher Z-order.  recompui places
+     * later-created contexts on top; if plist_ctx were created lazily (after
+     * the toggle context) its root would be above the DBG/NET buttons and
+     * block their mouse events even with captures_mouse = 0.
+     * anchor_ui_update runs before debug_ui_frame_hook every frame (link
+     * order is alphabetical), so calling plist_ensure_init() here on the
+     * very first frame guarantees the correct stacking order.              */
+    {
+        static int s_ctx_created = 0;
+        if (!s_ctx_created)
+        {
+            s_ctx_created = 1;
+            plist_ensure_init();
+        }
+    }
+
     /* ----- Room-ID tracking (runs every frame, even when disconnected) ---- */
     {
         unsigned short cur_room = D_800C7AB2;
@@ -578,10 +600,15 @@ void anchor_ui_update(void)
         recompui_set_display(s_plist_rows[i].row, DISPLAY_NONE);
     recompui_close_context(s_plist_ctx);
 
-    /* Show the panel the first time we have data. */
+    /* Show the panel the first time we have data (also handles reconnect
+     * after a disconnect, since s_plist_visible is cleared on hide).        */
     if (!s_plist_visible)
     {
         recompui_show_context(s_plist_ctx);
         s_plist_visible = 1;
+        /* recompui_show_context bumps s_plist_ctx to the top of the Z-stack;
+         * immediately re-raise the toggle-button context so DBG/NET buttons
+         * are always above the player-list panel and remain clickable.      */
+        debug_ui_bump_toggle_ctx();
     }
 }
