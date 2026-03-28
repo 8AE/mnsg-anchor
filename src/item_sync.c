@@ -1062,3 +1062,57 @@ void item_sync_update(void)
     /* ── Incremental monitoring ───────────────────────────────────────── */
     monitor_and_send_changes();
 }
+
+/* =========================================================================
+   Public debug API
+   ========================================================================= */
+
+/**
+ * @brief Force a tracked flag into the local save and broadcast it to all
+ *        connected players (including the caller) via Anchor.
+ *
+ * Unlike the regular apply path, this function writes the flag
+ * unconditionally, bypassing the use_max and "already-set" guards.
+ * The value is also queued on the server (add_to_queue=1) so offline
+ * teammates receive it when they reconnect.
+ *
+ * Called by debug.c when the user clicks "Force" in the debug menu.
+ *
+ * @param name  Flag name key – must match an entry in s_fields[] or
+ *              s_flag_bits[].  Unknown names are silently ignored with a
+ *              debug print.
+ */
+void item_sync_force_flag(const char *name)
+{
+    int i;
+
+    /* ── 32-bit save-data fields ──────────────────────────────────── */
+    for (i = 0; i < NUM_FIELDS; ++i)
+    {
+        if (!streq(s_fields[i].name, name))
+            continue;
+
+        signed int val = 1; /* "obtained" sentinel for all item fields */
+        SAVE_WRITE32(s_fields[i].off, val);
+        s_fields[i].cached = val; /* suppress re-broadcast by monitor loop */
+        anchor_send_flag(name, val, 1);
+        recomp_printf("[Debug] Forced field '%s' = %d\n", name, val);
+        return;
+    }
+
+    /* ── Single-bit flags ────────────────────────────────────────── */
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        if (!streq(s_flag_bits[i].name, name))
+            continue;
+
+        FLAG_SET_BIT(s_flag_bits[i].id);
+        s_flag_bits[i].cached = 1; /* suppress re-broadcast by monitor loop */
+        anchor_send_flag(name, 1, 1);
+        recomp_printf("[Debug] Forced flag '%s' (id=0x%03X)\n",
+                      name, s_flag_bits[i].id);
+        return;
+    }
+
+    recomp_printf("[Debug] item_sync_force_flag: unknown name '%s'\n", name);
+}
