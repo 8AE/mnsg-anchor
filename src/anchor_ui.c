@@ -151,15 +151,10 @@ static void plist_ensure_init(void)
     recompui_set_display(panel, DISPLAY_FLEX);
 
     /* "Anchor Players" title. */
-    RecompuiResource title = recompui_create_label(s_plist_ctx, panel, "Anchor Players", LABELSTYLE_SMALL);
+    RecompuiResource title = recompui_create_label(s_plist_ctx, panel, "Online Players", LABELSTYLE_SMALL);
     recompui_set_color(title, &COLOR_GOLD);
     recompui_set_font_weight(title, 700);
     recompui_set_margin_bottom(title, 2.0f, UNIT_DP);
-
-    /* Legend: [+] = online only. */
-    RecompuiResource legend = recompui_create_label(s_plist_ctx, panel, "[+] online players", LABELSTYLE_ANNOTATION);
-    recompui_set_color(legend, &COLOR_DIM);
-    recompui_set_margin_bottom(legend, 4.0f, UNIT_DP);
 
     /* Thin divider line. */
     RecompuiResource divider = recompui_create_element(s_plist_ctx, panel);

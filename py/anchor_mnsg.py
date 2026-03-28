@@ -666,7 +666,7 @@ def get_player_names_json() -> str:
         for _k, v in sorted(_player_states.items()):
             if not v.get("online", True):
                 continue  # hide disconnected players from the list
-            name_str = "[+] " + v["name"]
+            name_str = v["name"]
             loc = v.get("location", "")
             if loc:
                 name_str += " - " + loc
