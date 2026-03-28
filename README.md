@@ -1,6 +1,6 @@
 # Anchor Co-op Client for Mystical Ninja Starring Goemon: Recompiled
 
-A co-op mod for [Mystical Ninja Starring Goemon: Recompiled](https://github.com/N64Recomp/N64Recomp) that connects to an [Anchor](https://github.com/garrettjoecox/anchor) server to synchronise items and flags between players — designed for use with the [MNSGRecompRando](https://github.com/Killklli/MNSGRecompRando) randomizer.
+A co-op mod for [Mystical Ninja Starring Goemon: Recompiled](https://github.com/N64Recomp/N64Recomp) that connects to an [Anchor](https://github.com/garrettjoecox/anchor) server to synchronise items and flags between players.
 
 ### Features
 
