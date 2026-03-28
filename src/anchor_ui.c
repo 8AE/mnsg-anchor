@@ -33,6 +33,20 @@
 /* Current scene/room ID – written by the game engine each frame. */
 extern unsigned short D_800C7AB2;
 
+/*
+ * Player background-world (CLS_BG_W) pointer.
+ *
+ * D_801FC60C_5B851C holds a CLS_BG_W* at runtime.  The struct layout
+ * (from MNSGRecompRando include/common_structs.h):
+ *
+ *   CLS_W   header;      // offset 0x00, size 0x08 (next ptr + kind/pri)
+ *   VEC3F_W position;    // offset 0x08: float x, float y, float z
+ *
+ * So position.x = *(float*)(ptr + 0x08), .y at +0x0C, .z at +0x10.
+ * The pointer may be NULL between scenes; always null-check before use.
+ */
+extern void *D_801FC60C_5B851C;
+
 /* =========================================================================
    Tunables
    ========================================================================= */
@@ -248,6 +262,18 @@ void anchor_ui_update(void)
         return;
     }
     s_plist_refresh_timer = PLAYER_LIST_REFRESH_FRAMES;
+
+    /* ---- Send our world position to teammates ----------------------------- */
+    {
+        void *bg_w = D_801FC60C_5B851C;
+        if (bg_w)
+        {
+            int px = (int)*(float *)((char *)bg_w + 0x08);
+            int py = (int)*(float *)((char *)bg_w + 0x0C);
+            int pz = (int)*(float *)((char *)bg_w + 0x10);
+            anchor_set_position(px, py, pz);
+        }
+    }
 
     /* Fetch JSON player name list from Python: ["Alice","Bob",...] */
     char *names_json = anchor_get_player_names_json();

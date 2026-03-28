@@ -269,10 +269,25 @@ def _recv_loop() -> None:
                                     _player_states[cid]["online"] = bool(cs["online"])
                                 if "currentRoom" in cs:
                                     _player_states[cid]["location"] = cs["currentRoom"]
+                                if "posX" in cs:
+                                    _player_states[cid]["posX"] = int(cs["posX"])
+                                if "posY" in cs:
+                                    _player_states[cid]["posY"] = int(cs["posY"])
+                                if "posZ" in cs:
+                                    _player_states[cid]["posZ"] = int(cs["posZ"])
                             else:
                                 name = cs.get("name", f"Player{cid}")
                                 location = cs.get("currentRoom", "")
-                                _player_states[cid] = {"name": name, "teamId": cs.get("teamId", ""), "online": bool(cs.get("online", True)), "self": False, "location": location}
+                                _player_states[cid] = {
+                                    "name": name,
+                                    "teamId": cs.get("teamId", ""),
+                                    "online": bool(cs.get("online", True)),
+                                    "self": False,
+                                    "location": location,
+                                    "posX": int(cs.get("posX", 0)),
+                                    "posY": int(cs.get("posY", 0)),
+                                    "posZ": int(cs.get("posZ", 0)),
+                                }
 
                 # Enqueue for C-side polling via poll_packet().
                 _recv_queue.put(raw)
@@ -598,6 +613,39 @@ def send_custom_packet(
     return _send_raw(packet)
 
 
+def set_position(x: int, y: int, z: int) -> bool:
+    """
+    Broadcast this client's world-space position to teammates and store it
+    locally so the player-list panel reflects our own position immediately.
+
+    Args:
+        x: World X coordinate (int, from CLS_BG_W::position.x truncated).
+        y: World Y coordinate.
+        z: World Z coordinate.
+
+    Returns True if the packet was sent.
+    """
+    if not _connected:
+        return False
+    with _player_states_lock:
+        if _client_id in _player_states:
+            _player_states[_client_id]["posX"] = x
+            _player_states[_client_id]["posY"] = y
+            _player_states[_client_id]["posZ"] = z
+    return _send_raw({
+        "type": "UPDATE_CLIENT_STATE",
+        "state": {
+            "clientId": _client_id,
+            "teamId": _team_id,
+            "name": _player_name,
+            "online": True,
+            "posX": x,
+            "posY": y,
+            "posZ": z,
+        },
+    })
+
+
 def set_local_room(room_id: int) -> bool:
     """
     Report this client's current room ID to the Anchor server.
@@ -670,5 +718,11 @@ def get_player_names_json() -> str:
             loc = v.get("location", "")
             if loc:
                 name_str += " - " + loc
+            # Append world-space coordinates if available.
+            px = v.get("posX")
+            py = v.get("posY")
+            pz = v.get("posZ")
+            if px is not None and py is not None and pz is not None:
+                name_str += f" ({px}, {py}, {pz})"
             entries.append(name_str)
     return json.dumps(entries, separators=(",", ":"))

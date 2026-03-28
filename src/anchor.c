@@ -288,6 +288,20 @@ int anchor_set_local_room(unsigned int room_id)
     return result;
 }
 
+int anchor_set_position(int pos_x, int pos_y, int pos_z)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("pos_x", pos_x);
+    REPY_FN_SET_S32("pos_y", pos_y);
+    REPY_FN_SET_S32("pos_z", pos_z);
+    REPY_FN_EXEC_CACHE(anchor_set_position_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.set_position(pos_x, pos_y, pos_z)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_set_save_loaded(int is_loaded)
 {
     REPY_FN_SETUP;

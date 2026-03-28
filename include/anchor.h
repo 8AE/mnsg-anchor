@@ -159,6 +159,26 @@ extern "C"
     int anchor_set_local_room(unsigned int room_id);
 
     /**
+     * @brief Broadcast the local player's world-space position to teammates.
+     *
+     * Sends an UPDATE_CLIENT_STATE packet containing posX/posY/posZ as integer
+     * coordinates.  Also updates the local player's own entry in the Python
+     * _player_states dict so the position is immediately reflected in the
+     * player-list panel.
+     *
+     * Call once per player-list refresh cycle (~1 s) from anchor_ui.c.
+     *
+     * Coordinates are the floating-point world position of the CLS_BG_W struct
+     * (VEC3F_W at offset 0x08) truncated to int.
+     *
+     * @param pos_x  World X coordinate.
+     * @param pos_y  World Y coordinate.
+     * @param pos_z  World Z coordinate.
+     * @return 1 if sent, 0 otherwise.
+     */
+    int anchor_set_position(int pos_x, int pos_y, int pos_z);
+
+    /**
      * @brief Signal to the server whether a save file is currently loaded.
      *
      * Set to 1 once the player's save is loaded; teammates can then request your
