@@ -225,15 +225,10 @@ static SyncField s_fields[] = {
     {0x258, 0, 0, "mi_flower"},
     {0x25C, 0, 0, "mi_snow"},
 
-    /* ── Dungeon key inventory counts (take the maximum across team) ── */
-    /* SAVE_KEY_RELATED_1..5: per-type usable key counts in inventory.
-       Taking the max ensures every player has at least as many keys as
-       anyone else found (collective full-clear model).                  */
-    {0x2F0, 0, 1, "kc_1"},
-    {0x2F4, 0, 1, "kc_2"},
-    {0x2F8, 0, 1, "kc_3"},
-    {0x2FC, 0, 1, "kc_4"},
-    {0x300, 0, 1, "kc_5"},
+    /* NOTE: Dungeon keys are tracked via individual per-room pickup flags
+       (KEY_SILVER_*, KEY_GOLD_*, KEY_DIAMOND_* in save_data_tool.h) in the
+       rando, not via the vanilla SAVE_KEY_RELATED_1-5 counters.  Those flag
+       bits are listed in s_flag_bits[] below.                              */
 
     /* ── Stats and collectible counts (take the maximum) ───────────── */
     /* SAVE_TOTAL_HEALTH  (at -0x28, before the array base)             */
@@ -321,6 +316,50 @@ static SyncFlagBit s_flag_bits[] = {
     {0x009, 0, "fl_map_jpn"},
     /* FLAG_RECEIVED_SASUKE_BATTERY 0x00D Byte 0x01 Bit 5               */
     {0x00D, 0, "fl_bat_sas"},
+
+    /* ── Per-room dungeon key pickup flags (rando key system) ──────────
+       The rando computes available key counts by diffing KEY_* (collected)
+       against LOCK_* (used) flag bits.  Syncing the KEY_* bits gives
+       teammates the same collected-key credit without duplicating consumption.
+
+       Oedo Castle ──────────────────────────────────────────────────── */
+    {0x010A, 0, "ky_s_oc_tile"}, /* KEY_SILVER_OEDO_CASTLE_1F_TILE          */
+    {0x010C, 0, "ky_s_oc_1f"},   /* KEY_SILVER_OEDO_CASTLE_1F               */
+    {0x010E, 0, "ky_g_oc_1f"},   /* KEY_GOLD_OEDO_CASTLE_1F                 */
+    {0x0110, 0, "ky_s_oc_cp"},   /* KEY_SILVER_OEDO_CASTLE_1F_CHAIN_PIPE    */
+    {0x0112, 0, "ky_s_oc_crsh"}, /* KEY_SILVER_OEDO_CASTLE_2F_CRUSHER       */
+    {0x0114, 0, "ky_s_oc_2f"},   /* KEY_SILVER_OEDO_CASTLE_2F               */
+
+    /* Ghost Toys Castle ─────────────────────────────────────────────── */
+    {0x01AD, 0, "ky_s_gt_flwr"}, /* KEY_SILVER_GHOST_TOYS_1F_FLOWER         */
+    {0x01AF, 0, "ky_s_gt_crn"},  /* KEY_SILVER_GHOST_TOYS_1F_CRANE          */
+    {0x01B1, 0, "ky_s_gt_inv"},  /* KEY_SILVER_GHOST_TOYS_1F_INVISIBLE      */
+    {0x01B3, 0, "ky_s_gt_spin"}, /* KEY_SILVER_GHOST_TOYS_2F_SPINNING       */
+    {0x01B5, 0, "ky_s_gt_dar"},  /* KEY_SILVER_GHOST_TOYS_2F_DARUMANYO      */
+    {0x01B7, 0, "ky_g_gt_ff"},   /* KEY_GOLD_GHOST_TOYS_2F_FALSE_FLOOR      */
+    {0x01B9, 0, "ky_d_gt_sc"},   /* KEY_DIAMOND_GHOST_TOYS_2F_SPIKE_CANNON  */
+    {0x01BB, 0, "ky_s_gt_bil"},  /* KEY_SILVER_GHOST_TOYS_2F_BILLIARDS      */
+
+    /* Festival Temple Castle ────────────────────────────────────────── */
+    {0x016E, 0, "ky_g_ft_hot"},  /* KEY_GOLD_FESTIVAL_TEMPLE_HOT            */
+    {0x0171, 0, "ky_s_ft_ring"}, /* KEY_SILVER_FESTIVAL_TEMPLE_RING         */
+
+    /* Gourmet Submarine ─────────────────────────────────────────────── */
+    {0x017B, 0, "ky_s_gs_baz"},  /* KEY_SILVER_GOURMET_SUB_2F_BAZOOKA       */
+    {0x017D, 0, "ky_g_gs_jet"},  /* KEY_GOLD_GOURMET_SUB_2F_JETPACK         */
+    {0x017F, 0, "ky_s_gs_lava"}, /* KEY_SILVER_GOURMET_SUB_2F_LAVA          */
+    {0x0181, 0, "ky_s_gs_uw"},   /* KEY_SILVER_GOURMET_SUB_2F_UNDERWATER    */
+    {0x0183, 0, "ky_s_gs_swd"},  /* KEY_SILVER_GOURMET_SUB_3F_SWORD         */
+    {0x0185, 0, "ky_d_gs_inv"},  /* KEY_DIAMOND_GOURMET_SUB_3F_INVISIBLE    */
+    {0x0187, 0, "ky_s_gs_sus"},  /* KEY_SILVER_GOURMET_SUB_3F_SUSHI         */
+
+    /* Gorgeous Music Castle ─────────────────────────────────────────── */
+    {0x0189, 0, "ky_g_mc_fan"},  /* KEY_GOLD_MUSICAL_CASTLE_1_FAN           */
+    {0x018B, 0, "ky_s_mc_tall"}, /* KEY_SILVER_MUSICAL_CASTLE_1_TALL        */
+    {0x018C, 0, "ky_g_mc_hj"},   /* KEY_GOLD_MUSICAL_CASTLE_1_HIGH_JUMP     */
+    {0x018F, 0, "ky_g_mc_mini"}, /* KEY_GOLD_MUSICAL_CASTLE_1_MINI          */
+    {0x0191, 0, "ky_d_mc_cube"}, /* KEY_DIAMOND_MUSICAL_CASTLE_1_CUBE       */
+    {0x0193, 0, "ky_d_mc2"},     /* KEY_DIAMOND_MUSICAL_CASTLE_2            */
 };
 
 #define NUM_FLAGS ((int)(sizeof(s_flag_bits) / sizeof(s_flag_bits[0])))
@@ -341,6 +380,13 @@ static int s_push_cursor = -1;
  * Prevents response floods when multiple requests arrive close together.    */
 static int s_push_cooldown = 0;
 #define PUSH_COOLDOWN_FRAMES 180 /* ~3 seconds @ 60 fps */
+
+/* Maximum SET_FLAG packets sent per frame during incremental monitoring.
+ * Kept at 1 to match the full-push rate and avoid flooding the Anchor
+ * server's per-client overlapped-I/O queue on area transitions where
+ * many flags change simultaneously.  Extra changes are deferred to
+ * subsequent frames by leaving their cache un-updated this frame.       */
+#define MAX_SENDS_PER_FRAME 1
 
 #define PUSH_IDLE -1
 
@@ -506,7 +552,17 @@ static const char *get_flag_display_name(const char *n)
         return "Map of Japan";
     if (streq(n, "fl_bat_sas"))
         return "Sasuke Battery";
-    /* Suppress internal mechanics (gates, crane switch, key counts, dolls progress,
+    /* Per-room dungeon key pickups – match by prefix ky_s_ / ky_g_ / ky_d_ */
+    if (n[0] == 'k' && n[1] == 'y' && n[2] == '_')
+    {
+        if (n[3] == 's')
+            return "Silver Key";
+        if (n[3] == 'g')
+            return "Gold Key";
+        if (n[3] == 'd')
+            return "Diamond Key";
+    }
+    /* Suppress internal mechanics (gates, crane switch, dolls progress,
        Mr. Elly/Arrow per-dungeon counts) – too noisy to toast.              */
     return 0;
 }
@@ -868,6 +924,7 @@ static void do_push_step(void)
 static void monitor_and_send_changes(void)
 {
     int i;
+    int sends = 0; /* per-frame send budget */
 
     /* 32-bit save-data fields. */
     for (i = 0; i < NUM_FIELDS; ++i)
@@ -885,14 +942,20 @@ static void monitor_and_send_changes(void)
 
         if (should_send)
         {
+            if (sends >= MAX_SENDS_PER_FRAME)
+                continue; /* budget exhausted – defer to next frame (cache not updated) */
+
             anchor_send_flag(s_fields[i].name, (int)cur, 1);
+            ++sends;
             recomp_printf("[ItemSync] Sent field '%s' = %d\n",
                           s_fields[i].name, cur);
             const char *display = get_flag_display_name(s_fields[i].name);
             if (display)
                 item_notif_push("Item found!", display);
         }
-        s_fields[i].cached = cur; /* always sync cache even if not sent */
+        /* Update cache when we send, or when we don't need to send (e.g. item
+           lost / dropped) – but NOT when the send was deferred due to budget. */
+        s_fields[i].cached = cur;
     }
 
     /* Single-bit flags. */
@@ -904,7 +967,11 @@ static void monitor_and_send_changes(void)
 
         if (cur)
         { /* only broadcast when flag becomes set, not when cleared */
+            if (sends >= MAX_SENDS_PER_FRAME)
+                continue; /* defer to next frame */
+
             anchor_send_flag(s_flag_bits[i].name, 1, 1);
+            ++sends;
             recomp_printf("[ItemSync] Sent flag '%s' (id=0x%X)\n",
                           s_flag_bits[i].name, s_flag_bits[i].id);
             const char *display = get_flag_display_name(s_flag_bits[i].name);
