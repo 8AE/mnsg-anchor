@@ -256,14 +256,17 @@ def _recv_loop() -> None:
 
                 # Update a single player's status when they broadcast their state.
                 if ptype == "UPDATE_CLIENT_STATE":
-                    cid = packet.get("clientId", 0)
+                    # The server relays the packet as-is. We put clientId inside
+                    # "state", so look there first, then fall back to the root.
+                    cs = packet.get("state") or packet.get("clientState") or {}
+                    cid = cs.get("clientId") or packet.get("clientId", 0)
                     if cid:
-                        cs = packet.get("clientState", {})
                         with _player_states_lock:
                             if cid in _player_states:
                                 if "name" in cs:
                                     _player_states[cid]["name"] = cs["name"]
-                                _player_states[cid]["online"] = bool(cs.get("online", True))
+                                if "online" in cs:
+                                    _player_states[cid]["online"] = bool(cs["online"])
                                 if "currentRoom" in cs:
                                     _player_states[cid]["location"] = cs["currentRoom"]
                             else:
@@ -652,20 +655,18 @@ def set_team(new_team_id: str) -> bool:
 
 def get_player_names_json() -> str:
     """
-    Return a JSON array of player name strings for all clients currently in the
-    room (including ourselves), sorted by client ID.
+    Return a JSON array of ``[+] Name - Location`` strings for all *online*
+    clients currently in the room, sorted by client ID.  Disconnected players
+    are omitted entirely.
 
-    Each entry is prefixed with a status indicator:
-      ``[+] Name``  – player is online / connected
-      ``[-] Name``  – player is offline / disconnected
-
-    Returns ``'[]'`` when not connected or the room is empty.
+    Returns ``'[]'`` when not connected or no online players are present.
     """
     with _player_states_lock:
         entries = []
         for _k, v in sorted(_player_states.items()):
-            prefix = "[+] " if v.get("online", True) else "[-] "
-            name_str = prefix + v["name"]
+            if not v.get("online", True):
+                continue  # hide disconnected players from the list
+            name_str = "[+] " + v["name"]
             loc = v.get("location", "")
             if loc:
                 name_str += " - " + loc

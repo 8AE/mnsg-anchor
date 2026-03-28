@@ -156,8 +156,8 @@ static void plist_ensure_init(void)
     recompui_set_font_weight(title, 700);
     recompui_set_margin_bottom(title, 2.0f, UNIT_DP);
 
-    /* Legend: [+] = connected, [-] = away. */
-    RecompuiResource legend = recompui_create_label(s_plist_ctx, panel, "[+] connected  [-] away", LABELSTYLE_ANNOTATION);
+    /* Legend: [+] = online only. */
+    RecompuiResource legend = recompui_create_label(s_plist_ctx, panel, "[+] online players", LABELSTYLE_ANNOTATION);
     recompui_set_color(legend, &COLOR_DIM);
     recompui_set_margin_bottom(legend, 4.0f, UNIT_DP);
 
