@@ -34,6 +34,21 @@
 extern unsigned short D_800C7AB2;
 
 /*
+ * Current character index – written by the character cycler every time the
+ * player presses L/R to switch characters (func_801DD50C_59941C patch).
+ *
+ * In the rando's character_cycler.c:
+ *   u32 *other_ptr = (u32 *)0x8015C5D8;  // D_8015C5D8_15D1D8
+ *   other_ptr[1] = index & 0xFF;         // → 0x8015C5DC
+ *
+ * Values: 0=Goemon  1=Ebisumaru  2=Sasuke  3=Yae
+ */
+#define CURRENT_CHAR_PTR ((volatile unsigned int *)0x8015C5DC)
+
+static const char *const s_char_names[4] = {
+    "Goemon", "Ebisumaru", "Sasuke", "Yae"};
+
+/*
  * Player background-world (CLS_BG_W) pointer.
  *
  * D_801FC60C_5B851C holds a CLS_BG_W* at runtime.  The struct layout
@@ -273,6 +288,12 @@ void anchor_ui_update(void)
             int pz = (int)*(float *)((char *)bg_w + 0x10);
             anchor_set_position(px, py, pz);
         }
+    }
+
+    /* ---- Broadcast currently selected character to teammates ------------- */
+    {
+        unsigned int char_idx = *CURRENT_CHAR_PTR & 0x3;
+        anchor_set_character(s_char_names[char_idx]);
     }
 
     /* Fetch JSON player name list from Python: ["Alice","Bob",...] */

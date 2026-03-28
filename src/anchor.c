@@ -302,6 +302,18 @@ int anchor_set_position(int pos_x, int pos_y, int pos_z)
     return result;
 }
 
+int anchor_set_character(const char *char_name)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_STR("char_name", (char_name && char_name[0]) ? char_name : "Goemon");
+    REPY_FN_EXEC_CACHE(anchor_set_character_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.set_character(char_name)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_set_save_loaded(int is_loaded)
 {
     REPY_FN_SETUP;

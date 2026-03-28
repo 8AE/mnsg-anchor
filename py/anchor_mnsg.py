@@ -275,6 +275,8 @@ def _recv_loop() -> None:
                                     _player_states[cid]["posY"] = int(cs["posY"])
                                 if "posZ" in cs:
                                     _player_states[cid]["posZ"] = int(cs["posZ"])
+                                if "currentCharacter" in cs:
+                                    _player_states[cid]["character"] = str(cs["currentCharacter"])
                             else:
                                 name = cs.get("name", f"Player{cid}")
                                 location = cs.get("currentRoom", "")
@@ -287,6 +289,7 @@ def _recv_loop() -> None:
                                     "posX": int(cs.get("posX", 0)),
                                     "posY": int(cs.get("posY", 0)),
                                     "posZ": int(cs.get("posZ", 0)),
+                                    "character": str(cs.get("currentCharacter", "")),
                                 }
 
                 # Enqueue for C-side polling via poll_packet().
@@ -646,6 +649,37 @@ def set_position(x: int, y: int, z: int) -> bool:
     })
 
 
+def set_character(char_name: str) -> bool:
+    """
+    Broadcast this client's currently selected character to teammates.
+
+    Sends an UPDATE_CLIENT_STATE packet carrying ``currentCharacter`` so the
+    player-list panel on every peer shows which character is being played.
+    Also updates the local player's own ``_player_states`` entry immediately.
+
+    Args:
+        char_name: One of ``"Goemon"``, ``"Ebisumaru"``, ``"Sasuke"``,
+                   ``"Yae"``.
+
+    Returns True if the packet was sent.
+    """
+    if not _connected:
+        return False
+    with _player_states_lock:
+        if _client_id in _player_states:
+            _player_states[_client_id]["character"] = char_name
+    return _send_raw({
+        "type": "UPDATE_CLIENT_STATE",
+        "state": {
+            "clientId": _client_id,
+            "teamId": _team_id,
+            "name": _player_name,
+            "online": True,
+            "currentCharacter": char_name,
+        },
+    })
+
+
 def set_local_room(room_id: int) -> bool:
     """
     Report this client's current room ID to the Anchor server.
@@ -703,9 +737,10 @@ def set_team(new_team_id: str) -> bool:
 
 def get_player_names_json() -> str:
     """
-    Return a JSON array of ``[+] Name - Location`` strings for all *online*
-    clients currently in the room, sorted by client ID.  Disconnected players
-    are omitted entirely.
+    Return a JSON array of ``[CharName] Name - Location`` strings for all
+    *online* clients currently in the room, sorted by client ID.  The
+    character prefix (e.g. ``[Goemon]``) is omitted when no character has
+    been broadcast yet.  Disconnected players are omitted entirely.
 
     Returns ``'[]'`` when not connected or no online players are present.
     """
@@ -714,7 +749,10 @@ def get_player_names_json() -> str:
         for _k, v in sorted(_player_states.items()):
             if not v.get("online", True):
                 continue  # hide disconnected players from the list
+            char = v.get("character", "")
             name_str = v["name"]
+            if char:
+                name_str = "[" + char + "] " + name_str
             loc = v.get("location", "")
             if loc:
                 name_str += " - " + loc

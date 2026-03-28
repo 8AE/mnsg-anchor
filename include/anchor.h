@@ -179,6 +179,20 @@ extern "C"
     int anchor_set_position(int pos_x, int pos_y, int pos_z);
 
     /**
+     * @brief Broadcast the local player's currently selected character.
+     *
+     * Sends an UPDATE_CLIENT_STATE packet with a ``currentCharacter`` field so
+     * teammates can see which character you are playing.  Also updates the
+     * local player's own entry immediately.
+     *
+     * Call once per player-list refresh cycle from anchor_ui.c.
+     *
+     * @param char_name  One of: "Goemon", "Ebisumaru", "Sasuke", "Yae".
+     * @return 1 if sent, 0 otherwise.
+     */
+    int anchor_set_character(const char *char_name);
+
+    /**
      * @brief Signal to the server whether a save file is currently loaded.
      *
      * Set to 1 once the player's save is loaded; teammates can then request your
