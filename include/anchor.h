@@ -317,6 +317,21 @@ extern "C"
      */
     char *anchor_get_player_names_json(void);
 
+    /**
+     * @brief Return structured player info as a compact JSON array.
+     *
+     * Each element is an object with two keys:
+     *   ``n``  – display string: "Name - Location"
+     *   ``c``  – character index: 0=Goemon, 1=Ebisumaru, 2=Sasuke, 3=Yae.
+     *            -1 if the character has not been broadcast by that player yet.
+     *
+     * Example: ``[{"n":"Alice - Oedo Town","c":0},{"n":"Bob","c":-1}]``
+     *
+     * Returns ``"[]"`` when not connected or the room is empty.
+     * The caller must free the result with recomp_free().
+     */
+    char *anchor_get_player_info_json(void);
+
     /* =========================================================================
        UI helpers
        ========================================================================= */

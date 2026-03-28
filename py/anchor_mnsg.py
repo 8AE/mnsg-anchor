@@ -764,3 +764,176 @@ def get_player_names_json() -> str:
                 name_str += f" ({px}, {py}, {pz})"
             entries.append(name_str)
     return json.dumps(entries, separators=(",", ":"))
+
+
+# ---------------------------------------------------------------------------
+# Character icon support
+# ---------------------------------------------------------------------------
+
+_CHAR_TO_IDX: dict[str, int] = {
+    "Goemon": 0,
+    "Ebisumaru": 1,
+    "Sasuke": 2,
+    "Yae": 3,
+}
+
+
+def get_player_info_json() -> str:
+    """
+    Return a compact JSON array of per-player objects for all *online* players,
+    sorted by client ID.
+
+    Each object has two keys:
+        ``n``  – display string: "Name - Location"
+        ``c``  – character index (int): 0=Goemon, 1=Ebisumaru, 2=Sasuke, 3=Yae.
+                 -1 if the character has not been broadcast yet.
+
+    Returns ``'[]'`` when not connected or no online players are present.
+    """
+    with _player_states_lock:
+        entries = []
+        for _k, v in sorted(_player_states.items()):
+            if not v.get("online", True):
+                continue
+            name_str = v["name"]
+            loc = v.get("location", "")
+            if loc:
+                name_str += " - " + loc
+            char_idx = _CHAR_TO_IDX.get(v.get("character", ""), -1)
+            entries.append({"n": name_str, "c": char_idx})
+    return json.dumps(entries, separators=(",", ":"))
+
+
+def _decode_png_rgba(png: bytes) -> bytes:
+    """
+    Minimal PNG → RGBA32 decoder using stdlib only (``zlib`` + ``struct``).
+
+    Supports 8-bit-per-channel colour types:
+        0  – Grayscale
+        2  – RGB
+        4  – Grayscale + Alpha
+        6  – RGBA
+
+    Returns ``struct.pack(">II", width, height) + rgba_data``.
+    Raises ``ValueError`` on any unsupported or malformed PNG.
+    """
+    import struct
+    import zlib
+
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG file")
+
+    width = height = bit_depth = color_type = 0
+    idat_chunks: list[bytes] = []
+    pos = 8
+
+    while pos + 12 <= len(png):
+        length = struct.unpack_from(">I", png, pos)[0]
+        ctype = png[pos + 4: pos + 8]
+        data = png[pos + 8: pos + 8 + length]
+        pos += 12 + length
+
+        if ctype == b"IHDR":
+            width, height = struct.unpack_from(">II", data)
+            bit_depth = data[8]
+            color_type = data[9]
+        elif ctype == b"IDAT":
+            idat_chunks.append(data)
+        elif ctype == b"IEND":
+            break
+
+    if width == 0 or height == 0:
+        raise ValueError(f"IHDR not found or zero dimensions ({width}x{height})")
+    if bit_depth != 8:
+        raise ValueError(f"unsupported bit depth {bit_depth} (only 8 supported)")
+
+    cpp = {0: 1, 2: 3, 4: 2, 6: 4}.get(color_type)
+    if cpp is None:
+        raise ValueError(f"unsupported PNG color_type {color_type}")
+
+    raw = zlib.decompress(b"".join(idat_chunks))
+    stride = width * cpp + 1  # +1 for per-row filter byte
+
+    rgba = bytearray(width * height * 4)
+    prev_row = bytearray(width * cpp)
+
+    for y in range(height):
+        off = y * stride
+        f = raw[off]
+        row = bytearray(raw[off + 1: off + 1 + width * cpp])
+
+        if f == 1:      # Sub
+            for x in range(cpp, len(row)):
+                row[x] = (row[x] + row[x - cpp]) & 0xFF
+        elif f == 2:    # Up
+            for x in range(len(row)):
+                row[x] = (row[x] + prev_row[x]) & 0xFF
+        elif f == 3:    # Average
+            for x in range(len(row)):
+                a = row[x - cpp] if x >= cpp else 0
+                b = prev_row[x]
+                row[x] = (row[x] + (a + b) // 2) & 0xFF
+        elif f == 4:    # Paeth
+            for x in range(len(row)):
+                a = row[x - cpp] if x >= cpp else 0
+                b = prev_row[x]
+                c = prev_row[x - cpp] if x >= cpp else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                row[x] = (row[x] + pr) & 0xFF
+        # f == 0: None — row unchanged
+
+        for x in range(width):
+            idx = (y * width + x) * 4
+            if color_type == 6:     # RGBA
+                rgba[idx:idx + 4] = row[x * 4: x * 4 + 4]
+            elif color_type == 2:   # RGB
+                rgba[idx:idx + 3] = row[x * 3: x * 3 + 3]
+                rgba[idx + 3] = 255
+            elif color_type == 0:   # Grayscale
+                g = row[x]
+                rgba[idx] = rgba[idx + 1] = rgba[idx + 2] = g
+                rgba[idx + 3] = 255
+            else:                   # Grayscale + Alpha
+                g = row[x * 2]
+                rgba[idx] = rgba[idx + 1] = rgba[idx + 2] = g
+                rgba[idx + 3] = row[x * 2 + 1]
+
+        prev_row = row
+
+    import struct as _struct
+    return _struct.pack(">II", width, height) + bytes(rgba)
+
+
+def load_icon_rgba(nrm_path: str, char_name: str) -> bytes:
+    """
+    Load a character icon from the NRM archive as raw RGBA32 pixel data.
+
+    The NRM file is a zip archive.  Icons are stored as raw RGBA32 files at
+    ``icons/{char_name}_icon.rgba`` (200x200 pixels, 160000 bytes).
+
+    Returns:
+        ``struct.pack(">II", width, height) + rgba_bytes``  on success.
+        ``struct.pack(">II", 0, 0)``  (8 zero bytes) on any error.
+    """
+    import struct
+    import zipfile
+
+    _ICON_SIZE = 200
+    icon_key = f"icons/{char_name.lower()}_icon.rgba"
+    try:
+        with zipfile.ZipFile(nrm_path, "r") as nrm:
+            rgba = nrm.read(icon_key)
+    except Exception as exc:
+        logger.warning("anchor_mnsg.load_icon_rgba: cannot read %s from %s: %s",
+                       icon_key, nrm_path, exc)
+        return struct.pack(">II", 0, 0)
+
+    expected = _ICON_SIZE * _ICON_SIZE * 4
+    if len(rgba) != expected:
+        logger.warning("anchor_mnsg.load_icon_rgba: unexpected size %d for %s (expected %d)",
+                       len(rgba), icon_key, expected)
+        return struct.pack(">II", 0, 0)
+
+    return struct.pack(">II", _ICON_SIZE, _ICON_SIZE) + rgba

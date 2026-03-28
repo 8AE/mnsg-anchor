@@ -29,6 +29,10 @@
 #include "recomputils.h"
 #include "recompui.h"
 #include "anchor.h"
+#include "icon_goemon.h"
+#include "icon_ebisumaru.h"
+#include "icon_sasuke.h"
+#include "icon_yae.h"
 
 /* Current scene/room ID – written by the game engine each frame. */
 extern unsigned short D_800C7AB2;
@@ -72,11 +76,14 @@ extern void *D_801FC60C_5B851C;
 /** Frames between player-list refreshes (~1 s @ 60 fps). */
 #define PLAYER_LIST_REFRESH_FRAMES 60
 
-/** Maximum players shown in the list. */
-#define MAX_PLAYERS 32
+/** Maximum player rows shown in the list panel. */
+#define MAX_DISPLAY_PLAYERS 16
+
+/** Icon image size in DP units (square). */
+#define ICON_SIZE 24.0f
 
 /** Width of the player-list panel in DP units. */
-#define PANEL_WIDTH 280.0f
+#define PANEL_WIDTH 300.0f
 
 /* =========================================================================
    Colour constants
@@ -149,14 +156,54 @@ static void notif_ensure_init(void)
    ========================================================================= */
 
 static RecompuiContext s_plist_ctx = RECOMPUI_NULL_CONTEXT;
-static RecompuiResource s_plist_names = RECOMPUI_NULL_RESOURCE;
 static int s_plist_refresh_timer = 0;
 static int s_plist_visible = 0;
+
+/* ---- Per-player icon row resources ------------------------------------ */
+
+typedef struct
+{
+    RecompuiResource row;   /* flex-row container                       */
+    RecompuiResource icon;  /* imageview showing the character icon      */
+    RecompuiResource label; /* text label with "Name - Location"         */
+} PlayerRowUI;
+
+static PlayerRowUI s_plist_rows[MAX_DISPLAY_PLAYERS];
+static RecompuiResource s_plist_rows_container = RECOMPUI_NULL_RESOURCE;
+
+/* Pre-loaded character textures: index matches s_char_names[]. */
+static RecompuiTextureHandle s_char_textures[4];
+static RecompuiTextureHandle s_blank_texture;
+static int s_textures_initialized = 0;
+
+/** Load character icon textures from baked-in C arrays. */
+static void plist_load_textures(void)
+{
+    if (s_textures_initialized)
+        return;
+    s_textures_initialized = 1;
+
+    /* 1×1 fully transparent placeholder texture. */
+    static const unsigned char blank_px[4] = {0, 0, 0, 0};
+    s_blank_texture = recompui_create_texture_rgba32((void *)blank_px, 1, 1);
+
+    s_char_textures[0] = recompui_create_texture_rgba32(
+        (void *)icon_goemon_data, ICON_GOEMON_WIDTH, ICON_GOEMON_HEIGHT);
+    s_char_textures[1] = recompui_create_texture_rgba32(
+        (void *)icon_ebisumaru_data, ICON_EBISUMARU_WIDTH, ICON_EBISUMARU_HEIGHT);
+    s_char_textures[2] = recompui_create_texture_rgba32(
+        (void *)icon_sasuke_data, ICON_SASUKE_WIDTH, ICON_SASUKE_HEIGHT);
+    s_char_textures[3] = recompui_create_texture_rgba32(
+        (void *)icon_yae_data, ICON_YAE_WIDTH, ICON_YAE_HEIGHT);
+}
 
 static void plist_ensure_init(void)
 {
     if (s_plist_ctx != RECOMPUI_NULL_CONTEXT)
         return;
+
+    /* Load icon textures (GPU resources, not bound to any context). */
+    plist_load_textures();
 
     s_plist_ctx = recompui_create_context();
     recompui_set_context_captures_input(s_plist_ctx, 0);
@@ -179,22 +226,48 @@ static void plist_ensure_init(void)
     recompui_set_flex_direction(panel, FLEX_DIRECTION_COLUMN);
     recompui_set_display(panel, DISPLAY_FLEX);
 
-    /* "Anchor Players" title. */
-    RecompuiResource title = recompui_create_label(s_plist_ctx, panel, "Online Players", LABELSTYLE_SMALL);
+    /* "Online Players" title. */
+    RecompuiResource title = recompui_create_label(
+        s_plist_ctx, panel, "Online Players", LABELSTYLE_SMALL);
     recompui_set_color(title, &COLOR_GOLD);
     recompui_set_font_weight(title, 700);
     recompui_set_margin_bottom(title, 2.0f, UNIT_DP);
 
-    /* Thin divider line. */
+    /* Thin divider. */
     RecompuiResource divider = recompui_create_element(s_plist_ctx, panel);
     recompui_set_width(divider, 100.0f, UNIT_PERCENT);
     recompui_set_height(divider, 1.0f, UNIT_DP);
     recompui_set_background_color(divider, &COLOR_BORDER);
     recompui_set_margin_bottom(divider, 4.0f, UNIT_DP);
 
-    /* Multi-line player name label (updated each refresh cycle). */
-    s_plist_names = recompui_create_label(s_plist_ctx, panel, "(connecting...)", LABELSTYLE_SMALL);
-    recompui_set_color(s_plist_names, &COLOR_DIM);
+    /* Rows container: vertical flex column holding per-player rows. */
+    s_plist_rows_container = recompui_create_element(s_plist_ctx, panel);
+    recompui_set_display(s_plist_rows_container, DISPLAY_FLEX);
+    recompui_set_flex_direction(s_plist_rows_container, FLEX_DIRECTION_COLUMN);
+    recompui_set_gap(s_plist_rows_container, 4.0f, UNIT_DP);
+
+    /* Pre-allocate MAX_DISPLAY_PLAYERS rows; all start hidden. */
+    for (int i = 0; i < MAX_DISPLAY_PLAYERS; i++)
+    {
+        /* Row: flex row, items vertically centred, small horizontal gap. */
+        s_plist_rows[i].row = recompui_create_element(
+            s_plist_ctx, s_plist_rows_container);
+        recompui_set_display(s_plist_rows[i].row, DISPLAY_NONE);
+        recompui_set_flex_direction(s_plist_rows[i].row, FLEX_DIRECTION_ROW);
+        recompui_set_align_items(s_plist_rows[i].row, ALIGN_ITEMS_CENTER);
+        recompui_set_gap(s_plist_rows[i].row, 6.0f, UNIT_DP);
+
+        /* Character icon image view. */
+        s_plist_rows[i].icon = recompui_create_imageview(
+            s_plist_ctx, s_plist_rows[i].row, s_blank_texture);
+        recompui_set_width(s_plist_rows[i].icon, ICON_SIZE, UNIT_DP);
+        recompui_set_height(s_plist_rows[i].icon, ICON_SIZE, UNIT_DP);
+
+        /* Player name + location label. */
+        s_plist_rows[i].label = recompui_create_label(
+            s_plist_ctx, s_plist_rows[i].row, "", LABELSTYLE_SMALL);
+        recompui_set_color(s_plist_rows[i].label, &COLOR_DIM);
+    }
 
     recompui_close_context(s_plist_ctx);
 }
@@ -296,65 +369,79 @@ void anchor_ui_update(void)
         anchor_set_character(s_char_names[char_idx]);
     }
 
-    /* Fetch JSON player name list from Python: ["Alice","Bob",...] */
-    char *names_json = anchor_get_player_names_json();
-    if (!names_json)
+    /* Fetch structured player info from Python:
+     * [{"n":"Name - Location","c":0}, ...]
+     * where "c" is the character index (0=Goemon..3=Yae, -1=unknown). */
+    char *info_json = anchor_get_player_info_json();
+    if (!info_json)
         return;
 
-    /* Build a newline-separated display string from the JSON array.
-     * We parse only string values — no dependency on a JSON library. */
-    static char display_buf[2048];
-    int out_pos = 0;
-    int player_count = 0;
-    const char *p = names_json;
+    /* Parse info_json into local row data arrays (no JSON library needed:
+     * the format is fixed and machine-generated). */
+    static char row_name_buf[MAX_DISPLAY_PLAYERS][128];
+    static int row_char_idx[MAX_DISPLAY_PLAYERS];
+    int row_count = 0;
+    const char *p = info_json;
 
-    /* Skip to opening bracket. */
-    while (*p && *p != '[')
-        p++;
-    if (*p == '[')
-        p++;
-
-    while (*p && player_count < MAX_PLAYERS)
+    while (*p && row_count < MAX_DISPLAY_PLAYERS)
     {
-        /* Advance past whitespace / commas. */
-        while (*p == ' ' || *p == ',' || *p == '\t' || *p == '\r' || *p == '\n')
+        /* Locate the "n":" key. */
+        while (*p && !(*p == '"' && *(p + 1) == 'n' && *(p + 2) == '"' && *(p + 3) == ':' && *(p + 4) == '"'))
             p++;
-        if (*p == ']' || *p == '\0')
+        if (!*p)
             break;
+        p += 5; /* skip "n":" */
 
-        if (*p == '"')
+        /* Read name string until the closing quote (honour \" escapes). */
+        int n = 0;
+        while (*p && *p != '"' && n < (int)sizeof(row_name_buf[0]) - 1)
         {
-            p++; /* skip opening quote */
-            const char *name_start = p;
-            /* Walk to closing quote, honouring \" escapes. */
-            while (*p && !(*p == '"' && *(p - 1) != '\\'))
-                p++;
-            int name_len = (int)(p - name_start);
-            if (*p == '"')
-                p++; /* skip closing quote */
-
-            /* Append newline separator between entries. */
-            if (player_count > 0 && out_pos < (int)sizeof(display_buf) - 2)
-                display_buf[out_pos++] = '\n';
-
-            /* Copy name into display buffer. */
-            for (int i = 0; i < name_len && out_pos < (int)sizeof(display_buf) - 2; i++)
-                display_buf[out_pos++] = name_start[i];
-
-            player_count++;
+            if (*p == '\\' && *(p + 1))
+                p++; /* skip escape prefix */
+            row_name_buf[row_count][n++] = *p++;
         }
-        else
+        row_name_buf[row_count][n] = '\0';
+        if (*p == '"')
+            p++;
+
+        /* Locate the "c": key. */
+        while (*p && !(*p == '"' && *(p + 1) == 'c' && *(p + 2) == '"' && *(p + 3) == ':'))
+            p++;
+        if (!*p)
+            break;
+        p += 4; /* skip "c": */
+
+        /* Read integer value (may be negative for -1). */
+        int sign = 1;
+        if (*p == '-')
         {
+            sign = -1;
             p++;
         }
+        int cidx = 0;
+        while (*p >= '0' && *p <= '9')
+            cidx = cidx * 10 + (*p++ - '0');
+        row_char_idx[row_count] = cidx * sign;
+
+        row_count++;
     }
 
-    display_buf[out_pos] = '\0';
-    recomp_free(names_json);
+    recomp_free(info_json);
 
-    /* Push updated text to the UI. */
+    /* Update the pre-allocated player rows in the panel. */
     recompui_open_context(s_plist_ctx);
-    recompui_set_text(s_plist_names, player_count > 0 ? display_buf : "(empty room)");
+    for (int i = 0; i < row_count; i++)
+    {
+        recompui_set_display(s_plist_rows[i].row, DISPLAY_FLEX);
+        int ci = row_char_idx[i];
+        RecompuiTextureHandle tex =
+            (ci >= 0 && ci < 4) ? s_char_textures[ci] : s_blank_texture;
+        recompui_set_imageview_texture(s_plist_rows[i].icon, tex);
+        recompui_set_text(s_plist_rows[i].label, row_name_buf[i]);
+    }
+    /* Hide any rows beyond the current player count. */
+    for (int i = row_count; i < MAX_DISPLAY_PLAYERS; i++)
+        recompui_set_display(s_plist_rows[i].row, DISPLAY_NONE);
     recompui_close_context(s_plist_ctx);
 
     /* Show the panel the first time we have data. */
