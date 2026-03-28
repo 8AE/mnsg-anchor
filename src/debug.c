@@ -310,8 +310,8 @@ static void debug_init_ui(void)
         RecompuiResource btn = recompui_create_button(
             s_toggle_ctx, root, "DBG", BUTTONSTYLE_SECONDARY);
         recompui_set_position(btn, POSITION_ABSOLUTE);
-        recompui_set_bottom(btn, 12.0f, UNIT_DP); /* bottom-left */
-        recompui_set_left(btn, 12.0f, UNIT_DP);
+        recompui_set_bottom(btn, 12.0f, UNIT_DP); /* bottom-right */
+        recompui_set_right(btn, 12.0f, UNIT_DP);
         recompui_set_font_size(btn, 13.0f, UNIT_DP);
         recompui_set_background_color(btn, &C_TOGGLE_BG);
         recompui_set_border_color(btn, &C_BORDER);
@@ -323,8 +323,8 @@ static void debug_init_ui(void)
         RecompuiResource net_btn = recompui_create_button(
             s_toggle_ctx, root, "NET", BUTTONSTYLE_SECONDARY);
         recompui_set_position(net_btn, POSITION_ABSOLUTE);
-        recompui_set_bottom(net_btn, 12.0f, UNIT_DP); /* bottom-right */
-        recompui_set_right(net_btn, 12.0f, UNIT_DP);
+        recompui_set_bottom(net_btn, 12.0f, UNIT_DP); /* bottom-left */
+        recompui_set_left(net_btn, 12.0f, UNIT_DP);
         recompui_set_font_size(net_btn, 13.0f, UNIT_DP);
         recompui_set_cursor(net_btn, CURSOR_POINTER);
         recompui_set_tab_index(net_btn, TAB_INDEX_NONE);
