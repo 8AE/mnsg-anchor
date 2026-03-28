@@ -395,9 +395,11 @@ static const RecompuiColor C_NWHITE = {255, 255, 255, 255};
 
 static RecompuiContext s_notif_ctx = RECOMPUI_NULL_CONTEXT;
 static RecompuiResource s_notif_card[NOTIF_SLOTS];
+static RecompuiResource s_notif_hdr[NOTIF_SLOTS]; /* header label per slot */
 static RecompuiResource s_notif_name[NOTIF_SLOTS];
 static int s_notif_timer[NOTIF_SLOTS];
-static int s_notif_next = 0; /* round-robin write cursor */
+static int s_notif_next = 0;        /* round-robin write cursor */
+static int s_notif_ctx_visible = 0; /* 1 when context is currently shown */
 
 /**
  * @brief Map a SET_FLAG key to a human-readable display string.
@@ -554,13 +556,14 @@ static void item_notif_ensure_init(void)
         recompui_set_flex_direction(area, FLEX_DIRECTION_COLUMN);
         recompui_set_display(area, DISPLAY_FLEX);
 
-        /* Header: "Received from team" */
+        /* Header – text is set dynamically in item_notif_push */
         RecompuiResource hdr = recompui_create_label(s_notif_ctx, area,
-                                                     "Received from team",
+                                                     "",
                                                      LABELSTYLE_ANNOTATION);
         recompui_set_color(hdr, &C_NTEAL);
         recompui_set_font_weight(hdr, 700);
         recompui_set_margin_bottom(hdr, 2.0f, UNIT_DP);
+        s_notif_hdr[i] = hdr;
 
         /* Item name */
         RecompuiResource nam = recompui_create_label(s_notif_ctx, area,
@@ -577,15 +580,16 @@ static void item_notif_ensure_init(void)
 }
 
 /**
- * @brief Show a toast notification for a newly received item.
+ * @brief Show a toast notification for an item acquisition.
  *
- * Picks the first idle slot (lowest timer == 0), falling back to the
- * round-robin head if all slots are busy, so bursts of items from a joining
- * player fill all 8 visible slots before recycling.
+ * Picks the first idle slot (timer == 0), falling back to round-robin so
+ * bursts from a syncing player fill all 8 slots before recycling.
  *
+ * @param header        Small label above the item name (e.g. "Item found!" or
+ *                      "Received from team").
  * @param item_display  Human-readable item name (e.g. "Chain Pipe").
  */
-static void item_notif_push(const char *item_display)
+static void item_notif_push(const char *header, const char *item_display)
 {
     int i, slot;
     if (!item_display || !item_display[0])
@@ -606,8 +610,9 @@ static void item_notif_push(const char *item_display)
     /* Advance round-robin past this slot. */
     s_notif_next = (slot + 1) % NOTIF_SLOTS;
 
-    /* Update card text and make it visible. */
+    /* Update card texts and make it visible. */
     recompui_open_context(s_notif_ctx);
+    recompui_set_text(s_notif_hdr[slot], header ? header : "");
     recompui_set_text(s_notif_name[slot], item_display);
     recompui_set_display(s_notif_card[slot], DISPLAY_FLEX);
     recompui_close_context(s_notif_ctx);
@@ -615,7 +620,11 @@ static void item_notif_push(const char *item_display)
     s_notif_timer[slot] = NOTIF_FRAMES;
 
     /* Reveal the context if it was hidden. */
-    recompui_show_context(s_notif_ctx);
+    if (!s_notif_ctx_visible)
+    {
+        recompui_show_context(s_notif_ctx);
+        s_notif_ctx_visible = 1;
+    }
 }
 
 /**
@@ -644,8 +653,11 @@ static void item_notif_tick(void)
         }
     }
 
-    if (!any_active)
+    if (!any_active && s_notif_ctx_visible)
+    {
         recompui_hide_context(s_notif_ctx);
+        s_notif_ctx_visible = 0;
+    }
 }
 
 /* =========================================================================
@@ -767,7 +779,7 @@ static void process_incoming_packets(void)
             {
                 const char *display = apply_flag(fname, fval);
                 if (display)
-                    item_notif_push(display);
+                    item_notif_push("Received from team", display);
             }
         }
         else if (is_packet_type(pkt, "REQUEST_TEAM_STATE"))
@@ -876,6 +888,9 @@ static void monitor_and_send_changes(void)
             anchor_send_flag(s_fields[i].name, (int)cur, 1);
             recomp_printf("[ItemSync] Sent field '%s' = %d\n",
                           s_fields[i].name, cur);
+            const char *display = get_flag_display_name(s_fields[i].name);
+            if (display)
+                item_notif_push("Item found!", display);
         }
         s_fields[i].cached = cur; /* always sync cache even if not sent */
     }
@@ -892,6 +907,9 @@ static void monitor_and_send_changes(void)
             anchor_send_flag(s_flag_bits[i].name, 1, 1);
             recomp_printf("[ItemSync] Sent flag '%s' (id=0x%X)\n",
                           s_flag_bits[i].name, s_flag_bits[i].id);
+            const char *display = get_flag_display_name(s_flag_bits[i].name);
+            if (display)
+                item_notif_push("Item found!", display);
         }
         s_flag_bits[i].cached = cur;
     }
