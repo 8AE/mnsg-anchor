@@ -191,6 +191,13 @@ static SyncField s_fields[] = {
     {0x09C, 0, 0, "chr_sasuke"},
     {0x0A0, 0, 0, "chr_yae"},
 
+    /* ── Weapon upgrade tiers (0=Iron/Default, 1=Silver, 2=Gold) ───── */
+    /* SAVE_GOEMON_WEAPON_LEVEL / EBISUMARU / SASUKE / YAE              */
+    {0x0A4, 0, 1, "wpn_goemon"},
+    {0x0A8, 0, 1, "wpn_ebisu"},
+    {0x0AC, 0, 1, "wpn_sasuke"},
+    {0x0B0, 0, 1, "wpn_yae"},
+
     /* ── Equipment / weapons ────────────────────────────────────────── */
     /* SAVE_CHAIN_PIPE / MEATSAW_HAMMER / FIRECRACKER / FLUTE /
        WINDUP_CAMERA / ICE_KUNAI / BAZOOKA / FIRE_RYO (Medal of Flames) */
@@ -294,6 +301,10 @@ static SyncFlagBit s_flag_bits[] = {
     {0x01F, 0, "fl_mermaid"},
     /* FLAG_OBTAINED_SUPER_JUMP     0x020 Byte 0x04 Bit 0 (Jetpack)     */
     {0x020, 0, "fl_superjmp"},
+
+    /* ── Weapon upgrade flags ──────────────────────────────────────── */
+    /* FLAG_UPGRADED_GOLD_WEAPONS  0x01A Byte 0x03 Bit 2               */
+    {0x01A, 0, "fl_gold_wpn"},
 
     /* ── Miracle-item acquisition flags ────────────────────────────── */
     /* FLAG_OBTAINED_MIRACLE_SNOW 0x035 Byte 0x06 Bit 5                 */
@@ -533,6 +544,17 @@ static const char *get_flag_display_name(const char *n)
         return "Miracle Flower";
     if (streq(n, "mi_snow"))
         return "Miracle Snow";
+    /* Weapon upgrade tiers */
+    if (streq(n, "wpn_goemon"))
+        return "Goemon Weapon Upgrade";
+    if (streq(n, "wpn_ebisu"))
+        return "Ebisumaru Weapon Upgrade";
+    if (streq(n, "wpn_sasuke"))
+        return "Sasuke Weapon Upgrade";
+    if (streq(n, "wpn_yae"))
+        return "Yae Weapon Upgrade";
+    if (streq(n, "fl_gold_wpn"))
+        return "Gold Weapons Unlocked";
     /* Stats / upgrades */
     if (streq(n, "stat_hpmax"))
         return "HP Max Up";
@@ -1161,4 +1183,37 @@ void item_sync_force_flag(const char *name)
     }
 
     recomp_printf("[Debug] item_sync_force_flag: unknown name '%s'\n", name);
+}
+
+/**
+ * @brief Force a tracked 32-bit field to a specific value and broadcast it.
+ *
+ * Extends item_sync_force_flag for fields that need values other than 1
+ * (e.g. weapon upgrade tiers where 1=Silver and 2=Gold).  Falls back to
+ * the standard force path (value=1) for single-bit flag entries.
+ *
+ * @param name  Flag name key – must match an entry in s_fields[] or
+ *              s_flag_bits[].  Unknown names are silently ignored.
+ * @param val   The exact value to write (for 32-bit fields).  Ignored
+ *              for single-bit flags (always sets the bit).
+ */
+void item_sync_force_flag_val(const char *name, int val)
+{
+    int i;
+
+    /* ── 32-bit save-data fields ──────────────────────────────────── */
+    for (i = 0; i < NUM_FIELDS; ++i)
+    {
+        if (!streq(s_fields[i].name, name))
+            continue;
+
+        SAVE_WRITE32(s_fields[i].off, val);
+        s_fields[i].cached = val; /* suppress re-broadcast by monitor loop */
+        anchor_send_flag(name, val, 1);
+        recomp_printf("[Debug] Forced field '%s' = %d\n", name, val);
+        return;
+    }
+
+    /* ── Single-bit flags: ignore val, just set the bit ─────────── */
+    item_sync_force_flag(name);
 }

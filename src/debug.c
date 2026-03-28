@@ -28,6 +28,8 @@
 
 /* Provided by item_sync.c – applies a flag locally and broadcasts it. */
 void item_sync_force_flag(const char *name);
+/* Variant that writes a specific value (e.g. weapon tiers 1=Silver, 2=Gold). */
+void item_sync_force_flag_val(const char *name, int val);
 
 /* =========================================================================
    Flag / item entry table
@@ -40,6 +42,7 @@ typedef struct
 {
     const char *key;     /* NULL → section header; otherwise the anchor flag name */
     const char *display; /* Section title, or human-readable item/flag name       */
+    int force_val;       /* 0 → write default (1); otherwise write this value  */
 } DebugEntry;
 
 static const DebugEntry s_entries[] = {
@@ -155,6 +158,18 @@ static const DebugEntry s_entries[] = {
     {"ky_g_mc_mini", "MC: Gold (1F Mini)"},
     {"ky_d_mc_cube", "MC: Diamond (1F Cube)"},
     {"ky_d_mc2", "MC: Diamond (2F)"},
+
+    /* ── Weapon Upgrades ─────────────────────────────────────────────── */
+    {0, "Weapon Upgrades"},
+    {"wpn_goemon", "Goemon: Silver Weapon (Tier 2)", 1},
+    {"wpn_goemon", "Goemon: Gold Weapon (Tier 3)", 2},
+    {"wpn_ebisu", "Ebisumaru: Silver Weapon (Tier 2)", 1},
+    {"wpn_ebisu", "Ebisumaru: Gold Weapon (Tier 3)", 2},
+    {"wpn_sasuke", "Sasuke: Silver Weapon (Tier 2)", 1},
+    {"wpn_sasuke", "Sasuke: Gold Weapon (Tier 3)", 2},
+    {"wpn_yae", "Yae: Silver Weapon (Tier 2)", 1},
+    {"wpn_yae", "Yae: Gold Weapon (Tier 3)", 2},
+    {"fl_gold_wpn", "Gold Weapon Flag (0x01A)", 0},
 };
 
 #define NUM_ENTRIES ((int)(sizeof(s_entries) / sizeof(s_entries[0])))
@@ -249,8 +264,12 @@ static void on_force_clicked(RecompuiResource res,
     if (idx >= (unsigned long)NUM_ENTRIES || !s_entries[idx].key)
         return;
 
-    /* Apply locally + broadcast to all players including this one. */
-    item_sync_force_flag(s_entries[idx].key);
+    /* Apply locally + broadcast to all players including this one.
+     * Use the entry's force_val when non-zero (e.g. tier-2 vs tier-3 weapons). */
+    if (s_entries[idx].force_val != 0)
+        item_sync_force_flag_val(s_entries[idx].key, s_entries[idx].force_val);
+    else
+        item_sync_force_flag(s_entries[idx].key);
 
     /* Defer the status-label update: opening a context inside a callback
      * would trigger "attempted to open a UI context without closing another".
