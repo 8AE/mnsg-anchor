@@ -368,8 +368,9 @@ static SyncFlagBit s_flag_bits[] = {
    State machine
    ========================================================================= */
 
-static int s_was_connected = 0;  /* connection state from the previous frame */
-static int s_save_was_valid = 0; /* true if save was loaded last time we checked */
+static int s_was_connected = 0;     /* connection state from the previous frame */
+static int s_save_was_valid = 0;    /* true if save was loaded last time we checked */
+static int s_prev_player_count = 0; /* player count from the previous frame */
 
 /* When s_push_cursor >= 0 the module is performing an initial full push.
  * Each frame one item is sent, cursor advances.
@@ -392,6 +393,29 @@ static int s_push_cooldown = 0;
 
 /* Total items in both tables combined, used as the end sentinel.           */
 static int push_total(void) { return NUM_FIELDS + NUM_FLAGS; }
+
+/**
+ * Count the number of players currently in the room by parsing the JSON array
+ * returned by anchor_get_player_names_json().  Each player name is a quoted
+ * string; counting opening '"' characters and dividing by 2 gives the count.
+ * Returns 0 when not connected or the array is empty ("[]").
+ */
+static int get_player_count(void)
+{
+    char *json = anchor_get_player_names_json();
+    if (!json)
+        return 0;
+    int quotes = 0;
+    const char *p = json;
+    while (*p)
+    {
+        if (*p == '"')
+            ++quotes;
+        ++p;
+    }
+    recomp_free(json);
+    return quotes / 2; /* each name has one opening and one closing quote */
+}
 
 /* Start (or restart) the full-push sequence.                               */
 static void start_full_push(void)
@@ -1012,6 +1036,7 @@ void item_sync_update(void)
         recomp_printf("[ItemSync] Connected – preparing full state push.\n");
         reset_caches();
         s_push_cooldown = 0;
+        s_prev_player_count = 0;
         /* Request any state teammates may have queued for our team.      */
         anchor_request_team_state("");
         /* If a save is already loaded (reconnect mid-game), push now.    */
@@ -1028,6 +1053,7 @@ void item_sync_update(void)
         s_push_cursor = PUSH_IDLE;
         s_push_cooldown = 0;
         s_save_was_valid = 0;
+        s_prev_player_count = 0;
     }
     s_was_connected = is_connected;
 
@@ -1048,6 +1074,26 @@ void item_sync_update(void)
 
     if (!valid)
         return;
+
+    /* ── Detect new players joining and push state to them ───────────── */
+    {
+        int cur_count = get_player_count();
+        if (cur_count > s_prev_player_count && s_prev_player_count > 0)
+        {
+            /* At least one new player joined.  Trigger an immediate full push
+             * so they receive all items regardless of the queue or cooldown.
+             * Skip the cooldown check here – a new join always warrants a push. */
+            recomp_printf("[ItemSync] New player joined (%d->%d) – triggering full state push.\n",
+                          s_prev_player_count, cur_count);
+            reset_caches();
+            start_full_push();
+            s_push_cooldown = PUSH_COOLDOWN_FRAMES;
+        }
+        /* Only update the previous count when the room is non-empty to avoid
+         * resetting the baseline during transient 0-player moments.           */
+        if (cur_count > 0)
+            s_prev_player_count = cur_count;
+    }
 
     /* ── Process incoming packets ─────────────────────────────────────── */
     process_incoming_packets();
