@@ -802,7 +802,8 @@ def get_player_info_json() -> str:
     """
     with _player_states_lock:
         entries = []
-        for _k, v in sorted(_player_states.items()):
+        # Sort by (teamId, clientId) so teammates are grouped together.
+        for _k, v in sorted(_player_states.items(), key=lambda kv: (kv[1].get("teamId", ""), kv[0])):
             if not v.get("online", True):
                 continue
             name_str = v["name"]
@@ -811,7 +812,8 @@ def get_player_info_json() -> str:
                 name_str += " - " + loc
             char_idx = _CHAR_TO_IDX.get(v.get("character", ""), -1)
             room_id  = v.get("roomId", -1)
-            entries.append({"n": name_str, "c": char_idx, "r": room_id})
+            team_id  = v.get("teamId", "")
+            entries.append({"n": name_str, "c": char_idx, "r": room_id, "t": team_id})
     return json.dumps(entries, separators=(",", ":"))
 
 

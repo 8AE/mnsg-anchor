@@ -98,6 +98,7 @@ static const RecompuiColor COLOR_GREEN = {80, 200, 80, 255};
 static const RecompuiColor COLOR_RED = {220, 60, 60, 255};
 static const RecompuiColor COLOR_GOLD = {220, 190, 60, 255};
 static const RecompuiColor COLOR_ACCENT_BG = {20, 20, 20, 200};
+static const RecompuiColor COLOR_TEAM_HDR = {0, 160, 140, 255}; /* muted teal for team section labels */
 
 /* Last room ID we sent to Python; 0xFFFF = "not sent yet". */
 static unsigned short s_prev_room_id = 0xFFFF;
@@ -164,9 +165,12 @@ static int s_plist_visible = 0;
 
 typedef struct
 {
-    RecompuiResource row;   /* flex-row container                       */
-    RecompuiResource icon;  /* imageview showing the character icon      */
-    RecompuiResource label; /* text label with "Name - Location"         */
+    RecompuiResource row;        /* outer column container (FLEX_COLUMN)              */
+    RecompuiResource team_hdr;   /* team section divider, DISPLAY_NONE by default     */
+    RecompuiResource team_label; /* team name label inside team_hdr                  */
+    RecompuiResource player_row; /* inner flex-row: icon + label                     */
+    RecompuiResource icon;
+    RecompuiResource label;
 } PlayerRowUI;
 
 static PlayerRowUI s_plist_rows[MAX_DISPLAY_PLAYERS];
@@ -247,26 +251,52 @@ static void plist_ensure_init(void)
     recompui_set_flex_direction(s_plist_rows_container, FLEX_DIRECTION_COLUMN);
     recompui_set_gap(s_plist_rows_container, 4.0f, UNIT_DP);
 
-    /* Pre-allocate MAX_DISPLAY_PLAYERS rows; all start hidden. */
+    /* Pre-allocate MAX_DISPLAY_PLAYERS slots; all start hidden.
+     * Each slot is a column: an optional team-section header on top,
+     * followed by the player row.  The team header is only shown when
+     * the player is the first member of a new team in the sorted list. */
     for (int i = 0; i < MAX_DISPLAY_PLAYERS; i++)
     {
-        /* Row: flex row, items vertically centred, small horizontal gap. */
+        /* ── Outer slot: column layout, hidden until assigned. ─────── */
         s_plist_rows[i].row = recompui_create_element(
             s_plist_ctx, s_plist_rows_container);
         recompui_set_display(s_plist_rows[i].row, DISPLAY_NONE);
-        recompui_set_flex_direction(s_plist_rows[i].row, FLEX_DIRECTION_ROW);
-        recompui_set_align_items(s_plist_rows[i].row, ALIGN_ITEMS_CENTER);
-        recompui_set_gap(s_plist_rows[i].row, 6.0f, UNIT_DP);
+        recompui_set_flex_direction(s_plist_rows[i].row, FLEX_DIRECTION_COLUMN);
+
+        /* ── Team section header (hidden by default). ──────────────── */
+        s_plist_rows[i].team_hdr = recompui_create_element(
+            s_plist_ctx, s_plist_rows[i].row);
+        recompui_set_display(s_plist_rows[i].team_hdr, DISPLAY_NONE);
+        recompui_set_padding_left(s_plist_rows[i].team_hdr, 2.0f, UNIT_DP);
+        recompui_set_padding_top(s_plist_rows[i].team_hdr, 2.0f, UNIT_DP);
+        recompui_set_padding_bottom(s_plist_rows[i].team_hdr, 4.0f, UNIT_DP);
+        recompui_set_margin_top(s_plist_rows[i].team_hdr, 6.0f, UNIT_DP);
+        recompui_set_border_bottom_width(s_plist_rows[i].team_hdr, 1.0f, UNIT_DP);
+        recompui_set_border_bottom_color(s_plist_rows[i].team_hdr, &COLOR_BORDER);
+
+        s_plist_rows[i].team_label = recompui_create_label(
+            s_plist_ctx, s_plist_rows[i].team_hdr, "", LABELSTYLE_ANNOTATION);
+        recompui_set_color(s_plist_rows[i].team_label, &COLOR_TEAM_HDR);
+        recompui_set_font_weight(s_plist_rows[i].team_label, 700);
+
+        /* ── Player row: flex-row with icon and label. ─────────────── */
+        s_plist_rows[i].player_row = recompui_create_element(
+            s_plist_ctx, s_plist_rows[i].row);
+        recompui_set_display(s_plist_rows[i].player_row, DISPLAY_FLEX);
+        recompui_set_flex_direction(s_plist_rows[i].player_row, FLEX_DIRECTION_ROW);
+        recompui_set_align_items(s_plist_rows[i].player_row, ALIGN_ITEMS_CENTER);
+        recompui_set_gap(s_plist_rows[i].player_row, 6.0f, UNIT_DP);
+        recompui_set_padding_top(s_plist_rows[i].player_row, 2.0f, UNIT_DP);
 
         /* Character icon image view. */
         s_plist_rows[i].icon = recompui_create_imageview(
-            s_plist_ctx, s_plist_rows[i].row, s_blank_texture);
+            s_plist_ctx, s_plist_rows[i].player_row, s_blank_texture);
         recompui_set_width(s_plist_rows[i].icon, ICON_SIZE, UNIT_DP);
         recompui_set_height(s_plist_rows[i].icon, ICON_SIZE, UNIT_DP);
 
         /* Player name + location label. */
         s_plist_rows[i].label = recompui_create_label(
-            s_plist_ctx, s_plist_rows[i].row, "", LABELSTYLE_SMALL);
+            s_plist_ctx, s_plist_rows[i].player_row, "", LABELSTYLE_SMALL);
         recompui_set_color(s_plist_rows[i].label, &COLOR_DIM);
     }
 
@@ -378,8 +408,10 @@ void anchor_ui_update(void)
         return;
 
     /* Parse info_json into local row data arrays (no JSON library needed:
-     * the format is fixed and machine-generated). */
+     * the format is fixed and machine-generated).
+     * Python already sorts entries by (teamId, clientId). */
     static char row_name_buf[MAX_DISPLAY_PLAYERS][128];
+    static char row_team_buf[MAX_DISPLAY_PLAYERS][40]; /* team ID string, may be empty */
     static int row_char_idx[MAX_DISPLAY_PLAYERS];
     static int row_room_id[MAX_DISPLAY_PLAYERS]; /* raw 16-bit room ID, -1 = unknown */
     int row_count = 0;
@@ -447,30 +479,78 @@ void anchor_ui_update(void)
             }
         }
 
+        /* Locate the "t":" key (team ID string). */
+        row_team_buf[row_count][0] = '\0';
+        {
+            const char *q = p;
+            while (*q && !(*q == '"' && *(q + 1) == 't' && *(q + 2) == '"' && *(q + 3) == ':' && *(q + 4) == '"'))
+                q++;
+            if (*q)
+            {
+                q += 5; /* skip "t":" */
+                int tn = 0;
+                while (*q && *q != '"' && tn < (int)sizeof(row_team_buf[0]) - 1)
+                {
+                    if (*q == '\\' && *(q + 1))
+                        q++;
+                    row_team_buf[row_count][tn++] = *q++;
+                }
+                row_team_buf[row_count][tn] = '\0';
+            }
+        }
+
         row_count++;
     }
 
     recomp_free(info_json);
 
-    /* Read "show room hex" config option once per refresh (Enum: 0=Enabled, 1=Disabled). */
+    /* Read config options once per refresh. */
     int show_room_hex = (recomp_get_config_u32("anchor_show_room_hex") == 0);
 
-    /* Update the pre-allocated player rows in the panel. */
     static const char s_hex_chars[] = "0123456789ABCDEF";
+    static char label_buf[148]; /* 128 name + 10 hex suffix + slack */
+
     recompui_open_context(s_plist_ctx);
     for (int i = 0; i < row_count; i++)
     {
+        /* ── Determine if a new team section starts at this slot. ────── */
+        int new_team = (i == 0);
+        if (!new_team)
+        {
+            const char *a = row_team_buf[i], *b = row_team_buf[i - 1];
+            while (*a && *b && *a == *b)
+            {
+                ++a;
+                ++b;
+            }
+            if (*a != *b)
+                new_team = 1;
+        }
+
+        /* Show the outer slot (column wrapper). */
         recompui_set_display(s_plist_rows[i].row, DISPLAY_FLEX);
+
+        /* Team section header – visible only for the first player of each team. */
+        if (new_team)
+        {
+            const char *tname = row_team_buf[i][0] ? row_team_buf[i] : "default";
+            recompui_set_text(s_plist_rows[i].team_label, tname);
+            recompui_set_display(s_plist_rows[i].team_hdr, DISPLAY_FLEX);
+        }
+        else
+        {
+            recompui_set_display(s_plist_rows[i].team_hdr, DISPLAY_NONE);
+        }
+
+        /* Character icon. */
         int ci = row_char_idx[i];
         RecompuiTextureHandle tex =
             (ci >= 0 && ci < 4) ? s_char_textures[ci] : s_blank_texture;
         recompui_set_imageview_texture(s_plist_rows[i].icon, tex);
 
-        /* Optionally append the raw room ID in hex. */
+        /* Player label, optionally with hex room ID appended. */
         if (show_room_hex && row_room_id[i] >= 0)
         {
-            /* Append " (0xXXXX)" to a copy of the name buffer (max 10 extra chars). */
-            static char label_buf[148]; /* 128 name + 10 hex suffix + slack */
             int len = 0;
             const char *src = row_name_buf[i];
             while (*src && len < 127)
@@ -493,7 +573,7 @@ void anchor_ui_update(void)
             recompui_set_text(s_plist_rows[i].label, row_name_buf[i]);
         }
     }
-    /* Hide any rows beyond the current player count. */
+    /* Hide any slots beyond the current player count. */
     for (int i = row_count; i < MAX_DISPLAY_PLAYERS; i++)
         recompui_set_display(s_plist_rows[i].row, DISPLAY_NONE);
     recompui_close_context(s_plist_ctx);
