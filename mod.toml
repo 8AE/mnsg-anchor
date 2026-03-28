@@ -115,3 +115,11 @@ name = "Team ID"
 description = "Team identifier within the room. Players on the same team share save states and flag queues."
 type = "String"
 default = "default"
+
+[[manifest.config_options]]
+id = "anchor_show_room_hex"
+name = "Show Room ID (Hex)"
+description = "Display the raw hexadecimal room ID next to the area name in the player list (e.g. \"Oedo Castle 1F (0x00A5)\")."
+type = "Enum"
+options = ["Enabled", "Disabled"]
+default = "Disabled"

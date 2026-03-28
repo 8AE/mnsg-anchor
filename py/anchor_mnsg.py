@@ -165,6 +165,12 @@ def _build_room_names() -> None:
     # Folkypoke Village
     for rid in [0x175, 0x176, 0x177, 0x178, 0x1B8]:
         t[rid] = "Folkypoke Village"
+    for rid in [0x130]:
+        t[rid] = "Musashi"
+    for rid in [0x131]:
+        t[rid] = "Tunnel"
+    for rid in [0x132]:
+        t[rid] = "Shinano - Iga"
 
 
 _build_room_names()
@@ -246,7 +252,7 @@ def _recv_loop() -> None:
                             name = cs.get("name", "") or s.get("name", f"Player{cid}")
                             online = bool(cs.get("online", True))
                             location = cs.get("currentRoom", "")
-                            new_players[cid] = {"name": name, "teamId": cs.get("teamId", ""), "online": online, "self": bool(s.get("self")), "location": location}
+                            new_players[cid] = {"name": name, "teamId": cs.get("teamId", ""), "online": online, "self": bool(s.get("self")), "location": location, "roomId": int(cs.get("currentRoomId", -1))}
                     with _player_states_lock:
                         _player_states.clear()
                         _player_states.update(new_players)
@@ -269,6 +275,8 @@ def _recv_loop() -> None:
                                     _player_states[cid]["online"] = bool(cs["online"])
                                 if "currentRoom" in cs:
                                     _player_states[cid]["location"] = cs["currentRoom"]
+                                if "currentRoomId" in cs:
+                                    _player_states[cid]["roomId"] = int(cs["currentRoomId"])
                                 if "posX" in cs:
                                     _player_states[cid]["posX"] = int(cs["posX"])
                                 if "posY" in cs:
@@ -286,6 +294,7 @@ def _recv_loop() -> None:
                                     "online": bool(cs.get("online", True)),
                                     "self": False,
                                     "location": location,
+                                    "roomId": int(cs.get("currentRoomId", -1)),
                                     "posX": int(cs.get("posX", 0)),
                                     "posY": int(cs.get("posY", 0)),
                                     "posZ": int(cs.get("posZ", 0)),
@@ -707,7 +716,8 @@ def set_local_room(room_id: int) -> bool:
     with _player_states_lock:
         if _client_id in _player_states:
             _player_states[_client_id]["location"] = area_name
-    return update_client_state(json.dumps({"currentRoom": area_name}))
+            _player_states[_client_id]["roomId"] = room_id
+    return update_client_state(json.dumps({"currentRoom": area_name, "currentRoomId": room_id}))
 
 
 def send_game_complete() -> bool:
@@ -800,7 +810,8 @@ def get_player_info_json() -> str:
             if loc:
                 name_str += " - " + loc
             char_idx = _CHAR_TO_IDX.get(v.get("character", ""), -1)
-            entries.append({"n": name_str, "c": char_idx})
+            room_id  = v.get("roomId", -1)
+            entries.append({"n": name_str, "c": char_idx, "r": room_id})
     return json.dumps(entries, separators=(",", ":"))
 
 

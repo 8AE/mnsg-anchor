@@ -28,6 +28,7 @@
 #include "modding.h"
 #include "recomputils.h"
 #include "recompui.h"
+#include "recompconfig.h"
 #include "anchor.h"
 #include "icon_goemon.h"
 #include "icon_ebisumaru.h"
@@ -380,6 +381,7 @@ void anchor_ui_update(void)
      * the format is fixed and machine-generated). */
     static char row_name_buf[MAX_DISPLAY_PLAYERS][128];
     static int row_char_idx[MAX_DISPLAY_PLAYERS];
+    static int row_room_id[MAX_DISPLAY_PLAYERS]; /* raw 16-bit room ID, -1 = unknown */
     int row_count = 0;
     const char *p = info_json;
 
@@ -423,12 +425,38 @@ void anchor_ui_update(void)
             cidx = cidx * 10 + (*p++ - '0');
         row_char_idx[row_count] = cidx * sign;
 
+        /* Locate the "r": key (raw room ID). */
+        row_room_id[row_count] = -1;
+        {
+            const char *q = p;
+            while (*q && !(*q == '"' && *(q + 1) == 'r' && *(q + 2) == '"' && *(q + 3) == ':'))
+                q++;
+            if (*q)
+            {
+                q += 4; /* skip "r": */
+                int rsign = 1;
+                if (*q == '-')
+                {
+                    rsign = -1;
+                    q++;
+                }
+                int rid = 0;
+                while (*q >= '0' && *q <= '9')
+                    rid = rid * 10 + (*q++ - '0');
+                row_room_id[row_count] = rid * rsign;
+            }
+        }
+
         row_count++;
     }
 
     recomp_free(info_json);
 
+    /* Read "show room hex" config option once per refresh (Enum: 0=Enabled, 1=Disabled). */
+    int show_room_hex = (recomp_get_config_u32("anchor_show_room_hex") == 0);
+
     /* Update the pre-allocated player rows in the panel. */
+    static const char s_hex_chars[] = "0123456789ABCDEF";
     recompui_open_context(s_plist_ctx);
     for (int i = 0; i < row_count; i++)
     {
@@ -437,7 +465,33 @@ void anchor_ui_update(void)
         RecompuiTextureHandle tex =
             (ci >= 0 && ci < 4) ? s_char_textures[ci] : s_blank_texture;
         recompui_set_imageview_texture(s_plist_rows[i].icon, tex);
-        recompui_set_text(s_plist_rows[i].label, row_name_buf[i]);
+
+        /* Optionally append the raw room ID in hex. */
+        if (show_room_hex && row_room_id[i] >= 0)
+        {
+            /* Append " (0xXXXX)" to a copy of the name buffer (max 10 extra chars). */
+            static char label_buf[148]; /* 128 name + 10 hex suffix + slack */
+            int len = 0;
+            const char *src = row_name_buf[i];
+            while (*src && len < 127)
+                label_buf[len++] = *src++;
+            label_buf[len++] = ' ';
+            label_buf[len++] = '(';
+            label_buf[len++] = '0';
+            label_buf[len++] = 'x';
+            unsigned int rid = (unsigned int)row_room_id[i];
+            label_buf[len++] = s_hex_chars[(rid >> 12) & 0xF];
+            label_buf[len++] = s_hex_chars[(rid >> 8) & 0xF];
+            label_buf[len++] = s_hex_chars[(rid >> 4) & 0xF];
+            label_buf[len++] = s_hex_chars[rid & 0xF];
+            label_buf[len++] = ')';
+            label_buf[len] = '\0';
+            recompui_set_text(s_plist_rows[i].label, label_buf);
+        }
+        else
+        {
+            recompui_set_text(s_plist_rows[i].label, row_name_buf[i]);
+        }
     }
     /* Hide any rows beyond the current player count. */
     for (int i = row_count; i < MAX_DISPLAY_PLAYERS; i++)
