@@ -16,6 +16,8 @@ Key packet types sent by the client:
   REQUEST_TEAM_STATE - Ask teammates for their save state (on connect).
   UPDATE_ROOM_STATE  - Broadcast room-wide settings.
   GAME_COMPLETE      - Signal that you finished the game.
+  SET_FLAG           - Broadcast a single item/flag acquisition to the team.
+                       With addToQueue=true the server queues it for offline players.
   <custom type>      - Any other type is broadcast to your room or team.
 
 Key packet types received from the server:
@@ -25,7 +27,36 @@ Key packet types received from the server:
   HEARTBEAT          - Keep-alive ping; we echo it back.
   SERVER_MESSAGE     - Text message from the server operator.
   DISABLE_ANCHOR     - Server is kicking this client; disconnect.
+  SET_FLAG           - An item/flag acquired by a teammate (queued by the server).
+  REQUEST_TEAM_STATE - A teammate is requesting the full team state.
   <custom type>      - Custom packet broadcast by another client.
+
+Item-sync protocol (implemented in src/item_sync.c):
+  On connect with a valid save:
+    1. anchor_mnsg.request_team_state() is called so the server delivers
+       any queued SET_FLAG packets from teammates.
+    2. A full push begins: every non-zero tracked item is sent one per frame
+       as a SET_FLAG packet with addToQueue=true.  The server stores these
+       so newly joining players receive the complete team inventory on join.
+  Each frame:
+    - Incoming SET_FLAG packets are applied to the local save data.
+    - Incoming REQUEST_TEAM_STATE packets trigger a re-push of all items.
+    - Newly obtained items are broadcast immediately as SET_FLAG packets.
+
+  Tracked items (from MNSGRecompRando / save_data_tool.h):
+    - Characters: Goemon, Ebisumaru, Sasuke, Yae
+    - Equipment: Chain Pipe, Meat Hammer, Firecracker, Flute,
+                 Wind-up Camera, Ice Kunai, Bazooka, Medal of Flames
+    - Abilities:  Sudden Impact, Mini Ebisumaru, Jetpack, Mermaid
+    - Quest items: Triton Shell, Super Pass, Achilles' Heel, Cucumber,
+                   Map of Japan
+    - Miracle items: Star, Moon, Flower, Snow
+    - Dungeon key inventory counts (silver / gold / diamond / jump gym / misc)
+    - Total HP maximum  (take-max – health upgrades)
+    - Fortune Doll counts
+    - Mr. Elly Fant and Mr. Arrow collection progress per dungeon
+    - Boss-defeat flags: Dharmanyo, Thaisamba, Tsurami, Benkei, Congo
+    - Character-acquisition flags, quest-critical flags
 
 Usage from C (via REPY_FN macros):
   import anchor_mnsg
