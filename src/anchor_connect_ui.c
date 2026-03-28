@@ -66,6 +66,7 @@ static RecompuiResource s_in_team = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_disconnect_btn = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_connect_btn = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_skip_btn = RECOMPUI_NULL_RESOURCE;
 /* Semi-transparent overlay that covers the input fields when connected,
  * preventing the user from editing them.                                */
 static RecompuiResource s_fields_overlay = RECOMPUI_NULL_RESOURCE;
@@ -413,12 +414,12 @@ static void connect_ui_init(void)
         recompui_set_justify_content(btn_row, JUSTIFY_CONTENT_FLEX_END);
 
         /* Skip button (secondary, rightmost but before Connect). */
-        RecompuiResource skip_btn = recompui_create_button(
+        s_skip_btn = recompui_create_button(
             s_modal_ctx, btn_row, "Skip / Play Offline", BUTTONSTYLE_SECONDARY);
-        recompui_set_cursor(skip_btn, CURSOR_POINTER);
-        recompui_set_font_size(skip_btn, 16.0f, UNIT_DP);
-        recompui_set_tab_index(skip_btn, TAB_INDEX_AUTO);
-        recompui_register_callback(skip_btn, on_skip_clicked, 0);
+        recompui_set_cursor(s_skip_btn, CURSOR_POINTER);
+        recompui_set_font_size(s_skip_btn, 16.0f, UNIT_DP);
+        recompui_set_tab_index(s_skip_btn, TAB_INDEX_AUTO);
+        recompui_register_callback(s_skip_btn, on_skip_clicked, 0);
 
         /* Disconnect button (hidden until connected). */
         s_disconnect_btn = recompui_create_button(
@@ -470,9 +471,12 @@ static void apply_status_update(void)
     recompui_set_color(s_status_lbl,
                        s_pending_status_ok ? &CC_GREEN : &CC_RED);
 
-    /* Show disconnect button only while actually connected. */
-    recompui_set_display(s_disconnect_btn,
-                         anchor_is_connected() ? DISPLAY_BLOCK : DISPLAY_NONE);
+    /* Sync button visibility with current connection state. */
+    int connected = anchor_is_connected();
+    recompui_set_display(s_connect_btn, connected ? DISPLAY_NONE : DISPLAY_BLOCK);
+    recompui_set_display(s_skip_btn, connected ? DISPLAY_NONE : DISPLAY_BLOCK);
+    recompui_set_display(s_disconnect_btn, connected ? DISPLAY_BLOCK : DISPLAY_NONE);
+    recompui_set_display(s_fields_overlay, connected ? DISPLAY_BLOCK : DISPLAY_NONE);
 
     recompui_close_context(s_modal_ctx);
     s_pending_status = 0;
@@ -566,6 +570,7 @@ void anchor_connect_ui_frame_hook(void)
          * since the modal stays visible after disconnecting.             */
         recompui_open_context(s_modal_ctx);
         recompui_set_display(s_connect_btn, DISPLAY_BLOCK);
+        recompui_set_display(s_skip_btn, DISPLAY_BLOCK);
         recompui_set_display(s_disconnect_btn, DISPLAY_NONE);
         recompui_set_display(s_fields_overlay, DISPLAY_NONE);
         recompui_close_context(s_modal_ctx);
@@ -583,6 +588,8 @@ void anchor_connect_ui_frame_hook(void)
             /* Connect button only shown when not connected; Disconnect
              * button only shown when connected.                          */
             recompui_set_display(s_connect_btn,
+                                 connected ? DISPLAY_NONE : DISPLAY_BLOCK);
+            recompui_set_display(s_skip_btn,
                                  connected ? DISPLAY_NONE : DISPLAY_BLOCK);
             recompui_set_display(s_disconnect_btn,
                                  connected ? DISPLAY_BLOCK : DISPLAY_NONE);
