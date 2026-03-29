@@ -257,6 +257,33 @@ static SyncField s_fields[] = {
     {0x288, 0, 1, "mr_arr_ftc"},
     {0x28C, 0, 1, "mr_arr_sub"},
     {0x290, 0, 1, "mr_arr_mus"},
+
+    /* ── Fish collectible counts (take the maximum) ─────────────────── */
+    /* Total Red / Yellow / Blue Fish Obtained                           */
+    /* 0x8015C718 / 0x8015C71C / 0x8015C720                             */
+    {0x110, 0, 1, "fish_red"},
+    {0x114, 0, 1, "fish_yellow"},
+    {0x118, 0, 1, "fish_blue"},
+
+    /* ── Key to Training (door-key item, distinct from fl_gym_key) ───── */
+    /* 0x8015C710                                                         */
+    {0x108, 0, 0, "ki_traindoor"},
+
+    /* ── Warp points (towns / coffee shops / fast-travel gates) ──────── */
+    /* SAVE_WARP_* offsets from save_data_tool.h (0x2A4 – 0x2D4)          */
+    {0x2A4, 0, 0, "wp_goemon_h"},  /* SAVE_WARP_GOEMON_HOUSE             */
+    {0x2A8, 0, 0, "wp_kai_hwy"},   /* SAVE_WARP_KAI_HIGHWAY              */
+    {0x2AC, 0, 0, "wp_oedo"},      /* SAVE_WARP_OEDO_CASTLE              */
+    {0x2B0, 0, 0, "wp_zazen"},     /* SAVE_WARP_ZAZEN_TOWN               */
+    {0x2B4, 0, 0, "wp_kii_cafe"},  /* SAVE_WARP_KII_COFFEE               */
+    {0x2B8, 0, 0, "wp_folkypoke"}, /* SAVE_WARP_FOLKYPOKE_VILLAGE        */
+    {0x2BC, 0, 0, "wp_kompira"},   /* SAVE_WARP_KOMPIRA_MOUNTAIN         */
+    {0x2C0, 0, 0, "wp_iyo_tea"},   /* SAVE_WARP_IYO_TEA_HOUSE            */
+    {0x2C4, 0, 0, "wp_ghost"},     /* SAVE_WARP_GHOST_TOYS               */
+    {0x2C8, 0, 0, "wp_izumo_tea"}, /* SAVE_WARP_IZUMO_TEA_HOUSE          */
+    {0x2CC, 0, 0, "wp_festival"},  /* SAVE_WARP_FESTIVAL_TEMPLE          */
+    {0x2D0, 0, 0, "wp_fest_vill"}, /* SAVE_WARP_FESTIVAL_VILLAGE         */
+    {0x2D4, 0, 0, "wp_witch"},     /* SAVE_WARP_WITCHES_HUT              */
 };
 
 #define NUM_FIELDS ((int)(sizeof(s_fields) / sizeof(s_fields[0])))
@@ -371,6 +398,91 @@ static SyncFlagBit s_flag_bits[] = {
     {0x018F, 0, "ky_g_mc_mini"}, /* KEY_GOLD_MUSICAL_CASTLE_1_MINI          */
     {0x0191, 0, "ky_d_mc_cube"}, /* KEY_DIAMOND_MUSICAL_CASTLE_1_CUBE       */
     {0x0193, 0, "ky_d_mc2"},     /* KEY_DIAMOND_MUSICAL_CASTLE_2            */
+
+    /* ── Fishing quest event flags ──────────────────────────────────── */
+    /* Set when a fish-collecting quest is opened / limits reached.     */
+    /* flag_id source: parser_config_en.yaml prettify section           */
+    {0x02A, 0, "fl_fish_r_on"}, /* Looking for Red Fish                  */
+    {0x02B, 0, "fl_fish_y_on"}, /* Looking for Yellow Fish               */
+    {0x02C, 0, "fl_fish_b_on"}, /* Looking for Blue Fish                 */
+    {0x04F, 0, "fl_fish_b_mx"}, /* Cannot Catch More Blue Fish           */
+    {0x050, 0, "fl_fish_y_mx"}, /* Cannot Catch More Yellow Fish         */
+    {0x051, 0, "fl_fish_r_mx"}, /* Cannot Catch More Red Fish            */
+
+    /* ── Cat Eyes shop purchases ────────────────────────────────────── */
+    /* flag_ids 0x1C5-0x1C7 (parser_config_en.yaml)                     */
+    {0x1C5, 0, "fl_ce_dharma"}, /* Bought Dharma from Cat Eyes           */
+    {0x1C6, 0, "fl_ce_notice"}, /* Bought Notice Board from Cat Eyes     */
+    {0x1C7, 0, "fl_ce_doll"},   /* Bought Doll from Cat Eyes             */
+
+    /* ── World / story event flags ──────────────────────────────────── */
+    {0x014, 0, "fl_koryuta"},    /* Freed Koryuta the Dragon              */
+    {0x06B, 0, "fl_outerspace"}, /* Went to Outer Space                   */
+    {0x06F, 0, "fl_baron_iga"},  /* Met Baron in Iga                      */
+
+    /* ── World-state / NPC-unlock flags ─────────────────────────────── */
+    /* 0x011  Mokubei Can Upgrade Weapons – gates weapon smithing        */
+    {0x011, 0, "fl_mokubei"},
+    /* 0x015  Met Ghost of Wise Man – NPC encounter, gates quest         */
+    {0x015, 0, "fl_wiseman"},
+    /* 0x016  Spoke to Witch (But Didn't Pay) – gates witch services     */
+    {0x016, 0, "fl_witch_np"},
+    /* 0x017  Kyushu Disappeared – major world-state change              */
+    {0x017, 0, "fl_kyushu"},
+    /* 0x06C  Going to Outer Space – pre-space world state               */
+    {0x06C, 0, "fl_to_space"},
+    /* 0x07F  Riding Dragon From Folkypoke – progression unlock          */
+    {0x07F, 0, "fl_dragon_fp"},
+    /* 0x080  Plasma Told You to Resurrect Sasuke – quest trigger        */
+    {0x080, 0, "fl_sas_res"},
+
+    /* ── Benkei / Ushiwaka quest chain ──────────────────────────────── */
+    /* 0x034  Met Benkei – gates Benkei fight                            */
+    {0x034, 0, "fl_met_benkei"},
+    /* 0x025  Can Talk to Ushiwaka about Benkei                          */
+    {0x025, 0, "fl_ushi_ben"},
+    /* 0x02D  Asked Ushiwaka Who He Is                                   */
+    {0x02D, 0, "fl_ushi_id"},
+    /* 0x028  Ushiwaka Went to Golden Temple – world state               */
+    {0x028, 0, "fl_ushi_gt"},
+
+    /* ── Kihachi's Favorite Food quest ──────────────────────────────── */
+    /* 0x023  Heard about Kihachi from Benkei                            */
+    {0x023, 0, "fl_kihachi_b"},
+    /* 0x022  Looking for Kihachi's Favorite Food                        */
+    {0x022, 0, "fl_kihachi_q"},
+    /* 0x024  Learned Kihachi's Favorite Food                            */
+    {0x024, 0, "fl_kihachi_f"},
+    /* 0x037  Kihachi Will Give Favorite Food Hint                       */
+    {0x037, 0, "fl_kihachi_h1"},
+    /* 0x038  Kihachi Gave Favorite Food Hint                            */
+    {0x038, 0, "fl_kihachi_h2"},
+
+    /* ── Folkypoke / Priest / training quest chain ───────────────────── */
+    /* 0x03B  Spoke to Priest's Son                                      */
+    {0x03B, 0, "fl_priest_son"},
+    /* 0x03D  Arrived at Folkypoke Tourist Center                        */
+    {0x03D, 0, "fl_folkypoke"},
+    /* 0x03F  Heard about Inaba Desert Battery – battery quest trigger   */
+    {0x03F, 0, "fl_inaba_bat"},
+    /* 0x063  Heard about Dragon Problem                                 */
+    {0x063, 0, "fl_dragon_p"},
+    /* 0x064  Received Gratitude from Tourist Center                     */
+    {0x064, 0, "fl_tourist_g"},
+    /* 0x06E  Spoke to Dancin Alnite                                     */
+    {0x06E, 0, "fl_dancin"},
+
+    /* ── Goemon Tenements Cousins quest ─────────────────────────────── */
+    {0x052, 0, "fl_cous1"}, /* Goemon Tenements Cousins #1           */
+    {0x053, 0, "fl_cous2"}, /* Goemon Tenements Cousins #2           */
+    {0x054, 0, "fl_cous3"}, /* Goemon Tenements Cousins #3           */
+    {0x055, 0, "fl_cous4"}, /* Goemon Tenements Cousins #4           */
+
+    /* ── Old Woman in Zazen quest ────────────────────────────────────── */
+    {0x056, 0, "fl_zazen_bef"}, /* Met Old Woman in Zazen Before Dharmanyo */
+    {0x057, 0, "fl_zazen_aft"}, /* Met Old Woman in Zazen After Dharmanyo  */
+    {0x058, 0, "fl_zazen_ba"},  /* Met Old Woman in Zazen Before And After  */
+    {0x059, 0, "fl_zazen_rwd"}, /* Obtained Reward from Old Woman in Zazen  */
 };
 
 #define NUM_FLAGS ((int)(sizeof(s_flag_bits) / sizeof(s_flag_bits[0])))
@@ -598,6 +710,127 @@ static const char *get_flag_display_name(const char *n)
         return "Map of Japan";
     if (streq(n, "fl_bat_sas"))
         return "Sasuke Battery";
+    /* Fish collectible counts */
+    if (streq(n, "fish_red"))
+        return "Red Fish";
+    if (streq(n, "fish_yellow"))
+        return "Yellow Fish";
+    if (streq(n, "fish_blue"))
+        return "Blue Fish";
+    /* Key to Training door-key item and Oedo warp */
+    if (streq(n, "ki_traindoor"))
+        return "Key to Training";
+    if (streq(n, "ki_oedo_warp") || streq(n, "wp_oedo"))
+        return "Oedo Castle Warp";
+    /* Warp points – towns, coffee/tea shops, fast-travel gates */
+    if (streq(n, "wp_goemon_h"))
+        return "Goemon's House";
+    if (streq(n, "wp_kai_hwy"))
+        return "Kai Highway";
+    if (streq(n, "wp_zazen"))
+        return "Zazen Town";
+    if (streq(n, "wp_kii_cafe"))
+        return "Kii Coffee Shop";
+    if (streq(n, "wp_folkypoke"))
+        return "Folkypoke Village";
+    if (streq(n, "wp_kompira"))
+        return "Kompira Mountain";
+    if (streq(n, "wp_iyo_tea"))
+        return "Iyo Tea House";
+    if (streq(n, "wp_ghost"))
+        return "Ghost Toys Warp";
+    if (streq(n, "wp_izumo_tea"))
+        return "Izumo Tea House";
+    if (streq(n, "wp_festival"))
+        return "Festival Temple Warp";
+    if (streq(n, "wp_fest_vill"))
+        return "Festival Village";
+    if (streq(n, "wp_witch"))
+        return "Witch's Hut";
+    /* Cat Eyes shop purchases */
+    if (streq(n, "fl_ce_dharma"))
+        return "Dharma (Cat Eyes)";
+    if (streq(n, "fl_ce_notice"))
+        return "Notice Board (Cat Eyes)";
+    if (streq(n, "fl_ce_doll"))
+        return "Doll (Cat Eyes)";
+    /* World / story events */
+    if (streq(n, "fl_koryuta"))
+        return "Koryuta Freed";
+    if (streq(n, "fl_outerspace"))
+        return "Went to Outer Space";
+    if (streq(n, "fl_baron_iga"))
+        return "Met Baron in Iga";
+    /* World-state / NPC-unlock */
+    if (streq(n, "fl_mokubei"))
+        return "Mokubei Unlocked";
+    if (streq(n, "fl_wiseman"))
+        return "Met Ghost of Wise Man";
+    if (streq(n, "fl_witch_np"))
+        return "Spoke to Witch";
+    if (streq(n, "fl_kyushu"))
+        return "Kyushu Disappeared";
+    if (streq(n, "fl_to_space"))
+        return "Going to Outer Space";
+    if (streq(n, "fl_dragon_fp"))
+        return "Dragon from Folkypoke";
+    if (streq(n, "fl_sas_res"))
+        return "Resurrect Sasuke";
+    /* Benkei / Ushiwaka chain */
+    if (streq(n, "fl_met_benkei"))
+        return "Met Benkei";
+    if (streq(n, "fl_ushi_ben"))
+        return "Ushiwaka: Benkei Talk";
+    if (streq(n, "fl_ushi_id"))
+        return "Asked Ushiwaka Who He Is";
+    if (streq(n, "fl_ushi_gt"))
+        return "Ushiwaka: Golden Temple";
+    /* Kihachi food quest */
+    if (streq(n, "fl_kihachi_b"))
+        return "Kihachi: Benkei Tip";
+    if (streq(n, "fl_kihachi_q"))
+        return "Kihachi: Seeking Food";
+    if (streq(n, "fl_kihachi_f"))
+        return "Kihachi: Learned Food";
+    if (streq(n, "fl_kihachi_h1"))
+        return "Kihachi: Will Hint";
+    if (streq(n, "fl_kihachi_h2"))
+        return "Kihachi: Hinted";
+    /* Folkypoke chain */
+    if (streq(n, "fl_priest_son"))
+        return "Spoke to Priest's Son";
+    if (streq(n, "fl_folkypoke"))
+        return "Arrived at Folkypoke";
+    if (streq(n, "fl_inaba_bat"))
+        return "Inaba Desert Battery";
+    if (streq(n, "fl_dragon_p"))
+        return "Heard Dragon Problem";
+    if (streq(n, "fl_tourist_g"))
+        return "Tourist Center Thanks";
+    if (streq(n, "fl_dancin"))
+        return "Spoke to Dancin Alnite";
+    /* Tenements cousins quest */
+    if (streq(n, "fl_cous1"))
+        return "Tenements Cousin #1";
+    if (streq(n, "fl_cous2"))
+        return "Tenements Cousin #2";
+    if (streq(n, "fl_cous3"))
+        return "Tenements Cousin #3";
+    if (streq(n, "fl_cous4"))
+        return "Tenements Cousin #4";
+    /* Zazen old woman quest */
+    if (streq(n, "fl_zazen_bef"))
+        return "Zazen Woman (Before)";
+    if (streq(n, "fl_zazen_aft"))
+        return "Zazen Woman (After)";
+    if (streq(n, "fl_zazen_ba"))
+        return "Zazen Woman (Both)";
+    if (streq(n, "fl_zazen_rwd"))
+        return "Zazen Woman Reward";
+    /* Fish quest flags – suppress toasts (internal quest state) */
+    if (streq(n, "fl_fish_r_on") || streq(n, "fl_fish_y_on") || streq(n, "fl_fish_b_on") ||
+        streq(n, "fl_fish_r_mx") || streq(n, "fl_fish_y_mx") || streq(n, "fl_fish_b_mx"))
+        return 0;
     /* Per-room dungeon key pickups – match by prefix ky_s_ / ky_g_ / ky_d_ */
     if (n[0] == 'k' && n[1] == 'y' && n[2] == '_')
     {

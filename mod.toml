@@ -5,13 +5,13 @@
 
 # Unique ID of this mod. Pick something long enough that it'll never be the same as any other mod.
 # The name displayed in the mod management menu is separate from this so this doesn't need to be human readable.
-id = "mnsg_anchor_client"
+id = "mnsg_multiplayer_anchor"
 
 # Version of this mod.
 version = "0.1.0"
 
 # The name that will show up for this mod in the mod menu. This should be human readable.
-display_name = "Anchor Co-op Client"
+display_name = "Anchor Multiplayer"
 
 # The description that will show up when this mod is displayed in the mod menu. This should be human readable.
 description = """
@@ -25,12 +25,12 @@ Default public server: anchor.hm64.org:43383"""
 
 # A short description that will show up in this mod's entry in the mod list. This should be human readable and kept short
 # to prevent it from being cut off due to the limited space.
-short_description = "Anchor co-op client – sync items and flags with teammates."
+short_description = "Anchor multiplayer, play with friends over the internet."
 
 # Authors of this mod.
-authors = ["Your name here"]
+authors = ["Killzbro"]
 
-# Anchor co-op for MNSG – uses RecompExternalPython (REPY) for TCP networking.
+# Anchor multiplayer for MNSG – uses RecompExternalPython (REPY) for TCP networking.
 
 # ID of the target recomp game.
 game_id = "mnsg"
@@ -59,7 +59,7 @@ native_libraries = [
 elf_path = "build/mod.elf"
 
 # Output mod filename.
-mod_filename = "mnsg_anchor_client"
+mod_filename = "mnsg_multiplayer_anchor"
 
 # Reference symbol files.
 func_reference_syms_file = "Goemon64RecompSyms/mnsg.us.syms.toml"

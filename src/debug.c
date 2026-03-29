@@ -79,8 +79,25 @@ static const DebugEntry s_entries[] = {
     {"ki_triton", "Triton Shell"},
     {"ki_superps", "Super Pass"},
     {"ki_achilles", "Achilles' Heel"},
+    {"ki_traindoor", "Key to Training"},
     {"ki_cucumber", "Quality Cucumber"},
     {"ki_map_jpn", "Map of Japan"},
+
+    /* ── Warp Points ─────────────────────────────────────────────────── */
+    {0, "Warp Points"},
+    {"wp_goemon_h", "Goemon's House"},
+    {"wp_kai_hwy", "Kai Highway"},
+    {"wp_oedo", "Oedo Castle"},
+    {"wp_zazen", "Zazen Town"},
+    {"wp_kii_cafe", "Kii Coffee Shop"},
+    {"wp_folkypoke", "Folkypoke Village"},
+    {"wp_kompira", "Kompira Mountain"},
+    {"wp_iyo_tea", "Iyo Tea House"},
+    {"wp_ghost", "Ghost Toys Castle"},
+    {"wp_izumo_tea", "Izumo Tea House"},
+    {"wp_festival", "Festival Temple"},
+    {"wp_fest_vill", "Festival Village"},
+    {"wp_witch", "Witch's Hut"},
 
     /* ── Miracle Items ───────────────────────────────────────────────── */
     {0, "Miracle Items"},
@@ -162,8 +179,79 @@ static const DebugEntry s_entries[] = {
     {"ky_d_mc_cube", "MC: Diamond (1F Cube)"},
     {"ky_d_mc2", "MC: Diamond (2F)"},
 
-    /* ── Weapon Upgrades ─────────────────────────────────────────────── */
-    {0, "Weapon Upgrades"},
+    /* ── Fish Counts ─────────────────────────────────────────────────── */
+    {0, "Fish Counts"},
+    {"fish_red", "Red Fish"},
+    {"fish_yellow", "Yellow Fish"},
+    {"fish_blue", "Blue Fish"},
+
+    /* ── Fishing Quest Flags ─────────────────────────────────────────── */
+    {0, "Fishing Quest Flags"},
+    {"fl_fish_r_on", "Looking for Red Fish"},
+    {"fl_fish_y_on", "Looking for Yellow Fish"},
+    {"fl_fish_b_on", "Looking for Blue Fish"},
+    {"fl_fish_r_mx", "Red Fish: Max Caught"},
+    {"fl_fish_y_mx", "Yellow Fish: Max Caught"},
+    {"fl_fish_b_mx", "Blue Fish: Max Caught"},
+
+    /* ── Cat Eyes Shop ───────────────────────────────────────────────── */
+    {0, "Cat Eyes Shop"},
+    {"fl_ce_dharma", "Bought Dharma"},
+    {"fl_ce_notice", "Bought Notice Board"},
+    {"fl_ce_doll", "Bought Doll"},
+
+    /* ── World / Story Events ────────────────────────────────────────── */
+    {0, "World Events"},
+    {"fl_koryuta", "Freed Koryuta the Dragon"},
+    {"fl_outerspace", "Went to Outer Space"},
+    {"fl_to_space", "Going to Outer Space"},
+    {"fl_baron_iga", "Met Baron in Iga"},
+    {"fl_mokubei", "Mokubei Can Upgrade Weapons"},
+    {"fl_wiseman", "Met Ghost of Wise Man"},
+    {"fl_witch_np", "Spoke to Witch (Didn't Pay)"},
+    {"fl_kyushu", "Kyushu Disappeared"},
+    {"fl_dragon_fp", "Riding Dragon from Folkypoke"},
+    {"fl_sas_res", "Resurrect Sasuke (Plasma tip)"},
+
+    /* ── Benkei / Ushiwaka Quest Chain ───────────────────────────────── */
+    {0, "Benkei / Ushiwaka"},
+    {"fl_met_benkei", "Met Benkei"},
+    {"fl_ushi_ben", "Ushiwaka: Can Talk Benkei"},
+    {"fl_ushi_id", "Asked Ushiwaka Who He Is"},
+    {"fl_ushi_gt", "Ushiwaka: Golden Temple"},
+
+    /* ── Kihachi Food Quest ───────────────────────────────────────────── */
+    {0, "Kihachi Food Quest"},
+    {"fl_kihachi_b", "Heard about Kihachi (Benkei)"},
+    {"fl_kihachi_q", "Looking for Kihachi Food"},
+    {"fl_kihachi_f", "Learned Kihachi's Food"},
+    {"fl_kihachi_h1", "Kihachi: Will Give Hint"},
+    {"fl_kihachi_h2", "Kihachi: Gave Hint"},
+
+    /* ── Folkypoke / Priest Quest Chain ──────────────────────────────── */
+    {0, "Folkypoke Chain"},
+    {"fl_priest_son", "Spoke to Priest's Son"},
+    {"fl_folkypoke", "Arrived at Folkypoke"},
+    {"fl_inaba_bat", "Heard about Inaba Battery"},
+    {"fl_dragon_p", "Heard Dragon Problem"},
+    {"fl_tourist_g", "Received Tourist Gratitude"},
+    {"fl_dancin", "Spoke to Dancin Alnite"},
+
+    /* ── Tenements Cousins Quest ─────────────────────────────────────── */
+    {0, "Tenements Cousins"},
+    {"fl_cous1", "Goemon Cousins #1"},
+    {"fl_cous2", "Goemon Cousins #2"},
+    {"fl_cous3", "Goemon Cousins #3"},
+    {"fl_cous4", "Goemon Cousins #4"},
+
+    /* ── Zazen Old Woman Quest ───────────────────────────────────────── */
+    {0, "Zazen Old Woman"},
+    {"fl_zazen_bef", "Met Woman (Before Boss)"},
+    {"fl_zazen_aft", "Met Woman (After Boss)"},
+    {"fl_zazen_ba", "Met Woman (Both Times)"},
+    {"fl_zazen_rwd", "Zazen Woman Reward"},
+
+    /* ── Weapon Upgrades ─────────────────────────────────────────────── */ {0, "Weapon Upgrades"},
     {"wpn_goemon", "Goemon: Silver Weapon (Tier 2)", 1},
     {"wpn_goemon", "Goemon: Gold Weapon (Tier 3)", 2},
     {"wpn_ebisu", "Ebisumaru: Silver Weapon (Tier 2)", 1},

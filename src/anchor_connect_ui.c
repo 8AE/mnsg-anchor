@@ -289,7 +289,7 @@ static void connect_ui_init(void)
         recompui_set_border_bottom_color(hdr, &CC_BORDER);
 
         RecompuiResource title = recompui_create_label(
-            s_modal_ctx, hdr, "Anchor Co-op Setup", LABELSTYLE_NORMAL);
+            s_modal_ctx, hdr, "Anchor Multiplayer Setup", LABELSTYLE_NORMAL);
         recompui_set_color(title, &CC_TEAL);
         recompui_set_font_weight(title, 700);
         recompui_set_font_size(title, 22.0f, UNIT_DP);
