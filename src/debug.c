@@ -515,7 +515,11 @@ static void debug_init_ui(void)
         RecompuiResource close_btn = recompui_create_button(
             s_modal_ctx, hdr, "X", BUTTONSTYLE_SECONDARY);
         recompui_set_cursor(close_btn, CURSOR_POINTER);
-        recompui_set_font_size(close_btn, 18.0f, UNIT_DP);
+        recompui_set_font_size(close_btn, 14.0f, UNIT_DP);
+        recompui_set_padding_top(close_btn, 5.0f, UNIT_DP);
+        recompui_set_padding_bottom(close_btn, 5.0f, UNIT_DP);
+        recompui_set_padding_left(close_btn, 12.0f, UNIT_DP);
+        recompui_set_padding_right(close_btn, 12.0f, UNIT_DP);
         recompui_set_tab_index(close_btn, TAB_INDEX_NONE);
         recompui_register_callback(close_btn, on_close_clicked, 0);
 
@@ -563,11 +567,15 @@ static void debug_init_ui(void)
                 /* ── Section header ─────────────────────────────────── */
                 RecompuiResource sec = recompui_create_element(
                     s_modal_ctx, scroll);
+                recompui_set_display(sec, DISPLAY_FLEX);
+                recompui_set_flex_direction(sec, FLEX_DIRECTION_ROW);
+                recompui_set_align_items(sec, ALIGN_ITEMS_CENTER);
                 recompui_set_background_color(sec, &C_SEC_BG);
                 recompui_set_padding_left(sec, 16.0f, UNIT_DP);
                 recompui_set_padding_right(sec, 16.0f, UNIT_DP);
-                recompui_set_padding_top(sec, 10.0f, UNIT_DP);
-                recompui_set_padding_bottom(sec, 10.0f, UNIT_DP);
+                recompui_set_padding_top(sec, 8.0f, UNIT_DP);
+                recompui_set_padding_bottom(sec, 8.0f, UNIT_DP);
+                recompui_set_min_height(sec, 40.0f, UNIT_DP);
                 recompui_set_border_radius(sec, 4.0f, UNIT_DP);
                 recompui_set_margin_top(sec, 14.0f, UNIT_DP);
 
@@ -575,7 +583,7 @@ static void debug_init_ui(void)
                     s_modal_ctx, sec, s_entries[i].display, LABELSTYLE_SMALL);
                 recompui_set_color(sec_lbl, &C_GREEN);
                 recompui_set_font_weight(sec_lbl, 700);
-                recompui_set_font_size(sec_lbl, 18.0f, UNIT_DP);
+                recompui_set_font_size(sec_lbl, 20.0f, UNIT_DP);
 
                 row_parity = 0; /* reset stripe for each new section */
             }
@@ -617,7 +625,11 @@ static void debug_init_ui(void)
                 RecompuiResource force_btn = recompui_create_button(
                     s_modal_ctx, row, "Force", BUTTONSTYLE_PRIMARY);
                 recompui_set_cursor(force_btn, CURSOR_POINTER);
-                recompui_set_font_size(force_btn, 16.0f, UNIT_DP);
+                recompui_set_font_size(force_btn, 14.0f, UNIT_DP);
+                recompui_set_padding_top(force_btn, 5.0f, UNIT_DP);
+                recompui_set_padding_bottom(force_btn, 5.0f, UNIT_DP);
+                recompui_set_padding_left(force_btn, 14.0f, UNIT_DP);
+                recompui_set_padding_right(force_btn, 14.0f, UNIT_DP);
                 recompui_set_tab_index(force_btn, TAB_INDEX_NONE);
                 recompui_register_callback(
                     force_btn, on_force_clicked, (void *)(unsigned long)i);
