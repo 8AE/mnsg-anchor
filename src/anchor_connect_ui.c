@@ -562,7 +562,6 @@ void anchor_connect_ui_frame_hook(void)
         // int ok = 1;
         if (ok)
         {
-            anchor_ui_show_notification("Connected to Anchor!", 1);
             /* Close the modal next frame exactly like Skip/X does. */
             s_pending_close = 1;
         }
@@ -570,7 +569,6 @@ void anchor_connect_ui_frame_hook(void)
         {
             s_pending_status = "Connection failed \xe2\x80\x93 check address / port and try again.";
             s_pending_status_ok = 0;
-            anchor_ui_show_notification("Anchor: connection failed.", 0);
         }
 
         if (host_str)

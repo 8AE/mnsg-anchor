@@ -332,18 +332,6 @@ extern "C"
     */
    char *anchor_get_player_info_json(void);
 
-   /* =========================================================================
-      UI helpers
-      ========================================================================= */
-
-   /**
-    * @brief Display a brief connection notification banner on screen.
-    *
-    * @param msg        UTF-8 message to show.  Pass NULL for a default string.
-    * @param is_success Non-zero => green accent (success); zero => red (failed).
-    */
-   void anchor_ui_show_notification(const char *msg, int is_success);
-
 #ifdef __cplusplus
 }
 #endif

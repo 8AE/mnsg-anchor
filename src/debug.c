@@ -22,9 +22,13 @@
  */
 
 #include "modding.h"
+#include "recompconfig.h"
 #include "recomputils.h"
 #include "recompui.h"
 #include "anchor.h"
+
+/* Set to 1 to show the DBG button in the bottom-right corner. */
+static int DEBUG_BUTTON_ENABLED = 0;
 
 /* Provided by item_sync.c */
 void item_sync_force_flag(const char *name);
@@ -335,6 +339,11 @@ static int s_initialized = 0;    /* guard for one-time lazy initialisation */
 static int s_toggle_visible = 0; /* 1 after the toggle button is shown    */
 static int s_modal_visible = 0;  /* tracks actual shown/hidden state      */
 
+/* Handle to the NET button so we can show/hide it based on config. */
+static RecompuiResource s_net_btn = RECOMPUI_NULL_RESOURCE;
+/* Handle to the DBG button so we can apply DEBUG_BUTTON_ENABLED at init. */
+static RecompuiResource s_dbg_btn = RECOMPUI_NULL_RESOURCE;
+
 /* Pending actions set by callbacks; consumed by the frame hook.
  * Callbacks must NEVER call show/hide/set_captures directly –
  * those are only safe outside of a callback (i.e. from the frame hook).  */
@@ -429,8 +438,9 @@ static void debug_init_ui(void)
 
         /* Button placed directly as an absolute child of root.
          * A full-screen wrapper would intercept clicks for other contexts. */
-        RecompuiResource btn = recompui_create_button(
+        s_dbg_btn = recompui_create_button(
             s_toggle_ctx, root, "DBG", BUTTONSTYLE_SECONDARY);
+        RecompuiResource btn = s_dbg_btn;
         recompui_set_position(btn, POSITION_ABSOLUTE);
         recompui_set_bottom(btn, 12.0f, UNIT_DP); /* bottom-right */
         recompui_set_right(btn, 12.0f, UNIT_DP);
@@ -440,10 +450,12 @@ static void debug_init_ui(void)
         recompui_set_cursor(btn, CURSOR_POINTER);
         recompui_set_tab_index(btn, TAB_INDEX_NONE);
         recompui_register_callback(btn, on_toggle_clicked, 0);
+        recompui_set_display(btn, DEBUG_BUTTON_ENABLED ? DISPLAY_BLOCK : DISPLAY_NONE);
 
         /* NET button shares this context so both buttons are at the same Z-level. */
-        RecompuiResource net_btn = recompui_create_button(
+        s_net_btn = recompui_create_button(
             s_toggle_ctx, root, "NET", BUTTONSTYLE_SECONDARY);
+        RecompuiResource net_btn = s_net_btn;
         recompui_set_position(net_btn, POSITION_ABSOLUTE);
         recompui_set_bottom(net_btn, 12.0f, UNIT_DP); /* bottom-left */
         recompui_set_left(net_btn, 12.0f, UNIT_DP);
@@ -688,6 +700,15 @@ void debug_ui_frame_hook(void)
     {
         recompui_show_context(s_toggle_ctx);
         s_toggle_visible = 1;
+    }
+
+    /* Show or hide the NET button based on config. */
+    if (s_net_btn != RECOMPUI_NULL_RESOURCE)
+    {
+        int show_net = (recomp_get_config_u32("anchor_show_net_button") == 0);
+        recompui_open_context(s_toggle_ctx);
+        recompui_set_display(s_net_btn, show_net ? DISPLAY_BLOCK : DISPLAY_NONE);
+        recompui_close_context(s_toggle_ctx);
     }
 
     /* Process pending open/close actions from callbacks. */

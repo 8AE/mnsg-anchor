@@ -19,8 +19,6 @@
  *
  * Entry points
  * ------------
- *   anchor_ui_show_notification(msg, is_success)  – call from anchor.c after
- *       a connect/disconnect attempt.
  *   anchor_ui_update()        – RECOMP_HOOK_RETURN on func_80002040_2C40
  *       drives the timer and the player-list refresh.
  */
@@ -305,37 +303,6 @@ static void plist_ensure_init(void)
     }
 
     recompui_close_context(s_plist_ctx);
-}
-
-/* =========================================================================
-   Public API
-   ========================================================================= */
-
-/**
- * @brief Show a connection notification banner.
- *
- * @param msg        UTF-8 message string to display.  Pass NULL for a default.
- * @param is_success Non-zero => green (connected); zero => red (failed).
- */
-void anchor_ui_show_notification(const char *msg, int is_success)
-{
-    notif_ensure_init();
-
-    recompui_open_context(s_notif_ctx);
-
-    /* Set accent colour: green for success, red for failure. */
-    recompui_set_background_color(s_notif_accent, is_success ? &COLOR_GREEN : &COLOR_RED);
-
-    /* Set message text. */
-    if (msg && msg[0])
-        recompui_set_text(s_notif_msg, msg);
-    else
-        recompui_set_text(s_notif_msg, is_success ? "Connected to Anchor." : "Anchor connection failed.");
-
-    recompui_close_context(s_notif_ctx);
-
-    recompui_show_context(s_notif_ctx);
-    s_notif_timer = NOTIFICATION_FRAMES;
 }
 
 /* =========================================================================

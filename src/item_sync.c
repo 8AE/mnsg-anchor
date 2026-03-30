@@ -29,6 +29,7 @@
  */
 
 #include "modding.h"
+#include "recompconfig.h"
 #include "recomputils.h"
 #include "recompui.h"
 #include "anchor.h"
@@ -981,6 +982,8 @@ static void item_notif_push(const char *header, const char *item_display)
 {
     int i, slot;
     if (!item_display || !item_display[0])
+        return;
+    if (recomp_get_config_u32("anchor_show_notifications") != 0)
         return;
 
     item_notif_ensure_init();

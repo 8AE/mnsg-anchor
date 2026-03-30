@@ -111,6 +111,22 @@ type = "String"
 default = "default"
 
 [[manifest.config_options]]
+id = "anchor_show_net_button"
+name = "Show NET Button"
+description = "Show the NET button in the bottom-left corner for accessing the multiplayer connection screen."
+type = "Enum"
+options = ["Enabled", "Disabled"]
+default = "Enabled"
+
+[[manifest.config_options]]
+id = "anchor_show_notifications"
+name = "Show Item Notifications"
+description = "Show a toast notification when items or flags are received or found."
+type = "Enum"
+options = ["Enabled", "Disabled"]
+default = "Enabled"
+
+[[manifest.config_options]]
 id = "anchor_show_room_hex"
 name = "Show Room ID (Hex)"
 description = "Display the raw hexadecimal room ID next to the area name in the player list (e.g. \"Oedo Castle 1F (0x00A5)\")."
