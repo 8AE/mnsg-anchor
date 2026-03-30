@@ -514,19 +514,19 @@ static SyncFlagBit s_flag_bits[] = {
 
     /* ── Gorgeous Stage / Sogen Girl performance cutscenes ─────────── */
     /* Set when the Gorgeous Stage show plays; gates Sogen area events. */
-    {0x076, 0, "cs_gorge_1"},  /* Gorgeous Stage Cutscene Flag #1         */
-    {0x075, 0, "cs_gorge_2"},  /* Gorgeous Stage Cutscene Flag #2         */
-    {0x077, 0, "cs_sogen_l"},  /* Sogen Girl Imitated Lily                */
-    {0x078, 0, "cs_sogen_d"},  /* Sogen Girl Imitated Dancin              */
+    {0x076, 0, "cs_gorge_1"}, /* Gorgeous Stage Cutscene Flag #1         */
+    {0x075, 0, "cs_gorge_2"}, /* Gorgeous Stage Cutscene Flag #2         */
+    {0x077, 0, "cs_sogen_l"}, /* Sogen Girl Imitated Lily                */
+    {0x078, 0, "cs_sogen_d"}, /* Sogen Girl Imitated Dancin              */
 
     /* ── Witch cutscene chain ────────────────────────────────────────── */
     /* Witch services (weapon upgrades, etc.) unlock after these play.  */
-    {0x07C, 0, "cs_witch_1"},  /* Witch Cutscene Flag #1                  */
-    {0x09C, 0, "cs_witch_2"},  /* Witch Cutscene Flag #2                  */
-    {0x09D, 0, "cs_witch_3"},  /* Witch Cutscene Flag #3                  */
-    {0x09E, 0, "cs_witch_4"},  /* Witch Cutscene Flag #4                  */
-    {0x09F, 0, "cs_witch_5"},  /* Witch Cutscene Flag #5                  */
-    {0x0A0, 0, "cs_witch_6"},  /* Witch Cutscene Flag #6                  */
+    {0x07C, 0, "cs_witch_1"}, /* Witch Cutscene Flag #1                  */
+    {0x09C, 0, "cs_witch_2"}, /* Witch Cutscene Flag #2                  */
+    {0x09D, 0, "cs_witch_3"}, /* Witch Cutscene Flag #3                  */
+    {0x09E, 0, "cs_witch_4"}, /* Witch Cutscene Flag #4                  */
+    {0x09F, 0, "cs_witch_5"}, /* Witch Cutscene Flag #5                  */
+    {0x0A0, 0, "cs_witch_6"}, /* Witch Cutscene Flag #6                  */
 
     /* ── Special meeting cutscenes ──────────────────────────────────── */
     /* 0x098  Tourist Center related cutscene                            */
