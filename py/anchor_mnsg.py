@@ -171,6 +171,8 @@ def _build_room_names() -> None:
         t[rid] = "Tunnel"
     for rid in [0x132]:
         t[rid] = "Shinano - Iga"
+    for rid in [0x226]:
+        t[rid] = "World Map"
 
 
 _build_room_names()

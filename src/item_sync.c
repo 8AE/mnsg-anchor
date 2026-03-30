@@ -483,6 +483,56 @@ static SyncFlagBit s_flag_bits[] = {
     {0x057, 0, "fl_zazen_aft"}, /* Met Old Woman in Zazen After Dharmanyo  */
     {0x058, 0, "fl_zazen_ba"},  /* Met Old Woman in Zazen Before And After  */
     {0x059, 0, "fl_zazen_rwd"}, /* Obtained Reward from Old Woman in Zazen  */
+
+    /* ── First-meeting / intro NPC cutscenes ────────────────────────── */
+    /* These gate dialogue trees and are important to sync so teammates
+       don't get stuck waiting for intros they've already seen.          */
+    /* 0x002  Old Man in South Oedo – gates Oedo Castle bridge           */
+    {0x002, 0, "cs_oldman_oe"},
+    /* 0x007  Spoke to Omitsu about UFO – gates Omitsu quest            */
+    {0x007, 0, "cs_omitsu"},
+    /* 0x008  Omitsu Fan – quest completion flag                         */
+    {0x008, 0, "cs_omitsu_f"},
+    /* 0x00A  Heard about Zazen Dwarf – gates Zazen quest chain          */
+    {0x00A, 0, "cs_zazen_dw"},
+    /* 0x00B  Spoke to Kompira Priest – gates priest training offer      */
+    {0x00B, 0, "cs_kompira"},
+
+    /* ── Post-boss cutscenes (gate doors / world-state dialogue) ───────
+       These flags are set after boss-defeat cutscenes and commonly
+       prevent doors from opening if a teammate hasn't seen them.        */
+    /* 0x073  After Dharmanyo #1 (story beat before bridge unlocks)      */
+    {0x073, 0, "cs_dhrm_1"},
+    /* 0x070  After Dharmanyo #2                                         */
+    {0x070, 0, "cs_dhrm_2"},
+    /* 0x071  After Dharmanyo #3                                         */
+    {0x071, 0, "cs_dhrm_3"},
+    /* 0x072  After Dharmanyo #4                                         */
+    {0x072, 0, "cs_dhrm_4"},
+    /* 0x074  After Tsurami (gate for Festival Temple exit)              */
+    {0x074, 0, "cs_tsurami"},
+
+    /* ── Gorgeous Stage / Sogen Girl performance cutscenes ─────────── */
+    /* Set when the Gorgeous Stage show plays; gates Sogen area events. */
+    {0x076, 0, "cs_gorge_1"},  /* Gorgeous Stage Cutscene Flag #1         */
+    {0x075, 0, "cs_gorge_2"},  /* Gorgeous Stage Cutscene Flag #2         */
+    {0x077, 0, "cs_sogen_l"},  /* Sogen Girl Imitated Lily                */
+    {0x078, 0, "cs_sogen_d"},  /* Sogen Girl Imitated Dancin              */
+
+    /* ── Witch cutscene chain ────────────────────────────────────────── */
+    /* Witch services (weapon upgrades, etc.) unlock after these play.  */
+    {0x07C, 0, "cs_witch_1"},  /* Witch Cutscene Flag #1                  */
+    {0x09C, 0, "cs_witch_2"},  /* Witch Cutscene Flag #2                  */
+    {0x09D, 0, "cs_witch_3"},  /* Witch Cutscene Flag #3                  */
+    {0x09E, 0, "cs_witch_4"},  /* Witch Cutscene Flag #4                  */
+    {0x09F, 0, "cs_witch_5"},  /* Witch Cutscene Flag #5                  */
+    {0x0A0, 0, "cs_witch_6"},  /* Witch Cutscene Flag #6                  */
+
+    /* ── Special meeting cutscenes ──────────────────────────────────── */
+    /* 0x098  Tourist Center related cutscene                            */
+    {0x098, 0, "cs_tourist_c"},
+    /* 0x099  Baron / Ghost of Wise Man meeting cutscene                 */
+    {0x099, 0, "cs_baron_wm"},
 };
 
 #define NUM_FLAGS ((int)(sizeof(s_flag_bits) / sizeof(s_flag_bits[0])))
@@ -830,6 +880,9 @@ static const char *get_flag_display_name(const char *n)
     /* Fish quest flags – suppress toasts (internal quest state) */
     if (streq(n, "fl_fish_r_on") || streq(n, "fl_fish_y_on") || streq(n, "fl_fish_b_on") ||
         streq(n, "fl_fish_r_mx") || streq(n, "fl_fish_y_mx") || streq(n, "fl_fish_b_mx"))
+        return 0;
+    /* Cutscene flags – suppress toasts (internal progression state, not items) */
+    if (n[0] == 'c' && n[1] == 's' && n[2] == '_')
         return 0;
     /* Per-room dungeon key pickups – match by prefix ky_s_ / ky_g_ / ky_d_ */
     if (n[0] == 'k' && n[1] == 'y' && n[2] == '_')

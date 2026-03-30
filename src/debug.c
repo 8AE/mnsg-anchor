@@ -251,6 +251,40 @@ static const DebugEntry s_entries[] = {
     {"fl_zazen_ba", "Met Woman (Both Times)"},
     {"fl_zazen_rwd", "Zazen Woman Reward"},
 
+    /* ── NPC Meeting Cutscenes ───────────────────────────────────────── */
+    {0, "NPC Meetings"},
+    {"cs_oldman_oe", "Old Man in South Oedo"},
+    {"cs_omitsu", "Spoke to Omitsu (UFO)"},
+    {"cs_omitsu_f", "Omitsu Fan"},
+    {"cs_zazen_dw", "Heard about Zazen Dwarf"},
+    {"cs_kompira", "Spoke to Kompira Priest"},
+    {"cs_tourist_c", "Tourist Center Cutscene"},
+    {"cs_baron_wm", "Baron / Wise Man Meeting"},
+
+    /* ── Post-Boss Cutscenes ─────────────────────────────────────────── */
+    {0, "Post-Boss Cutscenes"},
+    {"cs_dhrm_1", "After Dharmanyo #1"},
+    {"cs_dhrm_2", "After Dharmanyo #2"},
+    {"cs_dhrm_3", "After Dharmanyo #3"},
+    {"cs_dhrm_4", "After Dharmanyo #4"},
+    {"cs_tsurami", "After Tsurami"},
+
+    /* ── Gorgeous Stage / Sogen ──────────────────────────────────────── */
+    {0, "Gorgeous Stage"},
+    {"cs_gorge_1", "Gorgeous Stage #1"},
+    {"cs_gorge_2", "Gorgeous Stage #2"},
+    {"cs_sogen_l", "Sogen Girl: Lily"},
+    {"cs_sogen_d", "Sogen Girl: Dancin"},
+
+    /* ── Witch Cutscene Chain ────────────────────────────────────────── */
+    {0, "Witch Cutscenes"},
+    {"cs_witch_1", "Witch Cutscene #1"},
+    {"cs_witch_2", "Witch Cutscene #2"},
+    {"cs_witch_3", "Witch Cutscene #3"},
+    {"cs_witch_4", "Witch Cutscene #4"},
+    {"cs_witch_5", "Witch Cutscene #5"},
+    {"cs_witch_6", "Witch Cutscene #6"},
+
     /* ── Weapon Upgrades ─────────────────────────────────────────────── */ {0, "Weapon Upgrades"},
     {"wpn_goemon", "Goemon: Silver Weapon (Tier 2)", 1},
     {"wpn_goemon", "Goemon: Gold Weapon (Tier 3)", 2},
