@@ -1,7 +1,7 @@
 """
 anchor_mnsg - Anchor client for Mystical Ninja Starring Goemon: Recompiled.
 
-Anchor is a TCP-based co-op/multiplayer service used by N64 recompiled ports.
+Anchor is a TCP-based multiplayer service used by N64 recompiled ports.
 https://github.com/garrettjoecox/anchor
 
 Protocol details:

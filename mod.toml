@@ -15,7 +15,7 @@ display_name = "Anchor Multiplayer"
 
 # The description that will show up when this mod is displayed in the mod menu. This should be human readable.
 description = """
-Adds Anchor co-op support to Mystical Ninja Starring Goemon: Recompiled. \
+Adds Anchor multiplayer support to Mystical Ninja Starring Goemon: Recompiled. \
 A setup screen appears at startup so you can enter your server address, room, \
 name and team before playing. Use the NET button (bottom-left corner) at any \
 time to disconnect or change connection settings. \
@@ -66,7 +66,7 @@ func_reference_syms_file = "Goemon64RecompSyms/mnsg.us.syms.toml"
 data_reference_syms_files = ["Goemon64RecompSyms/mnsg.us.datasyms.toml"]
 
 # Additional files to include in the mod.
-# anchor_mnsg.py is the Python TCP client for the Anchor co-op server.
+# anchor_mnsg.py is the Python TCP client for the Anchor multiplayer server.
 # It is embedded in the .nrm and importable thanks to REPY_PREINIT_ADD_NRM_TO_ALL_INTERPRETERS.
 additional_files = ["py/anchor_mnsg.py"]
 

@@ -1,6 +1,6 @@
 /**
  * @file anchor_connect_ui.c
- * @brief Anchor Co-op connection setup screen.
+ * @brief Anchor Multiplayer connection setup screen.
  *
  * Provides two persistent UI contexts:
  *

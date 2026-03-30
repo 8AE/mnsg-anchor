@@ -1,6 +1,6 @@
 /**
  * @file item_sync.c
- * @brief Randomizer item / flag synchronisation for Anchor co-op.
+ * @brief Randomizer item / flag synchronisation for Anchor multiplayer.
  *
  * Every game frame (RECOMP_HOOK_RETURN on func_80002040_2C40) this module:
  *   1. Drains the Anchor packet queue, applying any incoming SET_FLAG and

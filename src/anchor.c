@@ -1,6 +1,6 @@
 /**
  * @file anchor.c
- * @brief Anchor co-op client – C-side implementation for MNSG: Recompiled.
+ * @brief Anchor multiplayer client – C-side implementation for MNSG: Recompiled.
  *
  * This file provides the C API defined in include/anchor.h.  Every function
  * uses the REPY_FN macro collection to call the corresponding function in the
