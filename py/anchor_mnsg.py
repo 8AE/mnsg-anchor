@@ -152,6 +152,54 @@ def _build_room_names() -> None:
     # Kai Highway / Mt. Fuji
     for rid in [0x12C, 0x12D, 0x12E, 0x12F, 0x1B1, 0x1D2]:
         t[rid] = "Kai / Mt. Fuji"
+    # Musashi
+    t[0x130] = "Musashi Beach"
+    t[0x131] = "Musashi Tunnel"
+    t[0x14F] = "Tunnel to Northeast"
+    t[0x150] = "Tunnel to Northeast"
+    # Iga
+    t[0x132] = "Iga"
+    # Yamato
+    for rid in [0x133, 0x134, 0x135, 0x136, 0x137]:
+        t[rid] = "Yamato"
+    t[0x138] = "Kii Awaji Island"
+    t[0x139] = "Husband and Wife Rocks"
+    t[0x1B3] = "Kii Coffee Shop"
+    t[0x1B9] = "Awaji Tourist Center"
+    # Tosa
+    t[0x13A] = "Tosa Fields"
+    t[0x13B] = "Tosa Bridge"
+    # Sanuki / Kompira Mountain
+    for rid in [0x13C, 0x13D, 0x13E, 0x13F, 0x140]:
+        t[rid] = "Kompira Mountain"
+    t[0x1B4] = "Kompira Coffee Shop"
+    # Iyo
+    t[0x141] = "Iyo Hills"
+    t[0x142] = "Dogo Hotsprings"
+    t[0x1B5] = "Iyo Coffee Shop"
+    # Bizen
+    t[0x143] = "Kurashiki"
+    t[0x144] = "Nagato"
+    t[0x145] = "Hagi"
+    t[0x146] = "Akiyoshidai"
+    t[0x147] = "Shuhodo"
+    t[0x148] = "Izumo"
+    t[0x149] = "Lake with a Large Tree"
+    t[0x14A] = "Inaba"
+    t[0x153] = "Gateway Viewpoint"
+    t[0x1B6] = "Izumo Coffee Shop"
+    t[0x1E2] = "Jump Challenge Training"
+    # Mutsu
+    t[0x14B] = "Mt. Fear"
+    t[0x14C] = "Ugo Stone Circle"
+    t[0x14D] = "Shoreline"
+    t[0x14E] = "Underwater Japan Sea"
+    t[0x151] = "Mutsu Crossroads"
+    t[0x152] = "Uzen Tunnel"
+    t[0x154] = "Waterfall of Kegon"
+    # Festival Village (Mutsu area)
+    for rid in [0x179, 0x17A, 0x17B, 0x17C, 0x17D]:
+        t[rid] = "Festival Village"
     # Oedo Town overworld
     for rid in [0x15E, 0x15F, 0x160, 0x161, 0x162, 0x163, 0x1D1, 0x1E0]:
         t[rid] = "Oedo Town"
@@ -165,14 +213,8 @@ def _build_room_names() -> None:
     # Folkypoke Village
     for rid in [0x175, 0x176, 0x177, 0x178, 0x1B8]:
         t[rid] = "Folkypoke Village"
-    for rid in [0x130]:
-        t[rid] = "Musashi"
-    for rid in [0x131]:
-        t[rid] = "Tunnel"
-    for rid in [0x132]:
-        t[rid] = "Shinano - Iga"
-    for rid in [0x226]:
-        t[rid] = "World Map"
+    # World Map
+    t[0x226] = "World Map"
 
 
 _build_room_names()
