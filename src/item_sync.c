@@ -154,6 +154,36 @@ static int get_flag_value(const char *json, signed int *out)
 }
 
 /**
+ * Extract the integer value of `"damage":N` from a DAMAGE_SYNC packet string.
+ * Returns 1 on success.
+ */
+static int get_ds_damage(const char *json, signed int *out)
+{
+    const char *pos = sfind(json, "\"damage\":");
+    if (!pos)
+        return 0;
+    pos += 9;
+    while (*pos == ' ')
+        ++pos;
+    return parse_int(&pos, out);
+}
+
+/**
+ * Extract the integer value of `"heal":N` from a HEAL_SYNC packet string.
+ * Returns 1 on success.
+ */
+static int get_ds_heal(const char *json, signed int *out)
+{
+    const char *pos = sfind(json, "\"heal\":");
+    if (!pos)
+        return 0;
+    pos += 7;
+    while (*pos == ' ')
+        ++pos;
+    return parse_int(&pos, out);
+}
+
+/**
  * Compare two null-terminated strings for equality.
  * Returns 1 if equal, 0 otherwise.
  */
@@ -555,6 +585,25 @@ static int s_push_cursor = -1;
  * Prevents response floods when multiple requests arrive close together.    */
 static int s_push_cooldown = 0;
 #define PUSH_COOLDOWN_FRAMES 180 /* ~3 seconds @ 60 fps */
+
+/* =========================================================================
+   Damage sync state
+   =========================================================================
+   Current HP byte: 0x8015C5E7  =  D_8015C608_15D208 + (-0x21)
+   Current character index:     0x8015C5DC  (0=Goemon 1=Ebisumaru 2=Sasuke 3=Yae)
+   ========================================================================= */
+
+/* Read / write the active character's current HP (u8, half-hearts).        */
+#define DS_HP_OFFSET (-0x21)
+#define DS_HP_READ() (*(volatile unsigned char *)((char *)D_8015C608_15D208 + DS_HP_OFFSET))
+#define DS_HP_WRITE(v) (*(unsigned char *)((char *)D_8015C608_15D208 + DS_HP_OFFSET) = (unsigned char)(v))
+
+/* Active character index.                                                   */
+#define DS_CHAR_IDX() (((*(volatile unsigned int *)0x8015C5DC)) & 0xFFu)
+
+static unsigned char s_ds_prev_hp = 0;  /* HP observed last frame              */
+static unsigned int s_ds_prev_char = 0; /* character index observed last frame  */
+static int s_ds_initialized = 0;        /* 0 until first baseline is captured   */
 
 /* Maximum SET_FLAG packets sent per frame during incremental monitoring.
  * Kept at 1 to match the full-push rate and avoid flooding the Anchor
@@ -1187,6 +1236,47 @@ static void process_incoming_packets(void)
                 s_push_cooldown = PUSH_COOLDOWN_FRAMES;
             }
         }
+        else if (is_packet_type(pkt, "DAMAGE_SYNC"))
+        {
+            signed int dmg = 0;
+            if (recomp_get_config_u32("anchor_damage_sync") == 0 &&
+                get_ds_damage(pkt, &dmg) && dmg > 0 && save_is_loaded())
+            {
+                unsigned char cur_hp = DS_HP_READ();
+                if (cur_hp > 0)
+                {
+                    unsigned char new_hp = ((signed int)cur_hp - dmg <= 0)
+                                               ? 0u
+                                               : (unsigned char)(cur_hp - dmg);
+                    DS_HP_WRITE(new_hp);
+                    /* Update prev so the monitor loop does not echo this back. */
+                    s_ds_prev_hp = new_hp;
+                    recomp_printf("[DamageSync] Applied %d damage (HP: %d -> %d)\n",
+                                  dmg, (int)cur_hp, (int)new_hp);
+                }
+            }
+        }
+        else if (is_packet_type(pkt, "HEAL_SYNC"))
+        {
+            signed int heal = 0;
+            if (recomp_get_config_u32("anchor_damage_sync") == 0 &&
+                get_ds_heal(pkt, &heal) && heal > 0 && save_is_loaded())
+            {
+                unsigned char cur_hp = DS_HP_READ();
+                signed int hp_max = SAVE_READ32(SAVE_HP_MAX_OFFSET);
+                unsigned char new_hp = ((signed int)cur_hp + heal >= hp_max)
+                                           ? (unsigned char)hp_max
+                                           : (unsigned char)(cur_hp + heal);
+                if (new_hp > cur_hp)
+                {
+                    DS_HP_WRITE(new_hp);
+                    /* Update prev so the monitor loop does not echo this back. */
+                    s_ds_prev_hp = new_hp;
+                    recomp_printf("[HealSync] Applied %d heal (HP: %d -> %d)\n",
+                                  heal, (int)cur_hp, (int)new_hp);
+                }
+            }
+        }
         /* All other packet types (ALL_CLIENT_STATE, UPDATE_CLIENT_STATE,
          * UPDATE_TEAM_STATE, etc.) are consumed here.  Python's internal
          * _player_states dict is maintained by the recv thread, so the
@@ -1348,6 +1438,7 @@ void item_sync_update(void)
         reset_caches();
         s_push_cooldown = 0;
         s_prev_player_count = 0;
+        s_ds_initialized = 0; /* reset damage-sync baseline on connect */
         /* Request any state teammates may have queued for our team.      */
         anchor_request_team_state("");
         /* If a save is already loaded (reconnect mid-game), push now.    */
@@ -1365,6 +1456,7 @@ void item_sync_update(void)
         s_push_cooldown = 0;
         s_save_was_valid = 0;
         s_prev_player_count = 0;
+        s_ds_initialized = 0; /* reset damage-sync baseline on disconnect */
     }
     s_was_connected = is_connected;
 
@@ -1408,6 +1500,108 @@ void item_sync_update(void)
 
     /* ── Process incoming packets ─────────────────────────────────────── */
     process_incoming_packets();
+
+    /* ── Damage sync ─────────────────────────────────────────────────── */
+    /* Monitor the active character's HP each frame.  When it drops without
+     * a character switch, broadcast the delta as a DAMAGE_SYNC packet to
+     * all teammates on the same team.  Incoming DAMAGE_SYNC packets are
+     * handled in process_incoming_packets() above; s_ds_prev_hp is updated
+     * there so the monitor loop never echoes received damage back out.     */
+    if (!valid)
+    {
+        s_ds_initialized = 0;
+    }
+    else
+    {
+        unsigned char ds_cur_hp = DS_HP_READ();
+        unsigned int ds_cur_char = DS_CHAR_IDX();
+
+        if (!s_ds_initialized)
+        {
+            /* First frame with a loaded save – capture baseline. */
+            s_ds_prev_hp = ds_cur_hp;
+            s_ds_prev_char = ds_cur_char;
+            s_ds_initialized = 1;
+        }
+        else if (ds_cur_char != s_ds_prev_char)
+        {
+            /* Character switch: new character may have different HP.
+             * Update the baseline without broadcasting anything.           */
+            s_ds_prev_hp = ds_cur_hp;
+            s_ds_prev_char = ds_cur_char;
+        }
+        else if (ds_cur_hp < s_ds_prev_hp && is_connected)
+        {
+            /* HP decreased this frame – the active character took damage.  */
+            unsigned char damage = (unsigned char)(s_ds_prev_hp - ds_cur_hp);
+
+            if (recomp_get_config_u32("anchor_damage_sync") == 0)
+            {
+                /* Build JSON payload {"damage":N} without printf.          */
+                char ds_payload[20];
+                char *wp = ds_payload;
+                *wp++ = '{';
+                *wp++ = '"';
+                *wp++ = 'd';
+                *wp++ = 'a';
+                *wp++ = 'm';
+                *wp++ = 'a';
+                *wp++ = 'g';
+                *wp++ = 'e';
+                *wp++ = '"';
+                *wp++ = ':';
+                if (damage >= 100)
+                    *wp++ = (char)('0' + damage / 100);
+                if (damage >= 10)
+                    *wp++ = (char)('0' + (damage / 10) % 10);
+                *wp++ = (char)('0' + damage % 10);
+                *wp++ = '}';
+                *wp = '\0';
+
+                anchor_send_custom_packet("DAMAGE_SYNC", ds_payload, "", 0, 0);
+                recomp_printf("[DamageSync] Sent damage=%d to team (HP: %d -> %d)\n",
+                              (int)damage, (int)s_ds_prev_hp, (int)ds_cur_hp);
+            }
+            s_ds_prev_hp = ds_cur_hp;
+        }
+        else if (ds_cur_hp > s_ds_prev_hp && is_connected)
+        {
+            /* HP increased this frame – the active character was healed.   */
+            unsigned char healed = (unsigned char)(ds_cur_hp - s_ds_prev_hp);
+
+            if (recomp_get_config_u32("anchor_damage_sync") == 0)
+            {
+                /* Build JSON payload {"heal":N} without printf.            */
+                char hs_payload[18];
+                char *wp = hs_payload;
+                *wp++ = '{';
+                *wp++ = '"';
+                *wp++ = 'h';
+                *wp++ = 'e';
+                *wp++ = 'a';
+                *wp++ = 'l';
+                *wp++ = '"';
+                *wp++ = ':';
+                if (healed >= 100)
+                    *wp++ = (char)('0' + healed / 100);
+                if (healed >= 10)
+                    *wp++ = (char)('0' + (healed / 10) % 10);
+                *wp++ = (char)('0' + healed % 10);
+                *wp++ = '}';
+                *wp = '\0';
+
+                anchor_send_custom_packet("HEAL_SYNC", hs_payload, "", 0, 0);
+                recomp_printf("[HealSync] Sent heal=%d to team (HP: %d -> %d)\n",
+                              (int)healed, (int)s_ds_prev_hp, (int)ds_cur_hp);
+            }
+            s_ds_prev_hp = ds_cur_hp;
+        }
+        else
+        {
+            s_ds_prev_hp = ds_cur_hp;
+            s_ds_prev_char = ds_cur_char;
+        }
+    }
 
     /* ── Full push (one step per frame) ──────────────────────────────── */
     if (s_push_cursor >= 0)

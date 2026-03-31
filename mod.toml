@@ -127,6 +127,14 @@ options = ["Enabled", "Disabled"]
 default = "Enabled"
 
 [[manifest.config_options]]
+id = "anchor_damage_sync"
+name = "Damage Sync"
+description = "Sync damage and healing between teammates on the same team. When enabled, damage dealt to one character is also applied to all other characters on your team, and healing is shared as well."
+type = "Enum"
+options = ["Enabled", "Disabled"]
+default = "Disabled"
+
+[[manifest.config_options]]
 id = "anchor_show_room_hex"
 name = "Show Room ID (Hex)"
 description = "Display the raw hexadecimal room ID next to the area name in the player list (e.g. \"Oedo Castle 1F (0x00A5)\")."
