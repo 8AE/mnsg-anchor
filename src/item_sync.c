@@ -564,6 +564,60 @@ static SyncFlagBit s_flag_bits[] = {
     {0x098, 0, "cs_tourist_c"},
     /* 0x099  Baron / Ghost of Wise Man meeting cutscene                 */
     {0x099, 0, "cs_baron_wm"},
+
+    /* ── Silver fortune doll room pickup flags ──────────────────────── */
+    /* Syncing these prevents a player from re-collecting a doll from a  */
+    /* room their teammate already cleared, which would inflate the doll  */
+    /* count and give unbalanced HP upgrades.                             */
+    /* (SILVER_DOLL_* in save_data_tool.h, flag IDs 0x00CA – 0x00F1)     */
+    {0x00CA, 0, "sd_oe_trt"},  /* SILVER_DOLL_OEDO_TURTLE             */
+    {0x00CB, 0, "sd_oe_sc"},   /* SILVER_DOLL_OEDO_SILVER_CAT         */
+    {0x00CC, 0, "sd_oe_blk"},  /* SILVER_DOLL_OEDO_BLOCKED            */
+    {0x00CD, 0, "sd_oe_elv"},  /* SILVER_DOLL_OEDO_ELEVATOR           */
+    {0x00CE, 0, "sd_gh_elv"},  /* SILVER_DOLL_GHOST_ELEVATOR          */
+    {0x00CF, 0, "sd_gh_crn"},  /* SILVER_DOLL_GHOST_CRANE             */
+    {0x00D0, 0, "sd_gh_can"},  /* SILVER_DOLL_GHOST_CANNON            */
+    {0x00D1, 0, "sd_gh_spk"},  /* SILVER_DOLL_GHOST_BIG_SPIKE         */
+    {0x00D2, 0, "sd_ft_sc"},   /* SILVER_DOLL_FESTIVAL_SILVER_CAT     */
+    {0x00D3, 0, "sd_ft_rng"},  /* SILVER_DOLL_FESTIVAL_RING           */
+    {0x00D4, 0, "sd_ft_ik"},   /* SILVER_DOLL_FESTIVAL_ICE_KUNAI      */
+    {0x00D5, 0, "sd_ft_fk"},   /* SILVER_DOLL_FESTIVAL_FISH_KIT       */
+    {0x00D6, 0, "sd_mc_gf"},   /* SILVER_DOLL_MUSICAL_GOLD_FAN        */
+    {0x00D7, 0, "sd_mc_ml"},   /* SILVER_DOLL_MUSICAL_MULTI_LOCK      */
+    {0x00D8, 0, "sd_mc_ba"},   /* SILVER_DOLL_MUSICAL_BIG_AQUA        */
+    {0x00D9, 0, "sd_mc_ds"},   /* SILVER_DOLL_MUSICAL_DESCENT         */
+    {0x00DA, 0, "sd_kai_hw"},  /* SILVER_DOLL_KAI_HIGHWAY             */
+    {0x00DB, 0, "sd_mtfuji"},  /* SILVER_DOLL_MT_FUJI                 */
+    {0x00DC, 0, "sd_musashi"}, /* SILVER_DOLL_MUSASHI                 */
+    {0x00DD, 0, "sd_ym_up"},   /* SILVER_DOLL_YAMATO_UPPER            */
+    {0x00DE, 0, "sd_ym_lo"},   /* SILVER_DOLL_YAMATO_LOWER            */
+    {0x00DF, 0, "sd_ym_uw"},   /* SILVER_DOLL_YAMATO_UNDERWATER       */
+    {0x00E0, 0, "sd_trt_rk"},  /* SILVER_DOLL_TURTLE_ROCK             */
+    {0x00E1, 0, "sd_kii_aw"},  /* SILVER_DOLL_KII_AWAJI               */
+    {0x00E2, 0, "sd_hwr"},     /* SILVER_DOLL_HUSBAND_WIFE_ROCKS      */
+    {0x00E3, 0, "sd_iga_vn"},  /* SILVER_DOLL_IGA_VINE                */
+    {0x00E4, 0, "sd_dogo"},    /* SILVER_DOLL_DOGO_HOT_SPRINGS        */
+    {0x00E5, 0, "sd_bizen"},   /* SILVER_DOLL_BIZEN                   */
+    {0x00E6, 0, "sd_ngt_me"},  /* SILVER_DOLL_NAGATO_MINI_EBI         */
+    {0x00E7, 0, "sd_ngt_gt"},  /* SILVER_DOLL_NAGATO_GATE             */
+    {0x00E8, 0, "sd_inaba"},   /* SILVER_DOLL_INABA                   */
+    {0x00E9, 0, "sd_jp_sea"},  /* SILVER_DOLL_JAPAN_SEA               */
+    {0x00EA, 0, "sd_ne_tun"},  /* SILVER_DOLL_NORTHEAST_TUNNEL        */
+    {0x00EB, 0, "sd_uz_tun"},  /* SILVER_DOLL_UZEN_TUNNEL             */
+    {0x00EC, 0, "sd_oe_brm"},  /* SILVER_DOLL_OEDO_BRIDGE_MUSASHI     */
+    {0x00ED, 0, "sd_oe_pth"},  /* SILVER_DOLL_OEDO_PATH_CASTLE        */
+    {0x00EE, 0, "sd_zz_wh"},   /* SILVER_DOLL_WATERING_HOLE           */
+    {0x00EF, 0, "sd_zz_wy"},   /* SILVER_DOLL_ZAZEN_WATERWAY          */
+    {0x00F0, 0, "sd_fp_est"},  /* SILVER_DOLL_FOLKYPOKE_EAST          */
+    {0x00F1, 0, "sd_ft_hid"},  /* SILVER_DOLL_FESTIVAL_HIDDEN         */
+
+    /* ── Gold fortune doll room pickup flags ────────────────────────── */
+    /* (GOLD_DOLL_* in save_data_tool.h, flag IDs 0x00F2 – 0x00F6)       */
+    {0x00F2, 0, "gd_gh_sg"},  /* GOLD_DOLL_GHOST_SHOGI_CANNON        */
+    {0x00F3, 0, "gd_ft_wg"},  /* GOLD_DOLL_FESTIVAL_WEST_GOLD        */
+    {0x00F4, 0, "gd_mc2_gc"}, /* GOLD_DOLL_MUSICAL_2_GOLD_CAT        */
+    {0x00F5, 0, "gd_bizen"},  /* GOLD_DOLL_BIZEN                     */
+    {0x00F6, 0, "gd_kegon"},  /* GOLD_DOLL_WATERFALL_KEGON           */
 };
 
 #define NUM_FLAGS ((int)(sizeof(s_flag_bits) / sizeof(s_flag_bits[0])))
@@ -934,6 +988,10 @@ static const char *get_flag_display_name(const char *n)
     /* Cutscene flags – suppress toasts (internal progression state, not items) */
     if (n[0] == 'c' && n[1] == 's' && n[2] == '_')
         return 0;
+    /* Fortune doll room pickup flags – suppress toasts (deduplication only) */
+    if ((n[0] == 's' && n[1] == 'd' && n[2] == '_') ||
+        (n[0] == 'g' && n[1] == 'd' && n[2] == '_'))
+        return 0;
     /* Per-room dungeon key pickups – match by prefix ky_s_ / ky_g_ / ky_d_ */
     if (n[0] == 'k' && n[1] == 'y' && n[2] == '_')
     {
@@ -1138,6 +1196,14 @@ static const char *apply_flag(const char *flag_name, signed int val)
         if (should_apply)
         {
             SAVE_WRITE32(s_fields[i].off, val);
+            /* When HP max increases, refill current HP to the new max.
+             * This matches vanilla behaviour where trading a fortune doll
+             * with Benkei both raises max HP and fully restores HP.        */
+            if (s_fields[i].off == -0x028)
+            {
+                SAVE_WRITE32(-0x024, val);         /* SAVE_CURRENT_HEALTH = new max */
+                s_ds_prev_hp = (unsigned char)val; /* keep damage-sync baseline in sync */
+            }
             s_fields[i].cached = val;
             recomp_printf("[ItemSync] Applied field '%s' = %d\n", flag_name, val);
             return get_flag_display_name(flag_name);
