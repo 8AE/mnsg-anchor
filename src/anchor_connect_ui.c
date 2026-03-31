@@ -552,7 +552,7 @@ void anchor_connect_ui_frame_hook(void)
             anchor_disconnect();
 
         int ok = anchor_connect(
-            (host_str && host_str[0]) ? host_str : "localhost",
+            (host_str && host_str[0]) ? host_str : "anchor.hm64.org",
             port,
             (room_str && room_str[0]) ? room_str : "mnsg-recomp",
             (name_str && name_str[0]) ? name_str : "Player",

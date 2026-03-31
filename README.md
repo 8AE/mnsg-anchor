@@ -4,11 +4,45 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 
 ### Features
 
-* **Item / flag sync** — every tracked item or flag gained by a player is broadcast to the team in real time.  Players who join late automatically receive the team's accumulated progress.  Tracked items include characters (Goemon, Ebisumaru, Sasuke, Yae), equipment (Chain Pipe, Meat Hammer, Firecracker, Flute, Wind-up Camera, Ice Kunai, Bazooka, Medal of Flames), and abilities (Sudden Impact, Mini Ebisumaru, Jetpack, Mermaid).
+* **Item / flag sync** — every tracked item or flag gained by a player is broadcast to the team in real time.  Players who join late automatically receive the team's accumulated progress.
+* **Damage & heal sync** — damage taken by one team member is applied to all other members; healing is shared the same way.  Either player can die from synced damage.  Can be toggled in the mod settings.
+* **Ryo (money) sync** — only *gains* are synced: when a player picks up ryo the same amount is added to every teammate's wallet.  Spending never propagates, and late joiners keep their own balance until the next pickup.
 * **Auto-connect on start** — optionally connects to a configured server as soon as the game loads.
 * **In-game HUD** — a notification banner confirms connection success or failure; a persistent player-list panel (top-left) shows every player currently in the room, their character, and their position.
 * **Teams** — players can be grouped into teams within a room so that flag queues and save-state syncs are scoped to the team.
 * **Reconnect support** — client IDs are preserved across sessions so the server can deliver queued packets on reconnect.
+
+### What is synced
+
+#### Items & equipment
+| Category          | Items                                                                                                 |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| Characters        | Goemon, Ebisumaru, Sasuke, Yae                                                                        |
+| Weapons           | Chain Pipe, Meat Hammer, Firecracker Bomb, Flute, Wind-up Camera, Ice Kunai, Bazooka, Medal of Flames |
+| Weapon tiers      | Iron → Silver → Gold upgrade level for each character                                                 |
+| Abilities / magic | Sudden Impact, Mini Ebisumaru, Jetpack (Super Jump), Mermaid Magic                                    |
+| Quest items       | Triton Shell, Super Pass, Achilles' Heel, Quality Cucumber, Key to Training, Map of Japan             |
+| Miracle items     | Miracle Star, Miracle Moon, Miracle Flower, Miracle Snow                                              |
+| Warp points       | All 13 inn / tea-house / fast-travel gates                                                            |
+
+#### Stats & collectibles
+| Stat                                    | Behaviour                                                                                   |
+| --------------------------------------- | ------------------------------------------------------------------------------------------- |
+| HP Max                                  | Highest value wins; receiving an upgrade also refills current HP to the new maximum         |
+| Current HP                              | Damage and healing are applied as deltas — teammates share the same HP changes in real time |
+| Fortune Dolls (total & traded)          | Highest value wins                                                                          |
+| Ryo (money)                             | Gains only — the pickup delta is added to each teammate's wallet; spending never syncs      |
+| Fish counts (red / yellow / blue)       | Highest value wins                                                                          |
+| Mr. Elly Fant & Mr. Arrow (per dungeon) | Highest value wins                                                                          |
+
+#### Dungeon keys
+All individual silver, gold, and diamond key room pickup flags are synced so that a player cannot collect a key from a room their teammate already cleared.  Lock consumption flags are **not** synced, keeping each player's key expenditure independent.
+
+#### Story flags & progression
+Boss defeats, character/ability acquisition flags, quest-chain milestones, NPC-unlock flags, post-boss cutscene flags, and Gorgeous Stage / witch cutscene flags are all synced so teammates never get locked behind progression gates their partner has already passed.
+
+#### Fortune doll room pickups
+Every individual silver doll (40 rooms) and gold doll (5 rooms) room pickup flag is synced, preventing any player from re-collecting a doll from a room a teammate already cleared — which would otherwise inflate the doll count and give unbalanced HP upgrades.
 
 ### Networking
 
@@ -20,14 +54,17 @@ The public default server is **anchor.hm64.org:43383**.
 
 All options are available in the mod settings menu inside the game:
 
-| Option                | Default       | Description                                        |
-| --------------------- | ------------- | -------------------------------------------------- |
-| Auto-Connect on Start | Enabled       | Connect to the Anchor server automatically on load |
-| Server Address        | `localhost`   | Hostname or IP of the Anchor server                |
-| Server Port           | `43383`       | TCP port of the Anchor server                      |
-| Room ID               | `mnsg-recomp` | Room to join (shared by all teammates)             |
-| Player Name           | `Player`      | Display name shown to other players                |
-| Team ID               | `default`     | Team within the room (shared save-state queue)     |
+| Option                  | Default           | Description                                                                    |
+| ----------------------- | ----------------- | ------------------------------------------------------------------------------ |
+| Server Address          | `anchor.hm64.org` | Hostname or IP of the Anchor server                                            |
+| Server Port             | `43383`           | TCP port of the Anchor server                                                  |
+| Room ID                 | `mnsg-recomp`     | Room to join (shared by all teammates)                                         |
+| Player Name             | `Player`          | Display name shown to other players                                            |
+| Team ID                 | `default`         | Team within the room (shared save-state queue)                                 |
+| Show NET Button         | Enabled           | Show the NET button in the bottom-left corner                                  |
+| Show Item Notifications | Enabled           | Show a toast when items or flags are received or found                         |
+| Damage Sync             | Enabled           | Sync damage taken and healing between teammates; either player can die from it |
+| Show Room ID (Hex)      | Disabled          | Display the raw hexadecimal room ID next to the area name in the player list   |
 
 ### Dependencies
 

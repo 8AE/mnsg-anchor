@@ -363,7 +363,7 @@ def connect(
         logger.info("anchor_mnsg: already connected.")
         return True
 
-    _room_id = room_id
+    _room_id = room_id if room_id.startswith("mnsg_") else "mnsg_" + room_id
     _team_id = team_id or "default"
     _player_name = player_name
     _client_id = client_id
