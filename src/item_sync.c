@@ -184,6 +184,21 @@ static int get_ds_heal(const char *json, signed int *out)
 }
 
 /**
+ * Extract the integer value of `"ryo":N` from a RYO_SYNC packet string.
+ * Returns 1 on success.
+ */
+static int get_ds_ryo(const char *json, signed int *out)
+{
+    const char *pos = sfind(json, "\"ryo\":");
+    if (!pos)
+        return 0;
+    pos += 6;
+    while (*pos == ' ')
+        ++pos;
+    return parse_int(&pos, out);
+}
+
+/**
  * Compare two null-terminated strings for equality.
  * Returns 1 if equal, 0 otherwise.
  */
@@ -659,6 +674,14 @@ static unsigned char s_ds_prev_hp = 0;  /* HP observed last frame              *
 static unsigned int s_ds_prev_char = 0; /* character index observed last frame  */
 static int s_ds_initialized = 0;        /* 0 until first baseline is captured   */
 
+/* Ryo delta sync state                                                      */
+#define DS_RYO_OFFSET (-0x20)
+#define DS_RYO_READ() SAVE_READ32(DS_RYO_OFFSET)
+#define DS_RYO_WRITE(v) SAVE_WRITE32(DS_RYO_OFFSET, (v))
+
+static signed int s_ryo_prev = 0; /* ryo observed last frame     */
+static int s_ryo_initialized = 0; /* 0 until baseline captured   */
+
 /* Maximum SET_FLAG packets sent per frame during incremental monitoring.
  * Kept at 1 to match the full-push rate and avoid flooding the Anchor
  * server's per-client overlapped-I/O queue on area transitions where
@@ -824,6 +847,7 @@ static const char *get_flag_display_name(const char *n)
     /* Stats / upgrades */
     if (streq(n, "stat_hpmax"))
         return "HP Max Up";
+    /* stat_ryo: ryo delta sync – no toast shown for money gains */
     if (streq(n, "stat_dolls"))
         return "Fortune Doll";
     /* Boss defeats */
@@ -1343,6 +1367,19 @@ static void process_incoming_packets(void)
                 }
             }
         }
+        else if (is_packet_type(pkt, "RYO_SYNC"))
+        {
+            signed int delta = 0;
+            if (get_ds_ryo(pkt, &delta) && delta > 0 && save_is_loaded())
+            {
+                signed int cur_ryo = DS_RYO_READ();
+                DS_RYO_WRITE(cur_ryo + delta);
+                /* Update baseline so the monitor does not echo this back.   */
+                s_ryo_prev = cur_ryo + delta;
+                recomp_printf("[RyoSync] Applied +%d ryo (%d -> %d)\n",
+                              (int)delta, (int)cur_ryo, (int)(cur_ryo + delta));
+            }
+        }
         /* All other packet types (ALL_CLIENT_STATE, UPDATE_CLIENT_STATE,
          * UPDATE_TEAM_STATE, etc.) are consumed here.  Python's internal
          * _player_states dict is maintained by the recv thread, so the
@@ -1504,7 +1541,8 @@ void item_sync_update(void)
         reset_caches();
         s_push_cooldown = 0;
         s_prev_player_count = 0;
-        s_ds_initialized = 0; /* reset damage-sync baseline on connect */
+        s_ds_initialized = 0;  /* reset damage-sync baseline on connect */
+        s_ryo_initialized = 0; /* reset ryo-sync baseline on connect    */
         /* Request any state teammates may have queued for our team.      */
         anchor_request_team_state("");
         /* If a save is already loaded (reconnect mid-game), push now.    */
@@ -1522,7 +1560,8 @@ void item_sync_update(void)
         s_push_cooldown = 0;
         s_save_was_valid = 0;
         s_prev_player_count = 0;
-        s_ds_initialized = 0; /* reset damage-sync baseline on disconnect */
+        s_ds_initialized = 0;  /* reset damage-sync baseline on disconnect */
+        s_ryo_initialized = 0; /* reset ryo-sync baseline on disconnect   */
     }
     s_was_connected = is_connected;
 
@@ -1666,6 +1705,67 @@ void item_sync_update(void)
         {
             s_ds_prev_hp = ds_cur_hp;
             s_ds_prev_char = ds_cur_char;
+        }
+    }
+
+    /* ── Ryo delta sync ───────────────────────────────────────────────── */
+    /* Broadcasts only the amount gained (delta) to teammates so each     */
+    /* player's balance increases by the same amount picked up.  Late    */
+    /* joiners keep their own balance until the next pickup occurs.       */
+    if (!valid)
+    {
+        s_ryo_initialized = 0;
+    }
+    else
+    {
+        signed int ryo_cur = DS_RYO_READ();
+        if (!s_ryo_initialized)
+        {
+            s_ryo_prev = ryo_cur;
+            s_ryo_initialized = 1;
+        }
+        else if (ryo_cur > s_ryo_prev && is_connected)
+        {
+            signed int delta = ryo_cur - s_ryo_prev;
+
+            /* Build JSON payload {"ryo":N} without printf.                 */
+            char ryo_payload[24];
+            char *wp = ryo_payload;
+            char tmp[10];
+            int n_digits = 0;
+            signed int v = delta;
+            *wp++ = '{';
+            *wp++ = '"';
+            *wp++ = 'r';
+            *wp++ = 'y';
+            *wp++ = 'o';
+            *wp++ = '"';
+            *wp++ = ':';
+            if (v == 0)
+            {
+                *wp++ = '0';
+            }
+            else
+            {
+                while (v > 0)
+                {
+                    tmp[n_digits++] = (char)('0' + v % 10);
+                    v /= 10;
+                }
+                while (n_digits-- > 0)
+                    *wp++ = tmp[n_digits];
+            }
+            *wp++ = '}';
+            *wp = '\0';
+
+            anchor_send_custom_packet("RYO_SYNC", ryo_payload, "", 0, 0);
+            recomp_printf("[RyoSync] Sent delta=%d ryo (%d -> %d)\n",
+                          (int)delta, (int)s_ryo_prev, (int)ryo_cur);
+            s_ryo_prev = ryo_cur;
+        }
+        else
+        {
+            s_ryo_prev = ryo_cur;
         }
     }
 
