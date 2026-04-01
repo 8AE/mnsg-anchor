@@ -332,6 +332,23 @@ extern "C"
     */
    char *anchor_get_player_info_json(void);
 
+   /**
+    * @brief Return positions of same-team, same-raw-room teammates as JSON.
+    *
+    * Returns a compact JSON array of position objects for every teammate that
+    * shares the local client's team ID AND current raw room ID and has sent at
+    * least one position update.  The local player is excluded.
+    *
+    * Each element: ``{"x":<int>,"y":<int>,"z":<int>}``
+    *
+    * Returns ``"[]"`` when not connected, no same-room teammates exist, or
+    * none of them have position data.
+    *
+    * The returned string is allocated in recompiled memory and must be freed
+    * by the caller with recomp_free().
+    */
+   char *anchor_get_teammate_positions_json(void);
+
 #ifdef __cplusplus
 }
 #endif

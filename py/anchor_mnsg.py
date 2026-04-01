@@ -861,6 +861,47 @@ def get_player_info_json() -> str:
     return json.dumps(entries, separators=(",", ":"))
 
 
+def get_teammate_positions_json() -> str:
+    """
+    Return a compact JSON array of same-team, same-room teammates with their
+    latest world-space positions, for use by the phantom actor system.
+
+    Each entry: {"x": int, "y": int, "z": int}
+
+    Only includes players that:
+      - Are on the same team as the local client (_team_id).
+      - Share the same raw room ID as the local client (_local_room_id).
+      - Have at least one position coordinate stored (posX/posY/posZ).
+      - Are not the local client.
+      - Are marked online.
+
+    Returns '[]' if not connected, no teammates are present, or
+    no same-room teammates have position data.
+    """
+    if not _connected:
+        return "[]"
+    with _player_states_lock:
+        if _local_room_id < 0:
+            return "[]"
+        result = []
+        for cid, v in _player_states.items():
+            if cid == _client_id:
+                continue
+            if not v.get("online", True):
+                continue
+            if v.get("teamId", "") != _team_id:
+                continue
+            if int(v.get("roomId", -1)) != _local_room_id:
+                continue
+            px = v.get("posX")
+            py = v.get("posY")
+            pz = v.get("posZ")
+            if px is None or py is None or pz is None:
+                continue
+            result.append({"x": int(px), "y": int(py), "z": int(pz)})
+    return json.dumps(result, separators=(",", ":"))
+
+
 def _decode_png_rgba(png: bytes) -> bytes:
     """
     Minimal PNG → RGBA32 decoder using stdlib only (``zlib`` + ``struct``).

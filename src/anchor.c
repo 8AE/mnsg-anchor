@@ -430,3 +430,14 @@ char *anchor_get_player_info_json(void)
     REPY_FN_CLEANUP;
     return result; /* caller must recomp_free() */
 }
+
+char *anchor_get_teammate_positions_json(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_get_teammate_positions_json_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.get_teammate_positions_json()\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result; /* caller must recomp_free() */
+}
