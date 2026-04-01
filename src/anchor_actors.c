@@ -65,11 +65,11 @@
 
 typedef struct CLS_W_s
 {
-    struct CLS_W_s *next;
-    unsigned char kind;
-    unsigned char pri;
-    unsigned short s_pri;
-} CLS_W_local;
+    unsigned int next_n64; /* 0x00 – N64 KSEG0 vaddr of next CLS_W, NOT a host ptr */
+    unsigned char kind;    /* 0x04 */
+    unsigned char pri;     /* 0x05 */
+    unsigned short s_pri;  /* 0x06 */
+} CLS_W_local;             /* size 0x08 in N64 RDRAM */
 
 typedef struct
 {
@@ -89,18 +89,25 @@ typedef struct
     int data;
 } WAVE_W_local;
 
-/* Full CLS_BG_W layout (offset-verified from common_structs.h). */
+/*
+ * Full CLS_BG_W N64 layout (offset-verified from common_structs.h).
+ *
+ * ALL pointer fields are stored as 4-byte N64 KSEG0 virtual addresses in
+ * RDRAM – they are NOT host pointers.  Using native pointer types on a 64-bit
+ * host would make every field after the first one land at the wrong offset,
+ * corrupt the game's struct on write, and cause a crash in the GFX thread.
+ */
 typedef struct CLS_BG_W_s
 {
-    CLS_W_local header;       /* 0x00 – next / kind / pri */
-    VEC3F_local position;     /* 0x08 – world x, y, z     */
+    CLS_W_local header;       /* 0x00 – next_n64 / kind / pri, size 0x08 */
+    VEC3F_local position;     /* 0x08 – world x, y, z                    */
     VEC3S_local rotation;     /* 0x14 */
     unsigned char pad_1a[2];  /* 0x1A */
     VEC3F_local scale;        /* 0x1C */
     float animation_progress; /* 0x28 */
-    unsigned int graphics_1;  /* 0x2C – display list ptr  */
-    void *graphics_2;         /* 0x30 */
-    WAVE_W_local waves[6];    /* 0x34 */
+    unsigned int graphics_1;  /* 0x2C – display list N64 vaddr            */
+    unsigned int graphics_2;  /* 0x30 – N64 vaddr (was wrongly void*)     */
+    WAVE_W_local waves[6];    /* 0x34 – 6 × 8 bytes = 0x30               */
     unsigned char unk_64;     /* 0x64 */
     signed char unk_65;       /* 0x65 */
     unsigned char unk_66;     /* 0x66 */
@@ -108,17 +115,17 @@ typedef struct CLS_BG_W_s
     signed int unk_68;        /* 0x68 */
     signed int unk_6c;        /* 0x6C */
     float unk_70;             /* 0x70 */
-    struct CLS_BG_W_s *left;  /* 0x74 */
-    struct CLS_BG_W_s *right; /* 0x78 */
+    unsigned int left_n64;    /* 0x74 – N64 vaddr (was struct CLS_BG_W_s*) */
+    unsigned int right_n64;   /* 0x78 – N64 vaddr                          */
     unsigned char unk_7c[2];  /* 0x7C */
     signed short unk_7e;      /* 0x7E */
-    void *unk_80;             /* 0x80 */
+    unsigned int unk_80_n64;  /* 0x80 – N64 vaddr (was void*)              */
     unsigned short unk_84;    /* 0x84 */
     unsigned char unk_86;     /* 0x86 */
     unsigned char unk_87;     /* 0x87 */
     VEC3F_local unk_88;       /* 0x88 */
-    struct CLS_BG_W_s *prev;  /* 0x94 */
-} CLS_BG_W_local;
+    unsigned int prev_n64;    /* 0x94 – N64 vaddr (was struct CLS_BG_W_s*) */
+} CLS_BG_W_local;             /* total size 0x98 bytes */
 
 /* =========================================================================
    Game globals (mirrored extern declarations)
@@ -129,6 +136,46 @@ extern unsigned short D_800C7AB2;
 
 /** Pointer to the local player's live CLS_BG_W.  May be NULL. */
 extern void *D_801FC60C_5B851C;
+
+/* =========================================================================
+   RDRAM helpers
+
+   In N64Recomp, extern globals give host pointers into the RDRAM buffer at
+   the matching N64 virtual-address offset.  We use D_800C7AB2 (room ID) at
+   N64 KSEG0 vaddr 0x800C7AB2 to anchor the RDRAM base, letting us convert
+   between N64 virtual addresses and host pointers.
+   ========================================================================= */
+
+static inline unsigned char *mnsg_rdram_base(void)
+{
+    return (unsigned char *)&D_800C7AB2 - (0x800C7AB2U - 0x80000000U);
+}
+
+static inline void *n64_to_host(unsigned int n64_vaddr)
+{
+    return (void *)(mnsg_rdram_base() + (n64_vaddr - 0x80000000U));
+}
+
+/*
+ * Phantom pool: 7 structs of 0x98 bytes each = 0x430 bytes.
+ * Followed by 7 × 256-byte scratchpads (0x700 bytes) = 0xB30 bytes total.
+ * Placed at 0x803E8000 – well above game statics (which end ~0x801FC60C)
+ * and below the top-of-RDRAM stack region.  If another mod or the game
+ * uses this region, move the address further down.
+ */
+#define PHANTOM_POOL_N64_BASE 0x803E8000U
+
+/*
+ * Per-phantom scratchpad: the game's player-update machinery (specifically
+ * func_8001C970) follows unk_80_n64 and writes a byte at unk_80_n64+0x37.
+ * If unk_80_n64 points into code-section RDRAM (never committed by the
+ * recomp), that write faults with SIGBUS KERN_PROTECTION_FAILURE.
+ * We redirect each phantom's unk_80_n64 to a dedicated, zeroed 256-byte
+ * block in our own committed RDRAM pool so those writes go somewhere safe.
+ */
+#define PHANTOM_SCRATCH_N64_BASE \
+    (PHANTOM_POOL_N64_BASE + (unsigned int)(MAX_PHANTOMS) * (unsigned int)sizeof(CLS_BG_W_local))
+#define PHANTOM_SCRATCH_STRIDE 256U
 
 /* =========================================================================
    Module state
@@ -240,84 +287,111 @@ static int parse_positions(const char *json, PhantomPos *out, int max_out)
    Phantom lifecycle helpers
    ========================================================================= */
 
-/** Unlink all phantoms from the old player pointer and free memory. */
+/** Unlink all phantoms from the player's CLS_W chain. */
 static void phantoms_clear(void)
 {
     CLS_BG_W_local *player = (CLS_BG_W_local *)s_phantom_player_ptr;
-    if (player)
+    /*
+     * Only walk the linked list when the room hasn't changed.  A room
+     * transition causes the game to tear down its own CLS_W lists, so the
+     * player pointer may already be stale.  In that case, the game has
+     * already clobbered the list and there is nothing to unlink.
+     */
+    if (player && D_800C7AB2 == s_phantom_room)
     {
-        /* Walk the CLS_W.next chain from the player and remove our entries. */
-        CLS_W_local *cur = player->header.next;
-        CLS_W_local *prev = (CLS_W_local *)player;
-        while (cur)
+        CLS_W_local *prev_hdr = &player->header;
+        unsigned int cur_n64 = player->header.next_n64;
+        int limit = MAX_PHANTOMS + 16; /* safety cap */
+
+        while (cur_n64 >= 0x80000000U && limit-- > 0)
         {
+            /* Check whether this entry is one of our phantom slots. */
             int is_ours = 0;
             for (int i = 0; i < MAX_PHANTOMS; i++)
             {
-                if (s_phantoms[i] && (CLS_W_local *)s_phantoms[i] == cur)
+                unsigned int ph_n64 = PHANTOM_POOL_N64_BASE +
+                                      (unsigned int)(i * (int)sizeof(CLS_BG_W_local));
+                if (cur_n64 == ph_n64)
                 {
                     is_ours = 1;
                     break;
                 }
             }
+
+            CLS_BG_W_local *cur_host = (CLS_BG_W_local *)n64_to_host(cur_n64);
+            unsigned int next_n64 = cur_host->header.next_n64;
+
             if (is_ours)
-            {
-                prev->next = cur->next; /* unlink */
-                cur = prev->next;
-            }
+                prev_hdr->next_n64 = next_n64; /* unlink */
             else
-            {
-                prev = cur;
-                cur = cur->next;
-            }
+                prev_hdr = &cur_host->header;
+
+            cur_n64 = next_n64;
         }
     }
 
+    /* Phantoms live in RDRAM; nothing to free on the host side. */
     for (int i = 0; i < MAX_PHANTOMS; i++)
-    {
-        if (s_phantoms[i])
-        {
-            recomp_free(s_phantoms[i]);
-            s_phantoms[i] = NULL;
-        }
-    }
+        s_phantoms[i] = NULL;
+
     s_phantom_count = 0;
     s_phantom_player_ptr = NULL;
     s_phantom_room = 0xFFFF;
 }
 
 /**
- * Allocate and link N phantoms cloned from the player's current CLS_BG_W.
- * Inserts each phantom at the head of the player's CLS_W.next list.
+ * Populate N phantoms from the RDRAM phantom pool and link each one at the
+ * head of the player's CLS_W.next list.
+ *
+ * Phantoms live at fixed N64 KSEG0 addresses (PHANTOM_POOL_N64_BASE + i*0x98).
+ * Keeping them in RDRAM means the game's recompiled code can follow the
+ * linked-list next_n64 pointers and render them exactly as it renders the
+ * real player object.
  */
 static void phantoms_create(CLS_BG_W_local *player, int count)
 {
     for (int i = 0; i < count && i < MAX_PHANTOMS; i++)
     {
-        /* Allocate and clone the player struct. */
-        CLS_BG_W_local *ph = (CLS_BG_W_local *)recomp_alloc(sizeof(CLS_BG_W_local));
-        if (!ph)
-            break;
+        unsigned int ph_n64 = PHANTOM_POOL_N64_BASE +
+                              (unsigned int)(i * (int)sizeof(CLS_BG_W_local));
+        CLS_BG_W_local *ph = (CLS_BG_W_local *)n64_to_host(ph_n64);
 
-        /* Byte-copy every field so waves/graphics pointers are correct. */
+        /* Clone the live player struct into the phantom slot. */
         unsigned char *dst = (unsigned char *)ph;
         unsigned char *src = (unsigned char *)player;
         for (int b = 0; b < (int)sizeof(CLS_BG_W_local); b++)
             dst[b] = src[b];
 
-        /* Clear tree pointers – we only insert into the flat linked list. */
-        ph->left = NULL;
-        ph->right = NULL;
-        ph->prev = NULL;
+        /* Clear tree/back pointers – only the flat linked list is used. */
+        ph->left_n64 = 0;
+        ph->right_n64 = 0;
+        ph->prev_n64 = 0;
+
+        /* Redirect unk_80_n64 to a dedicated scratchpad in our RDRAM pool.
+         * The game's player-update path writes to unk_80_n64+0x37 (and
+         * possibly other offsets).  Pointing to the player's original value
+         * (often a code-section address like 0x80210000) hits an uncommitted
+         * RDRAM page and causes SIGBUS.  We give each phantom its own
+         * 256-byte committed block so those writes are harmless.             */
+        {
+            unsigned int scratch_n64 = PHANTOM_SCRATCH_N64_BASE +
+                                       (unsigned int)(i)*PHANTOM_SCRATCH_STRIDE;
+            unsigned char *scratch_host = (unsigned char *)n64_to_host(scratch_n64);
+            for (unsigned int b = 0; b < PHANTOM_SCRATCH_STRIDE; b++)
+                scratch_host[b] = 0;
+            ph->unk_80_n64 = scratch_n64;
+        }
 
         /* Park off-screen until the first position update arrives. */
         ph->position.y = PHANTOM_PARK_Y;
 
-        /* Insert at the front of the player's CLS_W.next chain. */
-        ph->header.next = player->header.next;
-        player->header.next = (CLS_W_local *)ph;
+        /* Insert at the front of the player's CLS_W.next chain using the
+         * phantom's N64 virtual address – the game reads these as N64 vaddrs,
+         * NOT as host pointers.                                               */
+        ph->header.next_n64 = player->header.next_n64;
+        player->header.next_n64 = ph_n64;
 
-        s_phantoms[i] = ph;
+        s_phantoms[i] = ph; /* host-ptr cache for fast position updates */
     }
     s_phantom_count = count;
     s_phantom_player_ptr = (void *)player;
