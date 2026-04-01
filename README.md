@@ -7,7 +7,6 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 * **Item / flag sync** — every tracked item or flag gained by a player is broadcast to the team in real time.  Players who join late automatically receive the team's accumulated progress.
 * **Damage & heal sync** — damage taken by one team member is applied to all other members; healing is shared the same way.  Either player can die from synced damage.  Can be toggled in the mod settings.
 * **Ryo (money) sync** — only *gains* are synced: when a player picks up ryo the same amount is added to every teammate's wallet.  Spending never propagates, and late joiners keep their own balance until the next pickup.
-* **Auto-connect on start** — optionally connects to a configured server as soon as the game loads.
 * **In-game HUD** — a notification banner confirms connection success or failure; a persistent player-list panel (top-left) shows every player currently in the room, their character, and their position.
 * **Teams** — players can be grouped into teams within a room so that flag queues and save-state syncs are scoped to the team.
 * **Reconnect support** — client IDs are preserved across sessions so the server can deliver queued packets on reconnect.
