@@ -68,7 +68,7 @@ data_reference_syms_files = ["Goemon64RecompSyms/mnsg.us.datasyms.toml"]
 # Additional files to include in the mod.
 # anchor_mnsg.py is the Python TCP client for the Anchor multiplayer server.
 # It is embedded in the .nrm and importable thanks to REPY_PREINIT_ADD_NRM_TO_ALL_INTERPRETERS.
-additional_files = ["py/anchor_mnsg.py"]
+additional_files = ["py/anchor_mnsg.py", "icons/thumb.png"]
 
 [[manifest.config_options]]
 id = "anchor_host"
