@@ -1,43 +1,33 @@
 /**
  * @file anchor_actors.c
- * @brief Phantom actor system – renders same-room teammates as in-world objects.
+ * @brief Phantom actor system using the game's native actor-instance injection.
  *
  * Strategy
  * --------
- * Spawning a proper main-character actor at runtime requires loading the
- * character overlay file and calling an undocumented initialisation function,
- * so we use a simpler "ghost clone" approach instead:
+ * Instead of directly manipulating RDRAM rendering structures, this module
+ * hooks func_8020D724_5C8BF4 (the room actor-setup function) to inject extra
+ * ActorInstance entries into the room's actor-data file before the game
+ * spawns anything.  The game then instantiates our entries through its own
+ * normal pathway.
  *
- *   1. When the local player's CLS_BG_W becomes available (non-NULL) and there
- *      are teammates in the same raw room, we allocate a pool of CLS_BG_W
- *      structs with recomp_alloc() and memcpy the player's live struct into
- *      each one.  This gives every phantom the same wave / model / display-list
- *      references as the local character, so they are rendered identically to
- *      the local player – a recognisable human figure that works in every room.
+ * This is the same pattern used by MNSGRecompRando (actor_manager.c).
  *
- *   2. Each phantom is inserted at the front of the CLS_W.next singly-linked
- *      list that starts at the player's CLS_BG_W.  The game's rendering loop
- *      walks this chain, so the phantoms are drawn automatically.
+ *   1. On room load we copy the actor-data file into a fresh recomp_alloc()
+ *      buffer and register an overlay redirect so all subsequent calls to
+ *      func_800141C4_14DC4 (overlay_get_data_pointer) return our copy.
  *
- *   3. Every game frame we call anchor_get_teammate_positions_json() and update
- *      the floating-point position (VEC3F_W at offset 0x08) of each live
- *      phantom so their on-screen positions follow the latest network data.
+ *   2. We append extra ActorInstance entries to the copy, borrowing the
+ *      actor_definition pointer of the first existing instance (a safe,
+ *      always-valid definition type for whatever room we are in).
  *
- *   4. On room change (detected by watching D_800C7AB2) we unlink all phantoms
- *      from the old player pointer and free them.  They will be re-created on
- *      the next frame once the new player CLS_BG_W is valid.
+ *   3. The game's original func_8020D724_5C8BF4 continues, reads our modified
+ *      buffer, and spawns the injected entries as real game objects.
  *
- * Limitations
- * -----------
- * - The phantoms share the local player's animation frame counter, so they
- *   animate in sync with the player – acceptable for a ghost indicator.
- * - Physics, collision, and game-logic are NOT driven for the clones; they are
- *   purely visual.
- * - The approach relies on the game rendering CLS_BG_W objects in list order.
- *   If the renderer skips unknown entries this will be a no-op (no crash).
- * - The cloned CLS_BG_W may have pointer fields that are not safe to share
- *   (e.g. behaviour callbacks).  Observed in the field this has been stable,
- *   but if crashes occur suspect this file first.
+ * Current status: DUMMY + POSITIONS
+ * Queries anchor for same-room teammate positions and injects one actor per
+ * teammate using a safe visible actor definition from the room.  Invisible /
+ * hazardous actor types (death boundaries, exits, doors) are skipped when
+ * selecting the template definition to avoid visual corruption.
  */
 
 #include "modding.h"
@@ -45,168 +35,199 @@
 #include "anchor.h"
 
 /* =========================================================================
-   Tunables
+   Constants
    ========================================================================= */
 
-/** Maximum number of phantom actors (one per teammate slot). */
+#define WAVE_MAX 48
+#define ACTOR_FILE_BUF_SIZE 0x10000
 #define MAX_PHANTOMS 7
 
-/** Frames between position-sync refreshes (teleporting a phantom that far
- *  each frame would look jerky; at 60 fps every 2 frames ≈ 30 Hz is fine). */
-#define PHANTOM_REFRESH_FRAMES 2
-
-/** Y-position used as a "parking" value when a phantom slot is not in use.
- *  Must not appear as a legitimate in-world Y coordinate. */
-#define PHANTOM_PARK_Y 32767.0f
-
 /* =========================================================================
-   Types  (mirror of common_structs.h – copied here to avoid header deps)
+   Types
+   Compiled as MIPS32, so sizeof(pointer) == 4 and all struct sizes match
+   the N64 game layout exactly.  Same definitions as MNSGRecompRando's
+   common_structs.h / actor_management.h.
    ========================================================================= */
 
-typedef struct CLS_W_s
+typedef struct
 {
-    unsigned int next_n64; /* 0x00 – N64 KSEG0 vaddr of next CLS_W, NOT a host ptr */
-    unsigned char kind;    /* 0x04 */
-    unsigned char pri;     /* 0x05 */
-    unsigned short s_pri;  /* 0x06 */
-} CLS_W_local;             /* size 0x08 in N64 RDRAM */
+    short x, y, z;
+} ActorPos;
+typedef struct
+{
+    short pitch, yaw, roll;
+} ActorRot;
+
+typedef struct ActorDefinition
+{
+    int data[4]; /* 16 bytes */
+} ActorDefinition;
+
+typedef struct ActorInstance
+{
+    ActorPos position;                 /* 0x00 - 6 bytes  */
+    ActorRot rotation;                 /* 0x06 - 6 bytes  */
+    ActorDefinition *actor_definition; /* 0x0C - 4 bytes (MIPS32 ptr) */
+    unsigned char is_spawned;          /* 0x10 */
+    unsigned char unk_11;              /* 0x11 */
+    unsigned char unk_12;              /* 0x12 */
+    unsigned char unk_13;              /* 0x13 */
+} ActorInstance;                       /* 0x14 = 20 bytes */
 
 typedef struct
 {
-    float x;
-    float y;
-    float z;
-} VEC3F_local;
-typedef struct
-{
-    short x;
-    short y;
-    short z;
-} VEC3S_local;
+    ActorInstance *persistent_actor_instances; /* 0x00 */
+    const char **actor_definition_names;       /* 0x04 */
+    ActorInstance *actor_instances;            /* 0x08 */
+    void *actor_partitions;                    /* 0x0C */
+    void *actor_partition_configuration;       /* 0x10 */
+    short actor_data_file_id;                  /* 0x14 */
+    short unk_16;                              /* 0x16 */
+    void (*load_stage_data_files)(void);       /* 0x18 */
+} StageActorMetadata;                          /* 0x1C bytes */
+
 typedef struct
 {
     unsigned short file_id;
-    int data;
-} WAVE_W_local;
+    int data; /* N64 vaddr of the loaded file, stored as int */
+} OverlayEntry;
 
-/*
- * Full CLS_BG_W N64 layout (offset-verified from common_structs.h).
- *
- * ALL pointer fields are stored as 4-byte N64 KSEG0 virtual addresses in
- * RDRAM – they are NOT host pointers.  Using native pointer types on a 64-bit
- * host would make every field after the first one land at the wrong offset,
- * corrupt the game's struct on write, and cause a crash in the GFX thread.
- */
-typedef struct CLS_BG_W_s
+typedef struct
 {
-    CLS_W_local header;       /* 0x00 – next_n64 / kind / pri, size 0x08 */
-    VEC3F_local position;     /* 0x08 – world x, y, z                    */
-    VEC3S_local rotation;     /* 0x14 */
-    unsigned char pad_1a[2];  /* 0x1A */
-    VEC3F_local scale;        /* 0x1C */
-    float animation_progress; /* 0x28 */
-    unsigned int graphics_1;  /* 0x2C – display list N64 vaddr            */
-    unsigned int graphics_2;  /* 0x30 – N64 vaddr (was wrongly void*)     */
-    WAVE_W_local waves[6];    /* 0x34 – 6 × 8 bytes = 0x30               */
-    unsigned char unk_64;     /* 0x64 */
-    signed char unk_65;       /* 0x65 */
-    unsigned char unk_66;     /* 0x66 */
-    unsigned char unk_67;     /* 0x67 */
-    signed int unk_68;        /* 0x68 */
-    signed int unk_6c;        /* 0x6C */
-    float unk_70;             /* 0x70 */
-    unsigned int left_n64;    /* 0x74 – N64 vaddr (was struct CLS_BG_W_s*) */
-    unsigned int right_n64;   /* 0x78 – N64 vaddr                          */
-    unsigned char unk_7c[2];  /* 0x7C */
-    signed short unk_7e;      /* 0x7E */
-    unsigned int unk_80_n64;  /* 0x80 – N64 vaddr (was void*)              */
-    unsigned short unk_84;    /* 0x84 */
-    unsigned char unk_86;     /* 0x86 */
-    unsigned char unk_87;     /* 0x87 */
-    VEC3F_local unk_88;       /* 0x88 */
-    unsigned int prev_n64;    /* 0x94 – N64 vaddr (was struct CLS_BG_W_s*) */
-} CLS_BG_W_local;             /* total size 0x98 bytes */
+    unsigned short file_id;
+    void *redirected_data;
+} OverlayRedirection;
 
 /* =========================================================================
-   Game globals (mirrored extern declarations)
+   Game externs
    ========================================================================= */
 
-/** Current room/scene ID written every frame by the engine. */
 extern unsigned short D_800C7AB2;
+extern StageActorMetadata *D_80231300_5EC7D0[];
+extern OverlayEntry D_80167FC0_168BC0[WAVE_MAX];
 
-/** Pointer to the local player's live CLS_BG_W.  May be NULL. */
-extern void *D_801FC60C_5B851C;
+/* overlay_get_data_pointer */
+extern int func_800141C4_14DC4(unsigned int file_id);
+/* overlay_resolve_pointer  */
+extern int func_80014840_15440(int pointer, unsigned int file_id);
 
 /* =========================================================================
-   RDRAM helpers
-
-   In N64Recomp, extern globals give host pointers into the RDRAM buffer at
-   the matching N64 virtual-address offset.  We use D_800C7AB2 (room ID) at
-   N64 KSEG0 vaddr 0x800C7AB2 to anchor the RDRAM base, letting us convert
-   between N64 virtual addresses and host pointers.
+   Overlay redirection table  (same pattern as MNSGRecompRando)
    ========================================================================= */
 
-static inline unsigned char *mnsg_rdram_base(void)
+static OverlayRedirection s_redirections[WAVE_MAX];
+static int s_redirections_ready = 0;
+
+static void redirections_init(void)
 {
-    return (unsigned char *)&D_800C7AB2 - (0x800C7AB2U - 0x80000000U);
+    if (s_redirections_ready)
+        return;
+    for (int i = 0; i < WAVE_MAX; i++)
+    {
+        s_redirections[i].file_id = 0;
+        s_redirections[i].redirected_data = NULL;
+    }
+    s_redirections_ready = 1;
 }
 
-static inline void *n64_to_host(unsigned int n64_vaddr)
+static void redirections_clear(void)
 {
-    return (void *)(mnsg_rdram_base() + (n64_vaddr - 0x80000000U));
+    redirections_init();
+    for (int i = 0; i < WAVE_MAX; i++)
+    {
+        s_redirections[i].file_id = 0;
+        if (s_redirections[i].redirected_data)
+        {
+            recomp_free(s_redirections[i].redirected_data);
+            s_redirections[i].redirected_data = NULL;
+        }
+    }
 }
 
-/*
- * Phantom pool: 7 structs of 0x98 bytes each = 0x430 bytes.
- * Followed by 7 × 256-byte scratchpads (0x700 bytes) = 0xB30 bytes total.
- * Placed at 0x803E8000 – well above game statics (which end ~0x801FC60C)
- * and below the top-of-RDRAM stack region.  If another mod or the game
- * uses this region, move the address further down.
- */
-#define PHANTOM_POOL_N64_BASE 0x803E8000U
-
-/*
- * Per-phantom scratchpad: the game's player-update machinery (specifically
- * func_8001C970) follows unk_80_n64 and writes a byte at unk_80_n64+0x37.
- * If unk_80_n64 points into code-section RDRAM (never committed by the
- * recomp), that write faults with SIGBUS KERN_PROTECTION_FAILURE.
- * We redirect each phantom's unk_80_n64 to a dedicated, zeroed 256-byte
- * block in our own committed RDRAM pool so those writes go somewhere safe.
- */
-#define PHANTOM_SCRATCH_N64_BASE \
-    (PHANTOM_POOL_N64_BASE + (unsigned int)(MAX_PHANTOMS) * (unsigned int)sizeof(CLS_BG_W_local))
-#define PHANTOM_SCRATCH_STRIDE 256U
+static void *redirections_add(unsigned short file_id, unsigned int size)
+{
+    redirections_init();
+    for (int i = 0; i < WAVE_MAX; i++)
+    {
+        if (s_redirections[i].file_id == 0)
+        {
+            s_redirections[i].file_id = file_id;
+            s_redirections[i].redirected_data = recomp_alloc(size);
+            return s_redirections[i].redirected_data;
+        }
+    }
+    return NULL;
+}
 
 /* =========================================================================
-   Module state
+   RECOMP_PATCH: overlay_get_data_pointer
+   Check our redirect table first; fall through to original wave-table walk.
    ========================================================================= */
 
-/** Allocated phantom structs (NULL = slot unused). */
-static CLS_BG_W_local *s_phantoms[MAX_PHANTOMS];
+RECOMP_PATCH int func_800141C4_14DC4(unsigned int file_id)
+{
+    if (file_id == 0)
+        return 0;
 
-/** How many phantom slots are currently linked into the world list. */
-static int s_phantom_count = 0;
+    redirections_init();
 
-/** Room ID at the time the phantoms were last created. */
-static unsigned short s_phantom_room = 0xFFFF;
+    for (int i = 0; i < WAVE_MAX; i++)
+    {
+        if (s_redirections[i].file_id == file_id)
+            return (int)s_redirections[i].redirected_data;
+    }
 
-/** Player CLS_BG_W pointer at the time phantoms were last linked. */
-static void *s_phantom_player_ptr = NULL;
-
-/** Per-frame refresh counter. */
-static int s_refresh_timer = 0;
+    /* Original function body: walk the loaded-wave table. */
+    OverlayEntry *entry = (OverlayEntry *)&D_80167FC0_168BC0;
+    while (entry->file_id != 0)
+    {
+        if (entry->file_id == file_id)
+            return entry->data;
+        entry++;
+    }
+    return -1;
+}
 
 /* =========================================================================
-   Simple JSON parser – extract teammate positions from the Python JSON array.
-   Format: [{"x":<int>,"y":<int>,"z":<int>}, ...]
-   Returns number of entries written (≤ MAX_PHANTOMS).
+   Actor-ID safety check
+   Returns 1 if this actor type is safe to use as a visual clone template.
+   Invisible / hazardous types are excluded:
+     0x08c  Exit trigger        – invisible, teleports player
+     0x08e  Death Boundary      – invisible, kills player AND corrupts lighting
+     0x23c  Sliding Door        – no standalone model
+     0x23e  Locked Door         – no standalone model
+     0x345  various door flags  – no standalone model
+     0x082  Ryo (money)         – tiny coin, bad placeholder
+     0x193  Key item            – small pickup, bad placeholder
+     0x086-0x089  Flag actors   – invisible triggers
+   ========================================================================= */
+
+static int actor_id_is_safe_template(unsigned short id)
+{
+    if (id == 0x08c || id == 0x08e)
+        return 0; /* exits / death boundaries */
+    if (id == 0x23c || id == 0x23e)
+        return 0; /* sliding / locked doors   */
+    if (id == 0x345)
+        return 0; /* door-flag actor          */
+    if (id == 0x082)
+        return 0; /* ryo coin                 */
+    if (id == 0x193)
+        return 0; /* key                      */
+    if (id >= 0x086 && id <= 0x089)
+        return 0; /* flag actors              */
+    return 1;
+}
+
+/* =========================================================================
+   Minimal JSON position parser
+   Expects: [{"x":<int>,"y":<int>,"z":<int>}, ...]
+   Returns number of entries written (<= MAX_PHANTOMS).
    ========================================================================= */
 
 typedef struct
 {
-    int x;
-    int y;
-    int z;
+    int x, y, z;
 } PhantomPos;
 
 static int parse_positions(const char *json, PhantomPos *out, int max_out)
@@ -217,17 +238,14 @@ static int parse_positions(const char *json, PhantomPos *out, int max_out)
     const char *p = json + 1;
     while (*p && count < max_out)
     {
-        /* Skip whitespace and commas. */
         while (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n')
             p++;
         if (*p != '{')
             break;
         p++;
-        int x = 0, y = 0, z = 0;
-        int got_x = 0, got_y = 0, got_z = 0;
+        int x = 0, y = 0, z = 0, got = 0;
         while (*p && *p != '}')
         {
-            /* Skip to key character. */
             while (*p && *p != '"' && *p != '}')
                 p++;
             if (*p != '"')
@@ -236,12 +254,10 @@ static int parse_positions(const char *json, PhantomPos *out, int max_out)
             char key = *p;
             if (key)
                 p++;
-            /* Skip closing quote and colon. */
             while (*p && *p != ':')
                 p++;
             if (*p == ':')
                 p++;
-            /* Skip whitespace. */
             while (*p == ' ')
                 p++;
             int sign = 1;
@@ -257,22 +273,22 @@ static int parse_positions(const char *json, PhantomPos *out, int max_out)
             if (key == 'x')
             {
                 x = val;
-                got_x = 1;
+                got |= 1;
             }
             else if (key == 'y')
             {
                 y = val;
-                got_y = 1;
+                got |= 2;
             }
             else if (key == 'z')
             {
                 z = val;
-                got_z = 1;
+                got |= 4;
             }
         }
         if (*p == '}')
             p++;
-        if (got_x && got_y && got_z)
+        if (got == 7)
         {
             out[count].x = x;
             out[count].y = y;
@@ -284,184 +300,140 @@ static int parse_positions(const char *json, PhantomPos *out, int max_out)
 }
 
 /* =========================================================================
-   Phantom lifecycle helpers
+   RECOMP_HOOK: room actor-setup  (fires BEFORE the original function)
+   Copy the actor-data file and inject one ActorInstance per same-room
+   teammate using their network-reported position.
    ========================================================================= */
 
-/** Unlink all phantoms from the player's CLS_W chain. */
-static void phantoms_clear(void)
+RECOMP_HOOK("func_8020D724_5C8BF4")
+void anchor_actors_room_load(void)
 {
-    CLS_BG_W_local *player = (CLS_BG_W_local *)s_phantom_player_ptr;
-    /*
-     * Only walk the linked list when the room hasn't changed.  A room
-     * transition causes the game to tear down its own CLS_W lists, so the
-     * player pointer may already be stale.  In that case, the game has
-     * already clobbered the list and there is nothing to unlink.
-     */
-    if (player && D_800C7AB2 == s_phantom_room)
-    {
-        CLS_W_local *prev_hdr = &player->header;
-        unsigned int cur_n64 = player->header.next_n64;
-        int limit = MAX_PHANTOMS + 16; /* safety cap */
+    /* Always clear stale redirections from the previous room. */
+    redirections_clear();
 
-        while (cur_n64 >= 0x80000000U && limit-- > 0)
-        {
-            /* Check whether this entry is one of our phantom slots. */
-            int is_ours = 0;
-            for (int i = 0; i < MAX_PHANTOMS; i++)
-            {
-                unsigned int ph_n64 = PHANTOM_POOL_N64_BASE +
-                                      (unsigned int)(i * (int)sizeof(CLS_BG_W_local));
-                if (cur_n64 == ph_n64)
-                {
-                    is_ours = 1;
-                    break;
-                }
-            }
-
-            CLS_BG_W_local *cur_host = (CLS_BG_W_local *)n64_to_host(cur_n64);
-            unsigned int next_n64 = cur_host->header.next_n64;
-
-            if (is_ours)
-                prev_hdr->next_n64 = next_n64; /* unlink */
-            else
-                prev_hdr = &cur_host->header;
-
-            cur_n64 = next_n64;
-        }
-    }
-
-    /* Phantoms live in RDRAM; nothing to free on the host side. */
-    for (int i = 0; i < MAX_PHANTOMS; i++)
-        s_phantoms[i] = NULL;
-
-    s_phantom_count = 0;
-    s_phantom_player_ptr = NULL;
-    s_phantom_room = 0xFFFF;
-}
-
-/**
- * Populate N phantoms from the RDRAM phantom pool and link each one at the
- * head of the player's CLS_W.next list.
- *
- * Phantoms live at fixed N64 KSEG0 addresses (PHANTOM_POOL_N64_BASE + i*0x98).
- * Keeping them in RDRAM means the game's recompiled code can follow the
- * linked-list next_n64 pointers and render them exactly as it renders the
- * real player object.
- */
-static void phantoms_create(CLS_BG_W_local *player, int count)
-{
-    for (int i = 0; i < count && i < MAX_PHANTOMS; i++)
-    {
-        unsigned int ph_n64 = PHANTOM_POOL_N64_BASE +
-                              (unsigned int)(i * (int)sizeof(CLS_BG_W_local));
-        CLS_BG_W_local *ph = (CLS_BG_W_local *)n64_to_host(ph_n64);
-
-        /* Clone the live player struct into the phantom slot. */
-        unsigned char *dst = (unsigned char *)ph;
-        unsigned char *src = (unsigned char *)player;
-        for (int b = 0; b < (int)sizeof(CLS_BG_W_local); b++)
-            dst[b] = src[b];
-
-        /* Clear tree/back pointers – only the flat linked list is used. */
-        ph->left_n64 = 0;
-        ph->right_n64 = 0;
-        ph->prev_n64 = 0;
-
-        /* Redirect unk_80_n64 to a dedicated scratchpad in our RDRAM pool.
-         * The game's player-update path writes to unk_80_n64+0x37 (and
-         * possibly other offsets).  Pointing to the player's original value
-         * (often a code-section address like 0x80210000) hits an uncommitted
-         * RDRAM page and causes SIGBUS.  We give each phantom its own
-         * 256-byte committed block so those writes are harmless.             */
-        {
-            unsigned int scratch_n64 = PHANTOM_SCRATCH_N64_BASE +
-                                       (unsigned int)(i)*PHANTOM_SCRATCH_STRIDE;
-            unsigned char *scratch_host = (unsigned char *)n64_to_host(scratch_n64);
-            for (unsigned int b = 0; b < PHANTOM_SCRATCH_STRIDE; b++)
-                scratch_host[b] = 0;
-            ph->unk_80_n64 = scratch_n64;
-        }
-
-        /* Park off-screen until the first position update arrives. */
-        ph->position.y = PHANTOM_PARK_Y;
-
-        /* Insert at the front of the player's CLS_W.next chain using the
-         * phantom's N64 virtual address – the game reads these as N64 vaddrs,
-         * NOT as host pointers.                                               */
-        ph->header.next_n64 = player->header.next_n64;
-        player->header.next_n64 = ph_n64;
-
-        s_phantoms[i] = ph; /* host-ptr cache for fast position updates */
-    }
-    s_phantom_count = count;
-    s_phantom_player_ptr = (void *)player;
-    s_phantom_room = D_800C7AB2;
-}
-
-/* =========================================================================
-   Per-frame hook
-   ========================================================================= */
-
-RECOMP_HOOK_RETURN("func_80002040_2C40")
-void anchor_actors_update(void)
-{
-    /* Only run when connected. */
     if (!anchor_is_connected())
-    {
-        if (s_phantom_count > 0)
-            phantoms_clear();
         return;
-    }
 
-    /* Detect room change – clear phantoms so they are re-created for the
-     * new room once the player's CLS_BG_W is valid again.               */
-    unsigned short cur_room = D_800C7AB2;
-    if (cur_room != s_phantom_room && s_phantom_count > 0)
-        phantoms_clear();
-
-    /* Throttle the position-sync poll. */
-    if (s_refresh_timer > 0)
-    {
-        s_refresh_timer--;
+    if (!D_80231300_5EC7D0[D_800C7AB2])
         return;
-    }
-    s_refresh_timer = PHANTOM_REFRESH_FRAMES;
 
-    /* Need a valid player world object to clone from. */
-    CLS_BG_W_local *player = (CLS_BG_W_local *)D_801FC60C_5B851C;
-    if (!player)
-    {
-        if (s_phantom_count > 0)
-            phantoms_clear();
+    unsigned short file_id =
+        (unsigned short)D_80231300_5EC7D0[D_800C7AB2]->actor_data_file_id;
+    if (file_id == 0)
         return;
-    }
 
-    /* Query Python for same-room teammate positions. */
+    /* Update our local room in the Python layer FIRST so that
+     * get_teammate_positions_json() filters by the NEW room, not the
+     * old one.  Without this call _local_room_id is still the previous
+     * room when the hook fires and all same-new-room teammates are
+     * filtered out, causing n == 0 every time.                         */
+    anchor_set_local_room(D_800C7AB2);
+
+    /* Query same-room teammate positions. */
     char *json = anchor_get_teammate_positions_json();
-    if (!json)
+    PhantomPos positions[MAX_PHANTOMS];
+    int n = 0;
+    if (json)
+    {
+        recomp_printf("[anchor_actors] room 0x%03X positions json: %s\n",
+                      (unsigned int)D_800C7AB2, json);
+        n = parse_positions(json, positions, MAX_PHANTOMS);
+        recomp_free(json);
+    }
+    if (n == 0)
+        return; /* no teammates with position data in this room */
+
+    /* Get the original file buffer before installing our redirect. */
+    void *orig = (void *)func_800141C4_14DC4(file_id);
+    if (!orig)
         return;
 
-    PhantomPos positions[MAX_PHANTOMS];
-    int n = parse_positions(json, positions, MAX_PHANTOMS);
-    recomp_free(json);
+    /* Allocate a writable copy and register the redirect. */
+    unsigned char *buf =
+        (unsigned char *)redirections_add(file_id, ACTOR_FILE_BUF_SIZE);
+    if (!buf)
+        return;
 
-    /* Resize the phantom pool if the teammate count changed or the player
-     * pointer changed (happens after room transitions).                   */
-    if (n != s_phantom_count || (void *)player != s_phantom_player_ptr)
+    for (int i = 0; i < ACTOR_FILE_BUF_SIZE; i++)
+        buf[i] = ((unsigned char *)orig)[i];
+
+    /* Resolve the ActorInstance array into our copy. */
+    ActorInstance *instances = (ActorInstance *)func_80014840_15440(
+        (int)D_80231300_5EC7D0[D_800C7AB2]->actor_instances, file_id);
+    if (!instances)
+        return;
+
+    /* Count existing instances. */
+    int count = 0;
+    while (instances[count].actor_definition != NULL)
+        count++;
+    if (count == 0)
+        return;
+
+    /* ------------------------------------------------------------------
+     * Find the first safe visible actor definition to use as a template.
+     * We resolve each instance's actor_definition to read its actor_id
+     * (upper 16 bits of data[0]), then skip invisible / hazardous types.
+     * ------------------------------------------------------------------ */
+    ActorInstance *tmpl = NULL;
+    for (int i = 0; i < count; i++)
     {
-        phantoms_clear();
-        if (n > 0)
-            phantoms_create(player, n);
+        ActorDefinition *def = (ActorDefinition *)func_80014840_15440(
+            (int)instances[i].actor_definition, file_id);
+        if (!def)
+            continue;
+        unsigned short actor_id = (unsigned short)((def->data[0] >> 16) & 0xFFFF);
+        if (actor_id_is_safe_template(actor_id))
+        {
+            tmpl = &instances[i];
+            recomp_printf("[anchor_actors] using actor 0x%03X as template\n",
+                          (unsigned int)actor_id);
+            break;
+        }
+    }
+    if (!tmpl)
+    {
+        recomp_printf("[anchor_actors] room 0x%03X: no safe template actor found\n",
+                      (unsigned int)D_800C7AB2);
+        return;
     }
 
-    /* Update each phantom's world position. */
+    /* ------------------------------------------------------------------
+     * Inject one ActorInstance per teammate at their reported position.
+     * ------------------------------------------------------------------ */
     for (int i = 0; i < n && i < MAX_PHANTOMS; i++)
     {
-        if (s_phantoms[i])
-        {
-            s_phantoms[i]->position.x = (float)positions[i].x;
-            s_phantoms[i]->position.y = (float)positions[i].y;
-            s_phantoms[i]->position.z = (float)positions[i].z;
-        }
+        ActorInstance *entry = &instances[count + i];
+        entry->position.x = (short)positions[i].x;
+        entry->position.y = (short)positions[i].y;
+        entry->position.z = (short)positions[i].z;
+        entry->rotation.pitch = 0;
+        entry->rotation.yaw = 0;
+        entry->rotation.roll = 0;
+        entry->actor_definition = tmpl->actor_definition;
+        entry->is_spawned = 0;
+        entry->unk_11 = 0;
+        entry->unk_12 = 0;
+        entry->unk_13 = 0;
+        recomp_printf("[anchor_actors] teammate %d at (%d, %d, %d)\n",
+                      i, positions[i].x, positions[i].y, positions[i].z);
     }
+
+    /* Re-insert the null terminator after all new entries. */
+    ActorInstance *term = &instances[count + n];
+    term->position.x = 0;
+    term->position.y = 0;
+    term->position.z = 0;
+    term->rotation.pitch = 0;
+    term->rotation.yaw = 0;
+    term->rotation.roll = 0;
+    term->actor_definition = NULL;
+    term->is_spawned = 0;
+    term->unk_11 = 0;
+    term->unk_12 = 0;
+    term->unk_13 = 0;
+
+    recomp_printf(
+        "[anchor_actors] room 0x%03X: injected %d teammate actor(s)\n",
+        (unsigned int)D_800C7AB2, n);
 }
