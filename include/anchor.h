@@ -349,6 +349,24 @@ extern "C"
     */
    char *anchor_get_teammate_positions_json(void);
 
+   /**
+    * @brief Return all online non-self lobby members with their room IDs and positions.
+    *
+    * Unlike anchor_get_teammate_positions_json(), this function does not filter
+    * by team or room – it returns every online player so the phantom actor system
+    * can allocate one actor per lobby member at room-load time.
+    *
+    * Each element: ``{"cid":<int>,"room":<int>,"x":<int>,"y":<int>,"z":<int>,"hp":<int>}``
+    *   cid  – stable client ID for this player.
+    *   room – raw 16-bit room ID (-1 if not yet known).
+    *   x/y/z – last broadcast world-space position (0 if hp==0).
+    *   hp   – 1 if the player has sent at least one position update, else 0.
+    *
+    * Returns ``"[]"`` when not connected or no other players are online.
+    * The caller must free the result with recomp_free().
+    */
+   char *anchor_get_lobby_positions_json(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -902,6 +902,44 @@ def get_teammate_positions_json() -> str:
     return json.dumps(result, separators=(",", ":"))
 
 
+def get_lobby_positions_json() -> str:
+    """
+    Return a compact JSON array of all online non-self lobby members with their
+    current room ID and world-space position, for use by the phantom actor system.
+
+    Each entry: {"cid": int, "room": int, "x": int, "y": int, "z": int, "hp": int}
+
+    Fields:
+      "cid"  – client ID (unique per player, stable within a session).
+      "room" – raw 16-bit room ID the player last reported, -1 if unknown.
+      "x","y","z" – last broadcast world-space position (0 if not yet received).
+      "hp"   – 1 if the player has sent at least one position update, 0 otherwise.
+
+    Unlike get_teammate_positions_json(), this function:
+      - Does NOT filter by team.
+      - Does NOT filter by room.
+      - Includes ALL online non-self players in the lobby.
+
+    Returns '[]' if not connected or no other players are present.
+    """
+    if not _connected:
+        return "[]"
+    with _player_states_lock:
+        result = []
+        for cid, v in sorted(_player_states.items()):
+            if cid == _client_id:
+                continue
+            if not v.get("online", True):
+                continue
+            room_id = int(v.get("roomId", -1))
+            has_pos = "posX" in v
+            px = int(v.get("posX", 0)) if has_pos else 0
+            py = int(v.get("posY", 0)) if has_pos else 0
+            pz = int(v.get("posZ", 0)) if has_pos else 0
+            result.append({"cid": cid, "room": room_id, "x": px, "y": py, "z": pz, "hp": 1 if has_pos else 0})
+    return json.dumps(result, separators=(",", ":"))
+
+
 def _decode_png_rgba(png: bytes) -> bytes:
     """
     Minimal PNG → RGBA32 decoder using stdlib only (``zlib`` + ``struct``).
