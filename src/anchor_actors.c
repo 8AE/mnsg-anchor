@@ -139,6 +139,30 @@ static int s_redirections_ready = 0;
  */
 static unsigned short s_current_room_file_id = 0;
 
+/* =========================================================================
+   Phantom tracking (for per-frame live position update)
+   ========================================================================= */
+
+/* Index into the room's ActorInstance array where our injections begin. */
+static int s_phantom_start_idx = 0;
+/* Number of phantom instances currently injected in the room. */
+static int s_phantom_count = 0;
+/* World-space positions at which each phantom was spawned (floats). */
+static float s_phantom_spawn_x[MAX_PHANTOMS];
+static float s_phantom_spawn_y[MAX_PHANTOMS];
+static float s_phantom_spawn_z[MAX_PHANTOMS];
+/* Host pointer to each phantom's live CLS_BG_W object (NULL = not found yet). */
+static void *s_phantom_live_obj[MAX_PHANTOMS];
+/* Frame counter for throttling the per-frame update. */
+static int s_update_timer = 0;
+
+/*
+ * Player's background-world object pointer (host ptr to CLS_BG_W).
+ * Declared extern so we can derive the RDRAM base address for CLS_W
+ * linked-list traversal in the per-frame hook.
+ */
+extern void *D_801FC60C_5B851C;
+
 static void redirections_init(void)
 {
     if (s_redirections_ready)
@@ -228,6 +252,7 @@ typedef struct
     int room;    /* raw room ID (-1 = unknown)             */
     int x, y, z; /* last broadcast world-space position   */
     int has_pos; /* 1 if position has been received        */
+    int ch;      /* character index: 0=Goemon 1=Ebisumaru 2=Sasuke 3=Yae */
 } LobbyPlayer;
 
 static int parse_lobby_positions(const char *json, LobbyPlayer *out, int max_out)
@@ -246,7 +271,7 @@ static int parse_lobby_positions(const char *json, LobbyPlayer *out, int max_out
             break;
         p++;
 
-        int cid = 0, room = -1, x = 0, y = 0, z = 0, hp = 0;
+        int cid = 0, room = -1, x = 0, y = 0, z = 0, hp = 0, ch = 0;
 
         while (*p && *p != '}')
         {
@@ -297,6 +322,8 @@ static int parse_lobby_positions(const char *json, LobbyPlayer *out, int max_out
                 z = val;
             else if (key[0] == 'h' && key[1] == 'p')
                 hp = val;
+            else if (key[0] == 'c' && key[1] == 'h' && key[2] == '\0')
+                ch = val;
         }
 
         if (*p == '}')
@@ -311,6 +338,7 @@ static int parse_lobby_positions(const char *json, LobbyPlayer *out, int max_out
             out[count].y = y;
             out[count].z = z;
             out[count].has_pos = hp;
+            out[count].ch = (ch >= 0 && ch <= 3) ? ch : 0;
             count++;
         }
     }
@@ -328,30 +356,62 @@ static int parse_lobby_positions(const char *json, LobbyPlayer *out, int max_out
    loaded for this room.
    ========================================================================= */
 
-static int actor_id_is_phantom_safe(unsigned int aid)
+/*
+ * actor_id_must_exclude: truly unsafe actors that would harm the player,
+ * teleport them, give items, or alter room state.  Never use these.
+ */
+static int actor_id_must_exclude(unsigned int aid)
 {
     if (aid == 0x000U)
-        return 0; /* null terminator          */
+        return 1; /* null / terminator        */
     if (aid == 0x08cU)
-        return 0; /* Exit – teleports player  */
+        return 1; /* Exit – teleports player  */
     if (aid == 0x08eU)
-        return 0; /* Death boundary           */
+        return 1; /* Death boundary           */
     if (aid == 0x085U)
-        return 0; /* Gold Dango (pickup)      */
+        return 1; /* Gold Dango (pickup)      */
     if (aid == 0x088U)
-        return 0; /* Silver Doll (pickup)     */
+        return 1; /* Silver Doll (pickup)     */
+    if (aid == 0x089U)
+        return 1; /* Gold Doll (pickup)       */
+    if (aid == 0x091U)
+        return 1; /* Surprise Pack (1-UP)     */
     if (aid == 0x193U)
-        return 0; /* Key (pickup)             */
+        return 1; /* Key (pickup)             */
     if (aid == 0x190U || aid == 0x191U)
-        return 0; /* Flying tiles (kills)     */
-    if (aid >= 0x23cU && aid <= 0x270U)
-        return 0; /* Door actors              */
+        return 1; /* Flying tiles (kills)  */
+    if (aid == 0x3caU)
+        return 1; /* Spike floor              */
+    if (aid == 0x3fcU)
+        return 1; /* Floor flamethrower       */
+    if (aid >= 0x00caU && aid <= 0x00cfU)
+        return 1; /* Boss event triggers  */
+    return 0;
+}
+
+/*
+ * actor_id_is_phantom_safe: preferred actors for phantoms – NPCs and
+ * enemies that will just stand/animate harmlessly at an arbitrary position.
+ * Excludes interactive objects (doors, cameras, etc.) that could confuse
+ * or block the player even if not physically dangerous.
+ */
+static int actor_id_is_phantom_safe(unsigned int aid)
+{
+    if (actor_id_must_exclude(aid))
+        return 0;
+    /* Door actors – spawning extras creates duplicate locked / swinging doors */
+    if (aid == 0x23cU || aid == 0x23eU)
+        return 0;
+    if (aid == 0x241U || aid == 0x242U)
+        return 0;
+    if (aid == 0x24dU || aid == 0x256U)
+        return 0;
+    if (aid == 0x31fU || aid == 0x321U || aid == 0x32fU)
+        return 0;
     if (aid == 0x287U)
         return 0; /* Water                    */
     if (aid == 0x308U)
         return 0; /* Fixed camera             */
-    if (aid == 0x3caU)
-        return 0; /* Spike floor              */
     if (aid == 0x3ccU)
         return 0; /* Minimap                  */
     return 1;
@@ -435,60 +495,61 @@ void anchor_actors_room_load(void)
         buf[i] = ((unsigned char *)orig)[i];
 
     /* ------------------------------------------------------------------
-     * Find a safe actor definition already present in this room's file.
+     * Pick a single phantom definition from this room's actor list.
      *
-     * Room actor-data files pack their definitions starting at file offset 0,
-     * 16 bytes (sizeof ActorDefinition) per entry.  The instance array begins
-     * immediately after, at the in-file offset stored in actor_instances.
-     * We use that offset to count definitions, then scan for the first entry
-     * whose actor_id won't harm the player or cause a broken spawn.  The
-     * chosen bytes are COPIED into our buffer at PHANTOM_DEF_OFFSET so the
-     * phantom references only our copy – not a stale pointer into the
-     * original file.
+     * Preference order:
+     *   1. Any phantom-safe actor (safe NPC / enemy that won't harm player)
+     *   2. Any non-lethal actor (last resort)
      *
-     * Using a room-native actor_id guarantees its overlay code is loaded for
-     * this room (unlike a hard-coded ID like 0x02BE that only exists in rooms
-     * with the Old Man overlay).
+     * One definition is written at PHANTOM_DEF_OFFSET and shared by all
+     * phantoms regardless of which character the remote player is using.
      * ------------------------------------------------------------------ */
-    ActorDefinition *custom_def = (ActorDefinition *)(buf + PHANTOM_DEF_OFFSET);
-    {
-        unsigned int raw_ai_ptr =
-            (unsigned int)D_80231300_5EC7D0[D_800C7AB2]->actor_instances;
-        int def_count = 0;
-        if (raw_ai_ptr >= 0x08000000U && raw_ai_ptr < 0x09000000U)
-            def_count = (int)((raw_ai_ptr - 0x08000000U) /
-                              (unsigned int)sizeof(ActorDefinition));
+    unsigned int raw_ai_ptr =
+        (unsigned int)D_80231300_5EC7D0[D_800C7AB2]->actor_instances;
+    int def_count = 0;
+    if (raw_ai_ptr >= 0x08000000U && raw_ai_ptr < 0x09000000U)
+        def_count = (int)((raw_ai_ptr - 0x08000000U) /
+                          (unsigned int)sizeof(ActorDefinition));
 
-        int found_safe = 0;
-        if (def_count > 0 && def_count <= 512)
+    ActorDefinition *phantom_def = (ActorDefinition *)(buf + PHANTOM_DEF_OFFSET);
+    int found_def = 0;
+
+    if (def_count > 0 && def_count <= 512)
+    {
+        ActorDefinition *room_defs = (ActorDefinition *)buf;
+
+        /* Pass 1: any phantom-safe actor. */
+        for (int di = 0; di < def_count && !found_def; di++)
         {
-            ActorDefinition *room_defs = (ActorDefinition *)buf;
-            for (int di = 0; di < def_count && !found_safe; di++)
+            unsigned int aid =
+                (unsigned int)(unsigned short)(room_defs[di].data[0] >> 16);
+            if (actor_id_is_phantom_safe(aid))
             {
-                unsigned int aid =
-                    (unsigned int)(unsigned short)(room_defs[di].data[0] >> 16);
-                if (actor_id_is_phantom_safe(aid))
-                {
-                    custom_def->data[0] = room_defs[di].data[0];
-                    custom_def->data[1] = room_defs[di].data[1];
-                    custom_def->data[2] = room_defs[di].data[2];
-                    custom_def->data[3] = room_defs[di].data[3];
-                    found_safe = 1;
-                    recomp_printf("[anchor_actors] phantom actor_id=0x%04X (room def %d)\n",
-                                  (unsigned int)aid, di);
-                }
+                *phantom_def = room_defs[di];
+                found_def = 1;
+                recomp_printf("[anchor_actors] phantom actor 0x%04X\n", aid);
             }
         }
-        if (!found_safe)
+        /* Pass 2: any non-lethal actor (last resort). */
+        for (int di = 0; di < def_count && !found_def; di++)
         {
-            recomp_printf("[anchor_actors] no safe actor in room 0x%03X – skipping phantoms\n",
-                          (unsigned int)D_800C7AB2);
-            return;
+            unsigned int aid =
+                (unsigned int)(unsigned short)(room_defs[di].data[0] >> 16);
+            if (!actor_id_must_exclude(aid))
+            {
+                *phantom_def = room_defs[di];
+                found_def = 1;
+                recomp_printf("[anchor_actors] phantom actor (resort) 0x%04X\n", aid);
+            }
         }
     }
 
-    ActorDefinition *phantom_def_ptr =
-        (ActorDefinition *)(0x08000000U + PHANTOM_DEF_OFFSET);
+    if (!found_def)
+    {
+        recomp_printf("[anchor_actors] no usable actor in room 0x%03X – skipping\n",
+                      (unsigned int)D_800C7AB2);
+        return;
+    }
 
     /* Resolve the ActorInstance array into our new copy.
      * Check for both NULL (0) and not-found (-1) return values. */
@@ -497,6 +558,10 @@ void anchor_actors_room_load(void)
     if (instances_int == 0 || instances_int == -1)
         return;
     ActorInstance *instances = (ActorInstance *)instances_int;
+
+    /* Reset live-object tracking for phantoms in the new room. */
+    for (int i = 0; i < MAX_PHANTOMS; i++)
+        s_phantom_live_obj[i] = NULL;
 
     /* Count existing (room-native) instances. */
     int count = 0;
@@ -537,6 +602,10 @@ void anchor_actors_room_load(void)
                           players[i].cid, players[i].room, players[i].has_pos);
         }
 
+        /* All phantoms share the single definition written at PHANTOM_DEF_OFFSET. */
+        ActorDefinition *phantom_def_ptr =
+            (ActorDefinition *)(0x08000000U + PHANTOM_DEF_OFFSET);
+
         entry->rotation.pitch = 0;
         entry->rotation.yaw = 0;
         entry->rotation.roll = 0;
@@ -545,6 +614,17 @@ void anchor_actors_room_load(void)
         entry->unk_11 = 0;
         entry->unk_12 = 0;
         entry->unk_13 = 0;
+
+        /* Record spawn position for per-frame live update. */
+        s_phantom_spawn_x[injected] = (same_room && players[i].has_pos)
+                                          ? (float)players[i].x
+                                          : 0.0f;
+        s_phantom_spawn_y[injected] = (same_room && players[i].has_pos)
+                                          ? (float)players[i].y
+                                          : (float)HIDDEN_Y;
+        s_phantom_spawn_z[injected] = (same_room && players[i].has_pos)
+                                          ? (float)players[i].z
+                                          : 0.0f;
         injected++;
     }
 
@@ -564,6 +644,11 @@ void anchor_actors_room_load(void)
 
     /* Record the file_id we just redirected so HOOK_RETURN preserves it. */
     s_current_room_file_id = file_id;
+
+    /* Store phantom instance range for per-frame live updates. */
+    s_phantom_start_idx = count;
+    s_phantom_count = injected;
+    s_update_timer = 0;
 
     recomp_printf(
         "[anchor_actors] room 0x%03X: injected %d phantom actor(s) for %d lobby player(s)\n",
@@ -593,6 +678,175 @@ void anchor_actors_room_load_return(void)
             recomp_free(s_redirections[i].redirected_data);
             s_redirections[i].redirected_data = NULL;
             s_redirections[i].file_id = 0;
+        }
+    }
+    /* Reset live-object cache since the old room's objects are gone. */
+    for (int i = 0; i < MAX_PHANTOMS; i++)
+        s_phantom_live_obj[i] = NULL;
+}
+
+/* =========================================================================
+   RECOMP_HOOK_RETURN: per-frame real-time position update
+
+   Fires every game frame after func_80002040_2C40 (the main per-frame tick).
+   Every UPDATE_INTERVAL frames it:
+     1. Polls the latest lobby positions from Python.
+     2. Updates the ActorInstance position fields (for any future re-spawns).
+     3. Walks the CLS_W linked list starting from the player's CLS_BG_W
+        object to find our live phantom actors and update their world-space
+        float positions directly, giving real-time movement.
+
+   CLS_W layout (all world objects):
+     [0x00] N64 vaddr of next node  (4 bytes, 0 = end of list)
+     [0x04] kind / priority         (4 bytes)
+     [0x08] float x                 (VEC3F_W)
+     [0x0C] float y
+     [0x10] float z
+   ========================================================================= */
+
+#define UPDATE_INTERVAL 20 /* frames between position refreshes (~3 Hz) */
+/* stride and count of the CLS_BG_W object_heap pool in SYS_W */
+#define CLSBGW_STRIDE 0x98U  /* sizeof(CLS_BG_W)  */
+#define CLSBGW_POOL_SIZE 192 /* object_heap count */
+
+RECOMP_HOOK_RETURN("func_80002040_2C40")
+void anchor_actors_per_frame(void)
+{
+    if (s_phantom_count == 0)
+        return;
+    if (!anchor_is_connected())
+        return;
+
+    s_update_timer++;
+    if (s_update_timer < UPDATE_INTERVAL)
+        return;
+    s_update_timer = 0;
+
+    /* Guard: room metadata must still be set up. */
+    if (!D_80231300_5EC7D0[D_800C7AB2])
+        return;
+
+    /* Fetch the latest positions from Python. */
+    char *json = anchor_get_lobby_positions_json();
+    if (!json)
+        return;
+    LobbyPlayer players[MAX_PHANTOMS];
+    int n = parse_lobby_positions(json, players, MAX_PHANTOMS);
+    recomp_free(json);
+
+    /* Bail if player count changed – wait for next room load to re-sync. */
+    if (n != s_phantom_count)
+        return;
+
+    /* ---- Step 1: update ActorInstance positions (used for future spawns) ---- */
+    if (s_current_room_file_id != 0)
+    {
+        int inst_int = func_80014840_15440(
+            (int)D_80231300_5EC7D0[D_800C7AB2]->actor_instances,
+            s_current_room_file_id);
+        if (inst_int != 0 && inst_int != -1)
+        {
+            ActorInstance *instances = (ActorInstance *)inst_int;
+            for (int i = 0; i < n; i++)
+            {
+                ActorInstance *entry = &instances[s_phantom_start_idx + i];
+                int same_room = (players[i].room == (int)D_800C7AB2);
+                if (same_room && players[i].has_pos)
+                {
+                    entry->position.x = (short)players[i].x;
+                    entry->position.y = (short)players[i].y;
+                    entry->position.z = (short)players[i].z;
+                }
+                else
+                {
+                    entry->position.x = 0;
+                    entry->position.y = HIDDEN_Y;
+                    entry->position.z = 0;
+                }
+            }
+        }
+    }
+
+    /* ---- Step 2: scan CLS_BG_W object pool to update live positions --------
+     *
+     * All CLS_BG_W objects live in object_heap[192] – a contiguous array with
+     * stride sizeof(CLS_BG_W) = CLSBGW_STRIDE (0x98) bytes.  The player's
+     * object bg_w is one slot in this pool.  Walking ±(CLSBGW_POOL_SIZE-1)
+     * strides from bg_w covers every pool slot without needing the global
+     * CLS_W linked-list head (which the player may be at the tail of).
+     * CLS_BG_W layout:
+     *   +0x00  CLS_W* next (list link, 4B)
+     *   +0x04  unsigned char kind  ← 0 = inactive slot
+     *   +0x08  float tx  (world X)
+     *   +0x0C  float ty  (world Y)
+     *   +0x10  float tz  (world Z)
+     * -------------------------------------------------------------------- */
+    void *player_hw = D_801FC60C_5B851C;
+    if (!player_hw)
+        return;
+
+    for (int i = 0; i < n; i++)
+    {
+        int same_room = (players[i].room == (int)D_800C7AB2);
+        float new_x = (same_room && players[i].has_pos) ? (float)players[i].x : 0.0f;
+        float new_y = (same_room && players[i].has_pos) ? (float)players[i].y : (float)HIDDEN_Y;
+        float new_z = (same_room && players[i].has_pos) ? (float)players[i].z : 0.0f;
+
+        if (s_phantom_live_obj[i] != NULL)
+        {
+            /* Cached live pointer – update directly. */
+            *(float *)((char *)s_phantom_live_obj[i] + 0x08) = new_x;
+            *(float *)((char *)s_phantom_live_obj[i] + 0x0C) = new_y;
+            *(float *)((char *)s_phantom_live_obj[i] + 0x10) = new_z;
+            s_phantom_spawn_x[i] = new_x;
+            s_phantom_spawn_y[i] = new_y;
+            s_phantom_spawn_z[i] = new_z;
+            continue;
+        }
+
+        /* Search for an active pool entry near this phantom's spawn position. */
+        float ex = s_phantom_spawn_x[i];
+        float ey = s_phantom_spawn_y[i];
+        float ez = s_phantom_spawn_z[i];
+
+        unsigned char *base = (unsigned char *)player_hw;
+        int ph_found = 0;
+        for (int d = -(CLSBGW_POOL_SIZE - 1); d < CLSBGW_POOL_SIZE && !ph_found; d++)
+        {
+            unsigned char *cand = base + d * (int)CLSBGW_STRIDE;
+            /* Validate plausible N64 RDRAM address */
+            unsigned int caddr = (unsigned int)(void *)cand;
+            if (caddr < 0x80010000U || caddr >= 0x80800000U)
+                continue;
+            /* Skip inactive slots (CLS_W.kind at +0x04) */
+            if (cand[4] == 0)
+                continue;
+            /* Skip the player's own slot */
+            if ((void *)cand == player_hw)
+                continue;
+            float cx = *(float *)(cand + 0x08);
+            float cy = *(float *)(cand + 0x0C);
+            float cz = *(float *)(cand + 0x10);
+            float dx = cx - ex;
+            if (dx < 0)
+                dx = -dx;
+            float dy = cy - ey;
+            if (dy < 0)
+                dy = -dy;
+            float dz = cz - ez;
+            if (dz < 0)
+                dz = -dz;
+            if (dx < 300.0f && dy < 300.0f && dz < 300.0f)
+            {
+                s_phantom_live_obj[i] = (void *)cand;
+                *(float *)(cand + 0x08) = new_x;
+                *(float *)(cand + 0x0C) = new_y;
+                *(float *)(cand + 0x10) = new_z;
+                s_phantom_spawn_x[i] = new_x;
+                s_phantom_spawn_y[i] = new_y;
+                s_phantom_spawn_z[i] = new_z;
+                ph_found = 1;
+            }
         }
     }
 }

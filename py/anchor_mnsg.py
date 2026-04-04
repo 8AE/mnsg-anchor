@@ -936,7 +936,9 @@ def get_lobby_positions_json() -> str:
             px = int(v.get("posX", 0)) if has_pos else 0
             py = int(v.get("posY", 0)) if has_pos else 0
             pz = int(v.get("posZ", 0)) if has_pos else 0
-            result.append({"cid": cid, "room": room_id, "x": px, "y": py, "z": pz, "hp": 1 if has_pos else 0})
+            char_lookup = {"Goemon": 0, "Ebisumaru": 1, "Sasuke": 2, "Yae": 3}
+            ch = char_lookup.get(v.get("character", "Goemon"), 0)
+            result.append({"cid": cid, "room": room_id, "x": px, "y": py, "z": pz, "hp": 1 if has_pos else 0, "ch": ch})
     return json.dumps(result, separators=(",", ":"))
 
 
