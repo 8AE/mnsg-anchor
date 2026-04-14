@@ -124,6 +124,24 @@ extern OverlayEntry D_80167FC0_168BC0[WAVE_MAX];
 extern int func_800141C4_14DC4(unsigned int file_id);
 /* overlay_resolve_pointer  */
 extern int func_80014840_15440(int pointer, unsigned int file_id);
+/*
+ * wave_load_single – load one wave overlay by wave number.
+ *
+ * Disassembly (0x80013B14) shows:
+ *   – Walks D_80167FC0_168BC0 looking for an existing entry with the same
+ *     wave_no.  If found, returns immediately (idempotent – no duplicate).
+ *   – On reaching the sentinel entry (wave_no == 0) it loads the file from
+ *     ROM and calls func_800142BC_14EBC which runs the overlay's init code,
+ *     registering the actor type in the global actor-registry table used by
+ *     actor_manager_spawn_actors.
+ *   – Returns 0 if the wave table is full (all 48 slots used).
+ *
+ * Wave file 0x02BE contains the Old Man actor overlay (actor ID 0x02BE).
+ * Calling this once is enough – the entry persists across room transitions
+ * because the batch unloader only removes waves from the room's official
+ * load list; our force-loaded entry is never on that list.
+ */
+extern int func_80013B14_14714(int wave_no);
 
 /* =========================================================================
    Overlay redirection table  (same pattern as MNSGRecompRando)
@@ -220,20 +238,27 @@ RECOMP_PATCH int func_800141C4_14DC4(unsigned int file_id)
 }
 
 /* =========================================================================
-   Phantom NPC actor definition
+   Phantom NPC actor definition – Old Man (0x02BE)
 
-   We use actor 0x02BE (Old Man) from vanilla.mn64.export.txt as the
-   online player phantom.  Old Man is the most common humanoid NPC in
-   the game (19 appearances in vanilla), appears as a standing human
-   character, and has a simple definition with no mandatory parameters.
+   Actor 0x02BE (Old Man) is the universal phantom used to represent online
+   players.  It is a standing humanoid NPC with no harmful behaviour.
 
-   Actor file definitions are addressed with an 0x08000000 base:
-       func_80014840_15440(0x08000000 + byte_offset, file_id)
-   resolves to (file_buf + byte_offset) after our redirect is installed.
+   Strategy:
+     We write a hardcoded 16-byte ActorDefinition for 0x02BE at
+     PHANTOM_DEF_OFFSET (near the end of our 64 KB copy of the room's actor
+     file) and point every injected ActorInstance at it.
 
-   We write the 16-byte definition at PHANTOM_DEF_OFFSET near the end of
-   our 64 KB buffer, well clear of any real room data (typical actor files
-   are a few KB at most).
+   Actor availability:
+     The game's spawn path reads actor_id from the definition, looks it up
+     in a global registry table, and returns NULL when the actor overlay is
+     not loaded for the current room.  That NULL return is a silent no-op –
+     no crash.  So in dungeon rooms that never load the Old Man overlay no
+     phantom appears, which is preferable to spawning a random room actor.
+
+   N64 / host byte-order note:
+     recomp_alloc() buffers are XOR-3 byte-swapped in N64 RDRAM.  Writing
+     0x02BE0000 from host C stores [00,00,BE,02] in host memory, which the
+     N64 reads back as big-endian 0x02BE0000 (actor_id = 0x02BE via lhu).
    ========================================================================= */
 
 #define PHANTOM_DEF_OFFSET 0xF000U /* byte offset in our 64 KB buffer   */
@@ -345,89 +370,51 @@ static int parse_lobby_positions(const char *json, LobbyPlayer *out, int max_out
     return count;
 }
 
-/* =========================================================================
-   Actor definition safety filter
+/* (Safety-filter functions removed – phantom actor is now hardcoded to
+   0x02BE Old Man; no per-room actor selection is needed.) */
 
-   Returns 1 when actor_id is safe to use as a standing phantom.
-   We exclude actors that would teleport the player, kill them, give items,
-   or otherwise cause havoc when spawned at an arbitrary world position.
-   Everything else (signs, shopkeepers, NPCs, enemies) is considered safe
-   enough for a temporary phantom – it keeps the actor code that is already
-   loaded for this room.
+/* =========================================================================
+   RECOMP_HOOK: actor_manager_spawn_actors  (fires BEFORE the original function)
+
+   func_8020D848_5C8D18 is scheduled by actor_manager_initialize and runs
+   once per room load to instantiate all actors in the room's actor-instance
+   list – including the phantom entries we injected in anchor_actors_room_load.
+
+   We call func_80013B14_14714(0x02BE) here rather than in the earlier
+   actor_manager_initialize hook because the async wave-unloader state machine
+   runs between the two functions.  When transitioning FROM a room that already
+   had the Old Man loaded, the unloader strips wave 0x02BE from the table
+   before spawn runs – leaving PTR_ARRAY_802287BC[0x02BE] un-initialised and
+   causing a crash.
+
+   Hooking spawn directly eliminates that window:
+     1. func_80013B14_14714(0x02BE) is called synchronously (osPiStartDma +
+        blocking osRecvMesg) – the wave data is in RAM before we return.
+     2. func_800142BC populates PTR_ARRAY_802287BC[0x02BE] and the actor-
+        registry byte so the spawner can find and create Old Man actors.
+     3. actor_manager_spawn_actors runs immediately after our hook returns –
+        wave 0x02BE cannot be unloaded in between.
+
+   func_80013B14_14714 is idempotent: if wave 0x02BE is already in the wave
+   table (rooms that normally load Old Man), it returns immediately.
    ========================================================================= */
 
-/*
- * actor_id_must_exclude: truly unsafe actors that would harm the player,
- * teleport them, give items, or alter room state.  Never use these.
- */
-static int actor_id_must_exclude(unsigned int aid)
+RECOMP_HOOK("func_8020D848_5C8D18")
+void anchor_actors_ensure_wave_before_spawn(void)
 {
-    if (aid == 0x000U)
-        return 1; /* null / terminator        */
-    if (aid == 0x08cU)
-        return 1; /* Exit – teleports player  */
-    if (aid == 0x08eU)
-        return 1; /* Death boundary           */
-    if (aid == 0x085U)
-        return 1; /* Gold Dango (pickup)      */
-    if (aid == 0x088U)
-        return 1; /* Silver Doll (pickup)     */
-    if (aid == 0x089U)
-        return 1; /* Gold Doll (pickup)       */
-    if (aid == 0x091U)
-        return 1; /* Surprise Pack (1-UP)     */
-    if (aid == 0x193U)
-        return 1; /* Key (pickup)             */
-    if (aid == 0x190U || aid == 0x191U)
-        return 1; /* Flying tiles (kills)  */
-    if (aid == 0x3caU)
-        return 1; /* Spike floor              */
-    if (aid == 0x3fcU)
-        return 1; /* Floor flamethrower       */
-    if (aid >= 0x00caU && aid <= 0x00cfU)
-        return 1; /* Boss event triggers  */
-    return 0;
-}
-
-/*
- * actor_id_is_phantom_safe: preferred actors for phantoms – NPCs and
- * enemies that will just stand/animate harmlessly at an arbitrary position.
- * Excludes interactive objects (doors, cameras, etc.) that could confuse
- * or block the player even if not physically dangerous.
- */
-static int actor_id_is_phantom_safe(unsigned int aid)
-{
-    if (actor_id_must_exclude(aid))
-        return 0;
-    /* Door actors – spawning extras creates duplicate locked / swinging doors */
-    if (aid == 0x23cU || aid == 0x23eU)
-        return 0;
-    if (aid == 0x241U || aid == 0x242U)
-        return 0;
-    if (aid == 0x24dU || aid == 0x256U)
-        return 0;
-    if (aid == 0x31fU || aid == 0x321U || aid == 0x32fU)
-        return 0;
-    if (aid == 0x287U)
-        return 0; /* Water                    */
-    if (aid == 0x308U)
-        return 0; /* Fixed camera             */
-    if (aid == 0x3ccU)
-        return 0; /* Minimap                  */
-    return 1;
+    func_80013B14_14714(0x02BE);
 }
 
 /* =========================================================================
    RECOMP_HOOK: room actor-setup  (fires BEFORE the original function)
 
-   Creates one phantom ActorInstance for every player currently in the lobby:
-     • Players in the same raw room as the local client → placed at their
-       last server-reported world-space position.
-     • Players in a different room (or whose position is not yet known) →
-       placed at the HIDDEN_Y coordinate so they are not visible.
+   Injects one ActorInstance (actor 0x02BE – Old Man) per online lobby
+   player into the room's actor data before the game spawns anything:
+     • Players in the same raw room → placed at their last server position.
+     • Players in a different room (or no position yet) → parked at HIDDEN_Y.
 
-   On the next room load the positions are re-evaluated, so a player who
-   enters the room will become visible and one who leaves will be hidden.
+   The actual wave loading for 0x02BE is handled by
+   anchor_actors_ensure_wave_before_spawn (see above), not here.
    ========================================================================= */
 
 RECOMP_HOOK("func_8020D724_5C8BF4")
@@ -495,61 +482,18 @@ void anchor_actors_room_load(void)
         buf[i] = ((unsigned char *)orig)[i];
 
     /* ------------------------------------------------------------------
-     * Pick a single phantom definition from this room's actor list.
+     * Write the hardcoded Old Man (0x02BE) phantom definition.
      *
-     * Preference order:
-     *   1. Any phantom-safe actor (safe NPC / enemy that won't harm player)
-     *   2. Any non-lethal actor (last resort)
-     *
-     * One definition is written at PHANTOM_DEF_OFFSET and shared by all
-     * phantoms regardless of which character the remote player is using.
+     * All online-player phantoms share this single definition placed at
+     * PHANTOM_DEF_OFFSET in our buffer.  The game's spawn path looks up
+     * 0x02BE in the global actor registry; if the overlay isn't loaded for
+     * this room the spawn silently returns NULL – no crash, no phantom.
      * ------------------------------------------------------------------ */
-    unsigned int raw_ai_ptr =
-        (unsigned int)D_80231300_5EC7D0[D_800C7AB2]->actor_instances;
-    int def_count = 0;
-    if (raw_ai_ptr >= 0x08000000U && raw_ai_ptr < 0x09000000U)
-        def_count = (int)((raw_ai_ptr - 0x08000000U) /
-                          (unsigned int)sizeof(ActorDefinition));
-
     ActorDefinition *phantom_def = (ActorDefinition *)(buf + PHANTOM_DEF_OFFSET);
-    int found_def = 0;
-
-    if (def_count > 0 && def_count <= 512)
-    {
-        ActorDefinition *room_defs = (ActorDefinition *)buf;
-
-        /* Pass 1: any phantom-safe actor. */
-        for (int di = 0; di < def_count && !found_def; di++)
-        {
-            unsigned int aid =
-                (unsigned int)(unsigned short)(room_defs[di].data[0] >> 16);
-            if (actor_id_is_phantom_safe(aid))
-            {
-                *phantom_def = room_defs[di];
-                found_def = 1;
-                recomp_printf("[anchor_actors] phantom actor 0x%04X\n", aid);
-            }
-        }
-        /* Pass 2: any non-lethal actor (last resort). */
-        for (int di = 0; di < def_count && !found_def; di++)
-        {
-            unsigned int aid =
-                (unsigned int)(unsigned short)(room_defs[di].data[0] >> 16);
-            if (!actor_id_must_exclude(aid))
-            {
-                *phantom_def = room_defs[di];
-                found_def = 1;
-                recomp_printf("[anchor_actors] phantom actor (resort) 0x%04X\n", aid);
-            }
-        }
-    }
-
-    if (!found_def)
-    {
-        recomp_printf("[anchor_actors] no usable actor in room 0x%03X – skipping\n",
-                      (unsigned int)D_800C7AB2);
-        return;
-    }
+    phantom_def->data[0] = (int)0x02BE0000; /* actor_id = 0x02BE, param = 0 */
+    phantom_def->data[1] = 0;
+    phantom_def->data[2] = 0;
+    phantom_def->data[3] = 0;
 
     /* Resolve the ActorInstance array into our new copy.
      * Check for both NULL (0) and not-found (-1) return values. */
@@ -651,7 +595,7 @@ void anchor_actors_room_load(void)
     s_update_timer = 0;
 
     recomp_printf(
-        "[anchor_actors] room 0x%03X: injected %d phantom actor(s) for %d lobby player(s)\n",
+        "[anchor_actors] room 0x%03X: injected %d Old Man (0x02BE) phantom(s) for %d lobby player(s)\n",
         (unsigned int)D_800C7AB2, injected, n);
 }
 
