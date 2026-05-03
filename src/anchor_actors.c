@@ -13,7 +13,6 @@
 #define ANCHOR_REMOTE_MAX 8
 #define STATE_SEND_FRAMES 6
 #define LOBBY_REFRESH_FRAMES 3
-#define PARTICLE_SPAWN_FRAMES 45
 #define PARTICLE_COUNT 3
 
 typedef struct PlayerObject
@@ -56,7 +55,9 @@ static RemotePlayer s_remote_players[ANCHOR_REMOTE_MAX];
 static int s_remote_count;
 static int s_state_send_timer;
 static int s_lobby_refresh_timer;
-static int s_particle_timers[ANCHOR_REMOTE_MAX];
+static void *s_marker_tasks[ANCHOR_REMOTE_MAX];
+static void *s_marker_particles[ANCHOR_REMOTE_MAX];
+static void *s_marker_owner_task;
 
 static const char *const s_char_names[4] = {
     "Goemon", "Ebisumaru", "Sasuke", "Yae"};
@@ -113,6 +114,17 @@ static unsigned char read_u8_at(void *obj, unsigned int offset)
     unsigned char *p = (unsigned char *)obj;
 
     return *(unsigned char *)(p + offset);
+}
+
+static void set_particle_visual(void *particle, unsigned char alpha, float scale, const unsigned char *color)
+{
+    write_float_at(particle, 0x1c, scale);
+    write_float_at(particle, 0x20, scale);
+    write_float_at(particle, 0x24, scale);
+
+    func_801DC554_598464(0, (unsigned char *)particle + 0x80, D_802049C0_5C08D0,
+                          0, 0, 0,
+                          color[0], color[1], color[2], alpha);
 }
 
 static int parse_int_after(const char *obj, const char *key, int fallback)
@@ -244,60 +256,52 @@ static void init_remote_particle(void *effect_task, void *particle, const Remote
     func_801EE750_5AA660(particle, D_80204BF8_5C0B08, 2, ptr_low32(particle_bytes + 0x80));
     func_801EF684_5AB594(particle, state);
 
-    write_float_at(particle, 0x1c, 0.18f);
-    write_float_at(particle, 0x20, 0.18f);
-    write_float_at(particle, 0x24, 0.18f);
     write_u8_at(effect_task, 0x9c + particle_index, 0xe8);
-
-    func_801DC554_598464(0, particle_bytes + 0x80, D_802049C0_5C08D0,
-                          0, 0, 0,
-                          color[0], color[1], color[2], 0xff);
+    set_particle_visual(particle, 0xe8, 0.18f, color);
 }
 
 static void remote_sparkle_update(void *effect_task, void *first_particle)
 {
+    static const unsigned char colors[4][3] = {
+        {255, 224, 64},
+        {64, 192, 255},
+        {255, 96, 192},
+        {128, 255, 128}};
     void *particle = first_particle;
-    int done_count = 0;
+    unsigned char phase;
+    unsigned char slot_color;
     int i;
 
-    if (read_u8_at(effect_task, 0x60) >= 8 || !first_particle)
+    if (!first_particle)
     {
         write_u8_at(effect_task, 0x65, 1);
         return;
     }
-    write_u8_at(effect_task, 0x60, read_u8_at(effect_task, 0x60) + 1);
+
+    phase = read_u8_at(effect_task, 0x60) + 1;
+    slot_color = read_u8_at(effect_task, 0x62) & 3;
+    write_u8_at(effect_task, 0x60, phase);
 
     for (i = 0; particle && i < PARTICLE_COUNT; ++i)
     {
-        unsigned char alpha = read_u8_at(effect_task, 0x9c + i);
-        unsigned char next_alpha;
+        unsigned char alpha = 0;
         float scale;
 
-        if (alpha <= 0x28)
+        if (read_u8_at(effect_task, 0x61))
         {
-            next_alpha = 0;
-            done_count++;
-        }
-        else
-        {
-            next_alpha = alpha - 0x28;
+            unsigned char pulse = (phase + (unsigned char)(i * 9)) & 0x1f;
+
+            if (pulse > 0x10)
+                pulse = 0x20 - pulse;
+            alpha = 0x78 + pulse * 7;
         }
 
-        write_u8_at(effect_task, 0x9c + i, next_alpha);
-        scale = 0.04f + ((float)next_alpha * (1.0f / 255.0f)) * 0.18f;
-        write_float_at(particle, 0x1c, scale);
-        write_float_at(particle, 0x20, scale);
-        write_float_at(particle, 0x24, scale);
-
-        func_801DC554_598464(0, (unsigned char *)particle + 0x80, D_802049C0_5C08D0,
-                              0, 0, 0,
-                              255, 255, 255, next_alpha);
+        write_u8_at(effect_task, 0x9c + i, alpha);
+        scale = 0.07f + ((float)alpha * (1.0f / 255.0f)) * 0.09f;
+        set_particle_visual(particle, alpha, scale, colors[slot_color]);
 
         particle = read_ptr_at(particle, 0x00);
     }
-
-    if (done_count == PARTICLE_COUNT)
-        write_u8_at(effect_task, 0x65, 1);
 }
 
 static void init_remote_particle_chain(void *effect_task, void *first_particle, const RemotePlayer *remote, int slot_index)
@@ -314,38 +318,95 @@ static void init_remote_particle_chain(void *effect_task, void *first_particle, 
     move_particle_chain(first_particle, remote);
 }
 
-static void spawn_remote_particle_marker(const RemotePlayer *remote, int slot_index)
+static void clear_marker_slots_for_new_owner(void)
+{
+    int i;
+
+    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+    {
+        s_marker_tasks[i] = 0;
+        s_marker_particles[i] = 0;
+    }
+    s_marker_owner_task = D_801FC604_5B8514;
+}
+
+static void set_marker_slot_visible(int slot_index, int visible)
+{
+    void *effect_task = s_marker_tasks[slot_index];
+    void *particle = s_marker_particles[slot_index];
+    int i;
+
+    if (!effect_task)
+        return;
+
+    write_u8_at(effect_task, 0x61, visible ? 1 : 0);
+    if (visible || !particle)
+        return;
+
+    for (i = 0; particle && i < PARTICLE_COUNT; ++i)
+    {
+        static const unsigned char white[3] = {255, 255, 255};
+
+        write_u8_at(effect_task, 0x9c + i, 0);
+        set_particle_visual(particle, 0, 0.01f, white);
+        particle = read_ptr_at(particle, 0x00);
+    }
+}
+
+static int ensure_remote_particle_marker(const RemotePlayer *remote, int slot_index)
 {
     void *effect_task;
     void *particles;
 
     if (!remote || !D_801FC604_5B8514)
-        return;
+        return 0;
+
+    if (s_marker_owner_task != D_801FC604_5B8514)
+        clear_marker_slots_for_new_owner();
+
+    if (s_marker_tasks[slot_index] && s_marker_particles[slot_index])
+    {
+        write_u8_at(s_marker_tasks[slot_index], 0x61, 1);
+        write_u8_at(s_marker_tasks[slot_index], 0x62, (unsigned char)(slot_index & 3));
+        move_particle_chain(s_marker_particles[slot_index], remote);
+        return 1;
+    }
 
     effect_task = func_80034E08_35A08(D_801FC604_5B8514, remote_sparkle_update, 0);
     if (!effect_task)
-        return;
+        return 0;
 
     func_801EE4AC_5AA3BC(effect_task, D_801FC604_5B8514, 0);
     write_u8_at(effect_task, 0x60, 0);
+    write_u8_at(effect_task, 0x61, 1);
+    write_u8_at(effect_task, 0x62, (unsigned char)(slot_index & 3));
     particles = func_80035EEC_36AEC(effect_task, 2, PARTICLE_COUNT);
     if (!particles)
     {
         write_u8_at(effect_task, 0x65, 1);
-        return;
+        return 0;
     }
 
+    s_marker_tasks[slot_index] = effect_task;
+    s_marker_particles[slot_index] = particles;
     init_remote_particle_chain(effect_task, particles, remote, slot_index);
+    return 1;
 }
 
 static void update_remote_particle_markers(void)
 {
     int remote_index;
     int slot_index = 0;
+    int hide_index;
+
+    if (s_marker_owner_task != D_801FC604_5B8514)
+        clear_marker_slots_for_new_owner();
 
     if (!anchor_is_connected())
     {
         s_remote_count = 0;
+        for (hide_index = 0; hide_index < ANCHOR_REMOTE_MAX; ++hide_index)
+            set_marker_slot_visible(hide_index, 0);
         return;
     }
 
@@ -358,16 +419,12 @@ static void update_remote_particle_markers(void)
         if (!remote->has_pos || remote->room != (int)D_800C7AB2)
             continue;
 
-        if (s_particle_timers[slot_index] > 0)
-            s_particle_timers[slot_index]--;
-        else
-        {
-            spawn_remote_particle_marker(remote, slot_index);
-            s_particle_timers[slot_index] = PARTICLE_SPAWN_FRAMES;
-        }
-
+        ensure_remote_particle_marker(remote, slot_index);
         slot_index++;
     }
+
+    for (hide_index = slot_index; hide_index < ANCHOR_REMOTE_MAX; ++hide_index)
+        set_marker_slot_visible(hide_index, 0);
 }
 
 RECOMP_HOOK_RETURN("func_80002040_2C40")
