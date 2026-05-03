@@ -1,23 +1,20 @@
 /**
  * @file anchor_actors.c
- * @brief Anchor remote-player display via the game's unused Player 2 slots.
+ * @brief Anchor remote-player state publishing and particle presence markers.
  *
- * The actor-injection and direct render-list approaches can both crash RT64
- * when an overlay/display-list pointer is not exactly what the renderer expects.
- * This module instead mirrors a same-room remote player into the dormant
- * Player 2 object globals discovered in Ghidra, using engine-allocated
- * child objects from the real player task.
+ * Remote characters are represented as short-lived effect bursts instead of
+ * player models. This avoids the fragile player constructor and lets the
+ * engine's own effect task update/draw path handle the visual work.
  */
 
 #include "modding.h"
 #include "anchor.h"
 
-#define PLAYER_OBJECT_SIZE 0x98
-#define PLAYER_PAYLOAD_OFFSET 0x14
-#define PLAYER_PAYLOAD_END 0x74
 #define ANCHOR_REMOTE_MAX 8
 #define STATE_SEND_FRAMES 6
 #define LOBBY_REFRESH_FRAMES 3
+#define PARTICLE_SPAWN_FRAMES 18
+#define PARTICLE_COUNT 3
 
 typedef struct PlayerObject
 {
@@ -25,7 +22,6 @@ typedef struct PlayerObject
     float x;
     float y;
     float z;
-    unsigned char rest[PLAYER_OBJECT_SIZE - 0x14];
 } PlayerObject;
 
 typedef struct RemotePlayer
@@ -42,28 +38,26 @@ typedef struct RemotePlayer
 extern unsigned short D_800C7AB2;
 
 extern void *D_801FC604_5B8514;
-extern void *D_801FC608; /* player 2 task */
 extern PlayerObject *D_801FC60C_5B851C;
-extern PlayerObject *D_801FC610; /* player 2 object */
-extern void *D_801FC614_5B8524;
-extern void *D_801FC61C_5B852C;
 
-extern int func_80035EEC_36AEC(int task, short kind, unsigned int count);
+extern void *func_80034E08_35A08(void *task_list, void (*update)(void), unsigned short flags);
+extern void *func_80035EEC_36AEC(void *task, short kind, unsigned int count);
+extern void func_801EF6F0_5AB600(void);
+extern void func_801EE4AC_5AA3BC(void *task, void *parent_task, unsigned char effect_type);
+extern void func_801EE750_5AA660(void *particle, void *config, int type, unsigned int flags);
+extern void func_801EF684_5AB594(void *particle, void *state);
+extern void func_801DC554_598464(int set_prim, void *dl, void *texture, int prim_r, unsigned int prim_g, unsigned int prim_b, int env_r, unsigned int env_g, unsigned int env_b, unsigned int alpha);
+
+extern unsigned char D_80204DA0_5C0CB0[];
+extern unsigned char D_802049C0_5C08D0[];
 
 #define CURRENT_CHAR_PTR ((volatile unsigned int *)0x8015C5DC)
-#define PLAYER2_PARENT_PTR (*(void **)0x801FC618)
-#define PLAYER2_SHADOW_PTR (*(void **)0x801FC620)
 
-static PlayerObject *s_player2_object;
-static PlayerObject *s_player2_parent;
-static PlayerObject *s_player2_shadow;
-static void *s_player2_alloc_task;
-static PlayerObject s_character_templates[4];
-static unsigned char s_have_character_template[4];
 static RemotePlayer s_remote_players[ANCHOR_REMOTE_MAX];
 static int s_remote_count;
 static int s_state_send_timer;
 static int s_lobby_refresh_timer;
+static int s_particle_timers[ANCHOR_REMOTE_MAX];
 
 static const char *const s_char_names[4] = {
     "Goemon", "Ebisumaru", "Sasuke", "Yae"};
@@ -89,24 +83,30 @@ static const char *sfind(const char *hay, const char *needle)
     return 0;
 }
 
-static void copy_bytes(void *dst, const void *src, unsigned int size)
+static void write_u8_at(void *obj, unsigned int offset, unsigned char value)
 {
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-    unsigned int i;
+    unsigned char *p = (unsigned char *)obj;
 
-    for (i = 0; i < size; ++i)
-        d[i] = s[i];
+    *(unsigned char *)(p + offset) = value;
 }
 
-static void copy_player_payload(PlayerObject *dst, const PlayerObject *src)
+static void write_float_at(void *obj, unsigned int offset, float value)
 {
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
+    unsigned char *p = (unsigned char *)obj;
 
-    copy_bytes(d + PLAYER_PAYLOAD_OFFSET,
-               s + PLAYER_PAYLOAD_OFFSET,
-               PLAYER_PAYLOAD_END - PLAYER_PAYLOAD_OFFSET);
+    *(float *)(p + offset) = value;
+}
+
+static void *read_ptr_at(void *obj, unsigned int offset)
+{
+    unsigned char *p = (unsigned char *)obj;
+
+    return *(void **)(p + offset);
+}
+
+static unsigned int ptr_low32(void *ptr)
+{
+    return (unsigned int)(unsigned long)ptr;
 }
 
 static int parse_int_after(const char *obj, const char *key, int fallback)
@@ -189,18 +189,6 @@ static void publish_local_state(PlayerObject *local_obj)
     anchor_set_character(s_char_names[char_idx]);
 }
 
-static void remember_character_template(PlayerObject *local_obj)
-{
-    unsigned int char_idx;
-
-    if (!local_obj)
-        return;
-
-    char_idx = *CURRENT_CHAR_PTR & 3;
-    copy_bytes(&s_character_templates[char_idx], local_obj, PLAYER_OBJECT_SIZE);
-    s_have_character_template[char_idx] = 1;
-}
-
 static void refresh_lobby(void)
 {
     char *json;
@@ -218,109 +206,123 @@ static void refresh_lobby(void)
         recomp_free(json);
 }
 
-static RemotePlayer *first_same_room_remote(void)
+static void move_particle_chain(void *first_particle, const RemotePlayer *remote)
 {
+    static const float x_offsets[PARTICLE_COUNT] = {0.0f, 18.0f, -18.0f};
+    static const float y_offsets[PARTICLE_COUNT] = {34.0f, 58.0f, 82.0f};
+    static const float z_offsets[PARTICLE_COUNT] = {0.0f, -10.0f, 10.0f};
+    void *particle = first_particle;
     int i;
 
-    for (i = 0; i < s_remote_count; ++i)
+    for (i = 0; particle && i < PARTICLE_COUNT; ++i)
     {
-        if (s_remote_players[i].has_pos &&
-            s_remote_players[i].room == (int)D_800C7AB2)
-        {
-            return &s_remote_players[i];
-        }
+        write_float_at(particle, 0x08, (float)remote->x + x_offsets[i]);
+        write_float_at(particle, 0x0c, (float)remote->y + y_offsets[i]);
+        write_float_at(particle, 0x10, (float)remote->z + z_offsets[i]);
+        particle = read_ptr_at(particle, 0x00);
+    }
+}
+
+static void init_remote_particle(void *effect_task, void *particle, const RemotePlayer *remote, int particle_index, int slot_index)
+{
+    static const unsigned char colors[4][3] = {
+        {255, 224, 64},
+        {64, 192, 255},
+        {255, 96, 192},
+        {128, 255, 128}};
+    unsigned char *task_bytes = (unsigned char *)effect_task;
+    unsigned char *particle_bytes = (unsigned char *)particle;
+    void *state = task_bytes + 0xa0 + particle_index * 8;
+    const unsigned char *color = colors[slot_index & 3];
+
+    func_801EE750_5AA660(particle, D_80204DA0_5C0CB0, 2, ptr_low32(particle_bytes + 0x80));
+    func_801EF684_5AB594(particle, state);
+
+    write_float_at(particle, 0x1c, 1.0f);
+    write_float_at(particle, 0x20, 1.0f);
+    write_float_at(particle, 0x24, 1.0f);
+    write_u8_at(effect_task, 0x9c + particle_index, 0xff);
+
+    func_801DC554_598464(0, particle_bytes + 0x80, D_802049C0_5C08D0,
+                          0, 0, 0,
+                          color[0], color[1], color[2], 0xff);
+}
+
+static void init_remote_particle_chain(void *effect_task, void *first_particle, const RemotePlayer *remote, int slot_index)
+{
+    void *particle = first_particle;
+    int i;
+
+    for (i = 0; particle && i < PARTICLE_COUNT; ++i)
+    {
+        init_remote_particle(effect_task, particle, remote, i, slot_index);
+        particle = read_ptr_at(particle, 0x00);
     }
 
-    return 0;
+    move_particle_chain(first_particle, remote);
 }
 
-static void clear_player2_slot(void)
+static void spawn_remote_particle_marker(const RemotePlayer *remote, int slot_index)
 {
-    D_801FC608 = 0;
-    D_801FC610 = 0;
-    PLAYER2_PARENT_PTR = 0;
-    PLAYER2_SHADOW_PTR = 0;
-}
+    void *effect_task;
+    void *particles;
 
-static int ensure_player2_objects(void)
-{
-    if (!D_801FC604_5B8514)
-        return 0;
+    if (!remote || !D_801FC604_5B8514)
+        return;
 
-    if (s_player2_alloc_task != D_801FC604_5B8514)
+    effect_task = func_80034E08_35A08(D_801FC604_5B8514, func_801EF6F0_5AB600, 0);
+    if (!effect_task)
+        return;
+
+    func_801EE4AC_5AA3BC(effect_task, D_801FC604_5B8514, 0);
+    particles = func_80035EEC_36AEC(effect_task, 2, PARTICLE_COUNT);
+    if (!particles)
     {
-        s_player2_object = 0;
-        s_player2_parent = 0;
-        s_player2_shadow = 0;
-        s_player2_alloc_task = D_801FC604_5B8514;
-    }
-
-    if (!s_player2_object)
-        s_player2_object = (PlayerObject *)func_80035EEC_36AEC((int)D_801FC604_5B8514, 2, 1);
-    if (!s_player2_parent)
-        s_player2_parent = (PlayerObject *)func_80035EEC_36AEC((int)D_801FC604_5B8514, 2, 1);
-    if (!s_player2_shadow)
-        s_player2_shadow = (PlayerObject *)func_80035EEC_36AEC((int)D_801FC604_5B8514, 2, 1);
-
-    return s_player2_object != 0;
-}
-
-static void mirror_remote_into_player2(PlayerObject *local_obj, RemotePlayer *remote)
-{
-    PlayerObject *src = local_obj;
-
-    if (!local_obj || !remote || !ensure_player2_objects())
-    {
-        clear_player2_slot();
+        write_u8_at(effect_task, 0x65, 1);
         return;
     }
 
-    if (remote->ch >= 0 && remote->ch < 4 && s_have_character_template[remote->ch])
-        src = &s_character_templates[remote->ch];
-
-    copy_player_payload(s_player2_object, src);
-    s_player2_object->x = (float)remote->x;
-    s_player2_object->y = (float)remote->y;
-    s_player2_object->z = (float)remote->z;
-
-    if (D_801FC614_5B8524 && s_player2_parent)
-    {
-        copy_player_payload(s_player2_parent, (const PlayerObject *)D_801FC614_5B8524);
-        s_player2_parent->x = s_player2_object->x;
-        s_player2_parent->y = s_player2_object->y;
-        s_player2_parent->z = s_player2_object->z;
-    }
-    if (D_801FC61C_5B852C && s_player2_shadow)
-    {
-        copy_player_payload(s_player2_shadow, (const PlayerObject *)D_801FC61C_5B852C);
-        s_player2_shadow->x = s_player2_object->x;
-        s_player2_shadow->y = s_player2_object->y;
-        s_player2_shadow->z = s_player2_object->z;
-    }
-
-    D_801FC608 = D_801FC604_5B8514;
-    D_801FC610 = s_player2_object;
-    PLAYER2_PARENT_PTR = (D_801FC614_5B8524 && s_player2_parent) ? s_player2_parent : 0;
-    PLAYER2_SHADOW_PTR = (D_801FC61C_5B852C && s_player2_shadow) ? s_player2_shadow : 0;
+    init_remote_particle_chain(effect_task, particles, remote, slot_index);
 }
 
-RECOMP_HOOK_RETURN("func_80002040_2C40")
-void anchor_actors_update_player2_slot(void)
+static void update_remote_particle_markers(void)
 {
-    PlayerObject *local_obj = D_801FC60C_5B851C;
-    RemotePlayer *remote;
+    int remote_index;
+    int slot_index = 0;
 
     if (!anchor_is_connected())
     {
-        clear_player2_slot();
         s_remote_count = 0;
         return;
     }
 
-    remember_character_template(local_obj);
+    for (remote_index = 0;
+         remote_index < s_remote_count && slot_index < ANCHOR_REMOTE_MAX;
+         ++remote_index)
+    {
+        RemotePlayer *remote = &s_remote_players[remote_index];
+
+        if (!remote->has_pos || remote->room != (int)D_800C7AB2)
+            continue;
+
+        if (s_particle_timers[slot_index] > 0)
+            s_particle_timers[slot_index]--;
+        else
+        {
+            spawn_remote_particle_marker(remote, slot_index);
+            s_particle_timers[slot_index] = PARTICLE_SPAWN_FRAMES;
+        }
+
+        slot_index++;
+    }
+}
+
+RECOMP_HOOK_RETURN("func_80002040_2C40")
+void anchor_actors_update_particle_markers(void)
+{
+    PlayerObject *local_obj = D_801FC60C_5B851C;
+
     publish_local_state(local_obj);
     refresh_lobby();
-
-    remote = first_same_room_remote();
-    mirror_remote_into_player2(local_obj, remote);
+    update_remote_particle_markers();
 }
