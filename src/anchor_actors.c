@@ -13,7 +13,7 @@
 #define ANCHOR_REMOTE_MAX 8
 #define STATE_SEND_FRAMES 6
 #define LOBBY_REFRESH_FRAMES 3
-#define PARTICLE_SPAWN_FRAMES 18
+#define PARTICLE_SPAWN_FRAMES 45
 #define PARTICLE_COUNT 3
 
 typedef struct PlayerObject
@@ -40,15 +40,14 @@ extern unsigned short D_800C7AB2;
 extern void *D_801FC604_5B8514;
 extern PlayerObject *D_801FC60C_5B851C;
 
-extern void *func_80034E08_35A08(void *task_list, void (*update)(void), unsigned short flags);
+extern void *func_80034E08_35A08(void *task_list, void (*update)(void *, void *), unsigned short flags);
 extern void *func_80035EEC_36AEC(void *task, short kind, unsigned int count);
-extern void func_801EF6F0_5AB600(void);
 extern void func_801EE4AC_5AA3BC(void *task, void *parent_task, unsigned char effect_type);
 extern void func_801EE750_5AA660(void *particle, void *config, int type, unsigned int flags);
 extern void func_801EF684_5AB594(void *particle, void *state);
 extern void func_801DC554_598464(int set_prim, void *dl, void *texture, int prim_r, unsigned int prim_g, unsigned int prim_b, int env_r, unsigned int env_g, unsigned int env_b, unsigned int alpha);
 
-extern unsigned char D_80204DA0_5C0CB0[];
+extern unsigned char D_80204BF8_5C0B08[];
 extern unsigned char D_802049C0_5C08D0[];
 
 #define CURRENT_CHAR_PTR ((volatile unsigned int *)0x8015C5DC)
@@ -107,6 +106,13 @@ static void *read_ptr_at(void *obj, unsigned int offset)
 static unsigned int ptr_low32(void *ptr)
 {
     return (unsigned int)(unsigned long)ptr;
+}
+
+static unsigned char read_u8_at(void *obj, unsigned int offset)
+{
+    unsigned char *p = (unsigned char *)obj;
+
+    return *(unsigned char *)(p + offset);
 }
 
 static int parse_int_after(const char *obj, const char *key, int fallback)
@@ -208,9 +214,9 @@ static void refresh_lobby(void)
 
 static void move_particle_chain(void *first_particle, const RemotePlayer *remote)
 {
-    static const float x_offsets[PARTICLE_COUNT] = {0.0f, 18.0f, -18.0f};
-    static const float y_offsets[PARTICLE_COUNT] = {34.0f, 58.0f, 82.0f};
-    static const float z_offsets[PARTICLE_COUNT] = {0.0f, -10.0f, 10.0f};
+    static const float x_offsets[PARTICLE_COUNT] = {0.0f, 5.0f, -5.0f};
+    static const float y_offsets[PARTICLE_COUNT] = {10.0f, 16.0f, 22.0f};
+    static const float z_offsets[PARTICLE_COUNT] = {0.0f, -3.0f, 3.0f};
     void *particle = first_particle;
     int i;
 
@@ -235,17 +241,63 @@ static void init_remote_particle(void *effect_task, void *particle, const Remote
     void *state = task_bytes + 0xa0 + particle_index * 8;
     const unsigned char *color = colors[slot_index & 3];
 
-    func_801EE750_5AA660(particle, D_80204DA0_5C0CB0, 2, ptr_low32(particle_bytes + 0x80));
+    func_801EE750_5AA660(particle, D_80204BF8_5C0B08, 2, ptr_low32(particle_bytes + 0x80));
     func_801EF684_5AB594(particle, state);
 
-    write_float_at(particle, 0x1c, 1.0f);
-    write_float_at(particle, 0x20, 1.0f);
-    write_float_at(particle, 0x24, 1.0f);
-    write_u8_at(effect_task, 0x9c + particle_index, 0xff);
+    write_float_at(particle, 0x1c, 0.18f);
+    write_float_at(particle, 0x20, 0.18f);
+    write_float_at(particle, 0x24, 0.18f);
+    write_u8_at(effect_task, 0x9c + particle_index, 0xe8);
 
     func_801DC554_598464(0, particle_bytes + 0x80, D_802049C0_5C08D0,
                           0, 0, 0,
                           color[0], color[1], color[2], 0xff);
+}
+
+static void remote_sparkle_update(void *effect_task, void *first_particle)
+{
+    void *particle = first_particle;
+    int done_count = 0;
+    int i;
+
+    if (read_u8_at(effect_task, 0x60) >= 8 || !first_particle)
+    {
+        write_u8_at(effect_task, 0x65, 1);
+        return;
+    }
+    write_u8_at(effect_task, 0x60, read_u8_at(effect_task, 0x60) + 1);
+
+    for (i = 0; particle && i < PARTICLE_COUNT; ++i)
+    {
+        unsigned char alpha = read_u8_at(effect_task, 0x9c + i);
+        unsigned char next_alpha;
+        float scale;
+
+        if (alpha <= 0x28)
+        {
+            next_alpha = 0;
+            done_count++;
+        }
+        else
+        {
+            next_alpha = alpha - 0x28;
+        }
+
+        write_u8_at(effect_task, 0x9c + i, next_alpha);
+        scale = 0.04f + ((float)next_alpha * (1.0f / 255.0f)) * 0.18f;
+        write_float_at(particle, 0x1c, scale);
+        write_float_at(particle, 0x20, scale);
+        write_float_at(particle, 0x24, scale);
+
+        func_801DC554_598464(0, (unsigned char *)particle + 0x80, D_802049C0_5C08D0,
+                              0, 0, 0,
+                              255, 255, 255, next_alpha);
+
+        particle = read_ptr_at(particle, 0x00);
+    }
+
+    if (done_count == PARTICLE_COUNT)
+        write_u8_at(effect_task, 0x65, 1);
 }
 
 static void init_remote_particle_chain(void *effect_task, void *first_particle, const RemotePlayer *remote, int slot_index)
@@ -270,11 +322,12 @@ static void spawn_remote_particle_marker(const RemotePlayer *remote, int slot_in
     if (!remote || !D_801FC604_5B8514)
         return;
 
-    effect_task = func_80034E08_35A08(D_801FC604_5B8514, func_801EF6F0_5AB600, 0);
+    effect_task = func_80034E08_35A08(D_801FC604_5B8514, remote_sparkle_update, 0);
     if (!effect_task)
         return;
 
     func_801EE4AC_5AA3BC(effect_task, D_801FC604_5B8514, 0);
+    write_u8_at(effect_task, 0x60, 0);
     particles = func_80035EEC_36AEC(effect_task, 2, PARTICLE_COUNT);
     if (!particles)
     {
