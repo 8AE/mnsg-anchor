@@ -46,7 +46,7 @@ extern void func_801EE750_5AA660(void *particle, void *config, int type, unsigne
 extern void func_801EF684_5AB594(void *particle, void *state);
 extern void func_801DC554_598464(int set_prim, void *dl, void *texture, int prim_r, unsigned int prim_g, unsigned int prim_b, int env_r, unsigned int env_g, unsigned int env_b, unsigned int alpha);
 
-extern unsigned char D_80204BF8_5C0B08[];
+extern unsigned char D_80204DA0_5C0CB0[];
 extern unsigned char D_802049C0_5C08D0[];
 
 #define CURRENT_CHAR_PTR ((volatile unsigned int *)0x8015C5DC)
@@ -253,7 +253,7 @@ static void init_remote_particle(void *effect_task, void *particle, const Remote
     void *state = task_bytes + 0xa0 + particle_index * 8;
     const unsigned char *color = colors[slot_index & 3];
 
-    func_801EE750_5AA660(particle, D_80204BF8_5C0B08, 2, ptr_low32(particle_bytes + 0x80));
+    func_801EE750_5AA660(particle, D_80204DA0_5C0CB0, 2, ptr_low32(particle_bytes + 0x80));
     func_801EF684_5AB594(particle, state);
 
     write_u8_at(effect_task, 0x9c + particle_index, 0xe8);
