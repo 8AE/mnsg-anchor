@@ -62,8 +62,8 @@ elf_path = "build/mod.elf"
 mod_filename = "mnsg_multiplayer_anchor"
 
 # Reference symbol files.
-func_reference_syms_file = "Goemon64RecompSyms/mnsg.us.syms.toml"
-data_reference_syms_files = ["Goemon64RecompSyms/mnsg.us.datasyms.toml"]
+func_reference_syms_file = "Goemon64RecompSyms/mnsg.syms.toml"
+data_reference_syms_files = ["Goemon64RecompSyms/mnsg.datasyms.toml"]
 
 # Additional files to include in the mod.
 # anchor_mnsg.py is the Python TCP client for the Anchor multiplayer server.

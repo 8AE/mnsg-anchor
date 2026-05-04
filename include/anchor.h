@@ -161,10 +161,12 @@ extern "C"
    /**
     * @brief Broadcast the local player's world-space position to teammates.
     *
-    * Sends an UPDATE_CLIENT_STATE packet containing posX/posY/posZ as integer
-    * coordinates.  Also updates the local player's own entry in the Python
-    * _player_states dict so the position is immediately reflected in the
-    * player-list panel.
+    * Sends a compact MNSG_PLAYER_POS custom packet containing posX/posY/posZ,
+    * short velocity estimates, and a sequence number. Identity fields stay in
+    * UPDATE_CLIENT_STATE metadata packets so hot movement traffic cannot wipe
+    * team/name/character state on the Anchor server. Also updates the local
+    * player's own entry in the Python _player_states dict so the position is
+    * immediately reflected in the player-list panel.
     *
     * Call once per player-list refresh cycle (~1 s) from anchor_ui.c.
     *
@@ -331,6 +333,42 @@ extern "C"
     * The caller must free the result with recomp_free().
     */
    char *anchor_get_player_info_json(void);
+
+   /**
+    * @brief Return positions of same-team, same-raw-room teammates as JSON.
+    *
+    * Returns a compact JSON array of position objects for every teammate that
+    * shares the local client's team ID AND current raw room ID and has sent at
+    * least one position update.  The local player is excluded.
+    *
+    * Each element: ``{"x":<int>,"y":<int>,"z":<int>}``
+    *
+    * Returns ``"[]"`` when not connected, no same-room teammates exist, or
+    * none of them have position data.
+    *
+    * The returned string is allocated in recompiled memory and must be freed
+    * by the caller with recomp_free().
+    */
+   char *anchor_get_teammate_positions_json(void);
+
+   /**
+    * @brief Return all online non-self lobby members with their room IDs and positions.
+    *
+    * Unlike anchor_get_teammate_positions_json(), this function does not filter
+    * by team or room – it returns every online player so the phantom actor system
+    * can allocate one actor per lobby member at room-load time.
+    *
+    * Each element: ``{"cid":<int>,"n":"<name>","room":<int>,"x":<int>,"y":<int>,"z":<int>,"hp":<int>}``
+    *   cid  – stable client ID for this player.
+    *   n    – player display name.
+    *   room – raw 16-bit room ID (-1 if not yet known).
+    *   x/y/z – last broadcast world-space position (0 if hp==0).
+    *   hp   – 1 if the player has sent at least one position update, else 0.
+    *
+    * Returns ``"[]"`` when not connected or no other players are online.
+    * The caller must free the result with recomp_free().
+    */
+   char *anchor_get_lobby_positions_json(void);
 
 #ifdef __cplusplus
 }
