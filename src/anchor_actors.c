@@ -54,6 +54,7 @@ typedef struct RemotePlayer
     int vy;
     int vz;
     int seq;
+    int same_team;
     char name[32];
 } RemotePlayer;
 
@@ -116,6 +117,7 @@ static const char *const s_char_names[4] = {
     "Goemon", "Ebisumaru", "Sasuke", "Yae"};
 
 static const RecompuiColor NAMEPLATE_TEXT = {255, 255, 255, 235};
+static const RecompuiColor NAMEPLATE_TEXT_OPPONENT = {255, 72, 72, 245};
 static const RecompuiColor NAMEPLATE_BG = {0, 0, 0, 150};
 
 static void nameplates_load_textures(void)
@@ -286,6 +288,7 @@ static int parse_lobby_positions(const char *json)
         s_remote_players[count].vy = parse_int_after(p, "\"vy\"", 0);
         s_remote_players[count].vz = parse_int_after(p, "\"vz\"", 0);
         s_remote_players[count].seq = parse_int_after(p, "\"s\"", 0);
+        s_remote_players[count].same_team = parse_int_after(p, "\"tm\"", 1);
         parse_string_after(p, "\"n\"", s_remote_players[count].name, (int)sizeof(s_remote_players[count].name));
         if (!s_remote_players[count].name[0])
         {
@@ -531,6 +534,7 @@ static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, co
         s_nameplate_icons[slot_index],
         (remote->ch >= 0 && remote->ch < 4) ? s_nameplate_char_textures[remote->ch] : s_nameplate_blank_texture);
     recompui_set_text(s_nameplate_labels[slot_index], remote->name);
+    recompui_set_color(s_nameplate_labels[slot_index], remote->same_team ? &NAMEPLATE_TEXT : &NAMEPLATE_TEXT_OPPONENT);
     recompui_set_left(s_nameplate_cards[slot_index], screen_x, UNIT_DP);
     recompui_set_top(s_nameplate_cards[slot_index], screen_y, UNIT_DP);
     recompui_set_display(s_nameplate_cards[slot_index], DISPLAY_FLEX);
@@ -648,15 +652,16 @@ static void move_particle_chain(void *first_particle, const RemotePlayer *remote
 
 static void init_remote_particle(void *effect_task, void *particle, const RemotePlayer *remote, int particle_index, int slot_index)
 {
-    static const unsigned char colors[4][3] = {
+    static const unsigned char colors[5][3] = {
         {255, 224, 64},
         {64, 192, 255},
         {255, 96, 192},
-        {128, 255, 128}};
+        {128, 255, 128},
+        {255, 48, 48}};
     unsigned char *task_bytes = (unsigned char *)effect_task;
     unsigned char *particle_bytes = (unsigned char *)particle;
     void *state = task_bytes + 0xa0 + particle_index * 8;
-    const unsigned char *color = colors[slot_index & 3];
+    const unsigned char *color = colors[remote && !remote->same_team ? 4 : (slot_index & 3)];
 
     func_801EE750_5AA660(particle, D_80204DA0_5C0CB0, 2, ptr_low32(particle_bytes + 0x80));
     func_801EF684_5AB594(particle, state);
@@ -667,11 +672,12 @@ static void init_remote_particle(void *effect_task, void *particle, const Remote
 
 static void remote_sparkle_update(void *effect_task, void *first_particle)
 {
-    static const unsigned char colors[4][3] = {
+    static const unsigned char colors[5][3] = {
         {255, 224, 64},
         {64, 192, 255},
         {255, 96, 192},
-        {128, 255, 128}};
+        {128, 255, 128},
+        {255, 48, 48}};
     void *particle = first_particle;
     unsigned char phase;
     unsigned char slot_color;
@@ -684,7 +690,9 @@ static void remote_sparkle_update(void *effect_task, void *first_particle)
     }
 
     phase = read_u8_at(effect_task, 0x60) + 1;
-    slot_color = read_u8_at(effect_task, 0x62) & 3;
+    slot_color = read_u8_at(effect_task, 0x62);
+    if (slot_color > 4)
+        slot_color = slot_color & 3;
     write_u8_at(effect_task, 0x60, phase);
 
     for (i = 0; particle && i < PARTICLE_COUNT; ++i)
@@ -772,7 +780,7 @@ static int ensure_remote_particle_marker(const RemotePlayer *remote, int slot_in
     if (s_marker_tasks[slot_index] && s_marker_particles[slot_index])
     {
         write_u8_at(s_marker_tasks[slot_index], 0x61, 1);
-        write_u8_at(s_marker_tasks[slot_index], 0x62, (unsigned char)(slot_index & 3));
+        write_u8_at(s_marker_tasks[slot_index], 0x62, (unsigned char)(remote->same_team ? (slot_index & 3) : 4));
         move_particle_chain(s_marker_particles[slot_index], remote);
         return 1;
     }
@@ -784,7 +792,7 @@ static int ensure_remote_particle_marker(const RemotePlayer *remote, int slot_in
     func_801EE4AC_5AA3BC(effect_task, D_801FC604_5B8514, 0);
     write_u8_at(effect_task, 0x60, 0);
     write_u8_at(effect_task, 0x61, 1);
-    write_u8_at(effect_task, 0x62, (unsigned char)(slot_index & 3));
+    write_u8_at(effect_task, 0x62, (unsigned char)(remote->same_team ? (slot_index & 3) : 4));
     particles = func_80035EEC_36AEC(effect_task, 2, PARTICLE_COUNT);
     if (!particles)
     {

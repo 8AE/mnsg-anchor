@@ -1036,6 +1036,7 @@ def get_lobby_positions_json() -> str:
                 "vy": int(v.get("velY", 0)),
                 "vz": int(v.get("velZ", 0)),
                 "s": int(v.get("posSeq", 0)),
+                "tm": 1 if v.get("teamId", "") == _team_id else 0,
             })
     return json.dumps(result, separators=(",", ":"))
 
