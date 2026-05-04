@@ -161,10 +161,12 @@ extern "C"
    /**
     * @brief Broadcast the local player's world-space position to teammates.
     *
-    * Sends an UPDATE_CLIENT_STATE packet containing posX/posY/posZ as integer
-    * coordinates.  Also updates the local player's own entry in the Python
-    * _player_states dict so the position is immediately reflected in the
-    * player-list panel.
+    * Sends a compact MNSG_PLAYER_POS custom packet containing posX/posY/posZ,
+    * short velocity estimates, and a sequence number. Identity fields stay in
+    * UPDATE_CLIENT_STATE metadata packets so hot movement traffic cannot wipe
+    * team/name/character state on the Anchor server. Also updates the local
+    * player's own entry in the Python _player_states dict so the position is
+    * immediately reflected in the player-list panel.
     *
     * Call once per player-list refresh cycle (~1 s) from anchor_ui.c.
     *

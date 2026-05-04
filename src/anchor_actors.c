@@ -16,10 +16,15 @@
 #include "icon_yae.h"
 
 #define ANCHOR_REMOTE_MAX 8
-#define STATE_SEND_FRAMES 6
+#define POSITION_SEND_FRAMES 4
+#define POSITION_KEEPALIVE_FRAMES 30
+#define POSITION_MIN_DELTA_SQ 36
 #define LOBBY_REFRESH_FRAMES 3
 #define PARTICLE_COUNT 3
 #define NAMEPLATE_ICON_SIZE 22.0f
+#define REMOTE_SNAP_DISTANCE_SQ 250000.0f
+#define REMOTE_SMOOTHING_FACTOR 0.35f
+#define REMOTE_VELOCITY_LEAD_SECONDS 0.04f
 
 typedef struct PlayerObject
 {
@@ -45,8 +50,23 @@ typedef struct RemotePlayer
     int z;
     int has_pos;
     int ch;
+    int vx;
+    int vy;
+    int vz;
+    int seq;
     char name[32];
 } RemotePlayer;
+
+typedef struct RemoteSmoothing
+{
+    int cid;
+    int room;
+    int active;
+    float x;
+    float y;
+    float z;
+    int seq;
+} RemoteSmoothing;
 
 extern unsigned short D_800C7AB2;
 
@@ -68,8 +88,16 @@ extern unsigned char D_802049C0_5C08D0[];
 #define CURRENT_CHAR_PTR ((volatile unsigned int *)0x8015C5DC)
 
 static RemotePlayer s_remote_players[ANCHOR_REMOTE_MAX];
+static RemoteSmoothing s_remote_smoothing[ANCHOR_REMOTE_MAX];
 static int s_remote_count;
 static int s_state_send_timer;
+static int s_position_keepalive_timer;
+static int s_have_sent_position;
+static int s_last_sent_x;
+static int s_last_sent_y;
+static int s_last_sent_z;
+static unsigned int s_last_sent_char = 0xffffffffu;
+static unsigned int s_last_sent_room = 0xffffffffu;
 static int s_lobby_refresh_timer;
 static void *s_marker_tasks[ANCHOR_REMOTE_MAX];
 static void *s_marker_particles[ANCHOR_REMOTE_MAX];
@@ -254,6 +282,10 @@ static int parse_lobby_positions(const char *json)
         s_remote_players[count].z = parse_int_after(p, "\"z\"", 0);
         s_remote_players[count].has_pos = parse_int_after(p, "\"hp\"", 0);
         s_remote_players[count].ch = parse_int_after(p, "\"ch\"", 0) & 3;
+        s_remote_players[count].vx = parse_int_after(p, "\"vx\"", 0);
+        s_remote_players[count].vy = parse_int_after(p, "\"vy\"", 0);
+        s_remote_players[count].vz = parse_int_after(p, "\"vz\"", 0);
+        s_remote_players[count].seq = parse_int_after(p, "\"s\"", 0);
         parse_string_after(p, "\"n\"", s_remote_players[count].name, (int)sizeof(s_remote_players[count].name));
         if (!s_remote_players[count].name[0])
         {
@@ -269,6 +301,84 @@ static int parse_lobby_positions(const char *json)
     }
 
     return count;
+}
+
+static RemoteSmoothing *find_remote_smoothing(int cid, int create)
+{
+    int i;
+    int free_index = -1;
+
+    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+    {
+        if (s_remote_smoothing[i].active && s_remote_smoothing[i].cid == cid)
+            return &s_remote_smoothing[i];
+        if (!s_remote_smoothing[i].active && free_index < 0)
+            free_index = i;
+    }
+
+    if (!create || free_index < 0)
+        return 0;
+
+    s_remote_smoothing[free_index].cid = cid;
+    s_remote_smoothing[free_index].active = 1;
+    s_remote_smoothing[free_index].room = -1;
+    s_remote_smoothing[free_index].x = 0.0f;
+    s_remote_smoothing[free_index].y = 0.0f;
+    s_remote_smoothing[free_index].z = 0.0f;
+    s_remote_smoothing[free_index].seq = 0;
+    return &s_remote_smoothing[free_index];
+}
+
+static void clear_remote_smoothing(void)
+{
+    int i;
+
+    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+        s_remote_smoothing[i].active = 0;
+}
+
+static void smooth_remote_player(const RemotePlayer *remote, RemotePlayer *out)
+{
+    RemoteSmoothing *smooth = find_remote_smoothing(remote->cid, 1);
+    float target_x;
+    float target_y;
+    float target_z;
+    float dx;
+    float dy;
+    float dz;
+    float dist_sq;
+
+    *out = *remote;
+    if (!smooth)
+        return;
+
+    target_x = (float)remote->x + (float)remote->vx * REMOTE_VELOCITY_LEAD_SECONDS;
+    target_y = (float)remote->y + (float)remote->vy * REMOTE_VELOCITY_LEAD_SECONDS;
+    target_z = (float)remote->z + (float)remote->vz * REMOTE_VELOCITY_LEAD_SECONDS;
+
+    dx = target_x - smooth->x;
+    dy = target_y - smooth->y;
+    dz = target_z - smooth->z;
+    dist_sq = dx * dx + dy * dy + dz * dz;
+
+    if (smooth->room != remote->room || smooth->seq == 0 || dist_sq > REMOTE_SNAP_DISTANCE_SQ)
+    {
+        smooth->x = target_x;
+        smooth->y = target_y;
+        smooth->z = target_z;
+    }
+    else
+    {
+        smooth->x += dx * REMOTE_SMOOTHING_FACTOR;
+        smooth->y += dy * REMOTE_SMOOTHING_FACTOR;
+        smooth->z += dz * REMOTE_SMOOTHING_FACTOR;
+    }
+
+    smooth->room = remote->room;
+    smooth->seq = remote->seq ? remote->seq : smooth->seq + 1;
+    out->x = (int)smooth->x;
+    out->y = (int)smooth->y;
+    out->z = (int)smooth->z;
 }
 
 static void nameplates_ensure_init(void)
@@ -430,20 +540,76 @@ static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, co
 static void publish_local_state(PlayerObject *local_obj)
 {
     unsigned int char_idx;
+    unsigned int room;
+    int x;
+    int y;
+    int z;
+    int dx;
+    int dy;
+    int dz;
+    int should_send_position = 0;
 
-    if (s_state_send_timer > 0)
+    if (!anchor_is_connected())
     {
-        s_state_send_timer--;
+        s_state_send_timer = 0;
+        s_position_keepalive_timer = 0;
+        s_have_sent_position = 0;
+        s_last_sent_char = 0xffffffffu;
+        s_last_sent_room = 0xffffffffu;
         return;
     }
-    s_state_send_timer = STATE_SEND_FRAMES;
 
-    anchor_set_local_room((unsigned int)D_800C7AB2);
-    if (local_obj)
-        anchor_set_position((int)local_obj->x, (int)local_obj->y, (int)local_obj->z);
+    room = (unsigned int)D_800C7AB2;
+    if (room != s_last_sent_room)
+    {
+        s_last_sent_room = room;
+        s_have_sent_position = 0;
+        s_position_keepalive_timer = 0;
+    }
+    anchor_set_local_room(room);
 
     char_idx = *CURRENT_CHAR_PTR & 3;
     anchor_set_character(s_char_names[char_idx]);
+    s_last_sent_char = char_idx;
+
+    if (s_state_send_timer > 0)
+        s_state_send_timer--;
+    if (s_position_keepalive_timer > 0)
+        s_position_keepalive_timer--;
+
+    if (!local_obj || s_state_send_timer > 0)
+        return;
+
+    x = (int)local_obj->x;
+    y = (int)local_obj->y;
+    z = (int)local_obj->z;
+
+    if (!s_have_sent_position)
+    {
+        should_send_position = 1;
+    }
+    else
+    {
+        dx = x - s_last_sent_x;
+        dy = y - s_last_sent_y;
+        dz = z - s_last_sent_z;
+        should_send_position =
+            (dx * dx + dy * dy + dz * dz) >= POSITION_MIN_DELTA_SQ ||
+            s_position_keepalive_timer <= 0;
+    }
+
+    if (!should_send_position)
+        return;
+
+    if (anchor_set_position(x, y, z))
+    {
+        s_have_sent_position = 1;
+        s_last_sent_x = x;
+        s_last_sent_y = y;
+        s_last_sent_z = z;
+        s_state_send_timer = POSITION_SEND_FRAMES;
+        s_position_keepalive_timer = POSITION_KEEPALIVE_FRAMES;
+    }
 }
 
 static void refresh_lobby(void)
@@ -644,6 +810,7 @@ static void update_remote_particle_markers(PlayerObject *local_obj)
     if (!anchor_is_connected())
     {
         s_remote_count = 0;
+        clear_remote_smoothing();
         for (hide_index = 0; hide_index < ANCHOR_REMOTE_MAX; ++hide_index)
         {
             set_marker_slot_visible(hide_index, 0);
@@ -658,12 +825,14 @@ static void update_remote_particle_markers(PlayerObject *local_obj)
          ++remote_index)
     {
         RemotePlayer *remote = &s_remote_players[remote_index];
+        RemotePlayer smoothed_remote;
 
         if (!remote->has_pos || remote->room != (int)D_800C7AB2)
             continue;
 
-        ensure_remote_particle_marker(remote, slot_index);
-        update_nameplate_slot(slot_index, remote, local_obj);
+        smooth_remote_player(remote, &smoothed_remote);
+        ensure_remote_particle_marker(&smoothed_remote, slot_index);
+        update_nameplate_slot(slot_index, &smoothed_remote, local_obj);
         slot_index++;
     }
 

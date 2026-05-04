@@ -105,6 +105,10 @@ _rx_thread: "threading.Thread | None" = None
 
 # Last room ID sent to the server (avoids redundant state updates).
 _local_room_id: int = -1
+_local_character: str = ""
+_last_position_sent: "tuple[int, int, int] | None" = None
+_last_position_sent_ms: int = 0
+_position_seq: int = 0
 
 ###############################################################################
 # Constants
@@ -242,7 +246,7 @@ def _send_raw(packet: dict) -> bool:
 
 def _recv_loop() -> None:
     """Background thread: read null-terminated packets and push to _recv_queue."""
-    global _connected, _client_id, _server_message, _disabled, _local_room_id
+    global _connected, _client_id, _server_message, _disabled, _local_room_id, _local_character
     buf = b""
     while _connected and _sock is not None:
         try:
@@ -301,8 +305,35 @@ def _recv_loop() -> None:
                         _player_states.clear()
                         _player_states.update(new_players)
                     # Reset so the next set_local_room() call re-broadcasts our room
-                    # even if the room ID hasn't changed (our entry was just rebuilt).
+                    # and character even if the values haven't changed (our entry was
+                    # just rebuilt, and older movement packets may have wiped metadata).
                     _local_room_id = -1
+                    _local_character = ""
+
+                if ptype == "MNSG_PLAYER_POS":
+                    cid = packet.get("clientId", 0)
+                    if cid:
+                        with _player_states_lock:
+                            if cid not in _player_states:
+                                _player_states[cid] = {
+                                    "name": f"Player{cid}",
+                                    "teamId": "",
+                                    "online": True,
+                                    "self": False,
+                                    "location": "",
+                                    "roomId": int(packet.get("currentRoomId", -1)),
+                                    "character": "",
+                                }
+                            if "currentRoomId" in packet:
+                                _player_states[cid]["roomId"] = int(packet["currentRoomId"])
+                            _player_states[cid]["posX"] = int(packet.get("posX", 0))
+                            _player_states[cid]["posY"] = int(packet.get("posY", 0))
+                            _player_states[cid]["posZ"] = int(packet.get("posZ", 0))
+                            _player_states[cid]["velX"] = int(packet.get("velX", 0))
+                            _player_states[cid]["velY"] = int(packet.get("velY", 0))
+                            _player_states[cid]["velZ"] = int(packet.get("velZ", 0))
+                            _player_states[cid]["posSeq"] = int(packet.get("posSeq", 0))
+                            _player_states[cid]["posT"] = int(packet.get("posT", 0))
 
                 # Update a single player's status when they broadcast their state.
                 if ptype == "UPDATE_CLIENT_STATE":
@@ -327,6 +358,16 @@ def _recv_loop() -> None:
                                     _player_states[cid]["posY"] = int(cs["posY"])
                                 if "posZ" in cs:
                                     _player_states[cid]["posZ"] = int(cs["posZ"])
+                                if "velX" in cs:
+                                    _player_states[cid]["velX"] = int(cs["velX"])
+                                if "velY" in cs:
+                                    _player_states[cid]["velY"] = int(cs["velY"])
+                                if "velZ" in cs:
+                                    _player_states[cid]["velZ"] = int(cs["velZ"])
+                                if "posSeq" in cs:
+                                    _player_states[cid]["posSeq"] = int(cs["posSeq"])
+                                if "posT" in cs:
+                                    _player_states[cid]["posT"] = int(cs["posT"])
                                 if "currentCharacter" in cs:
                                     _player_states[cid]["character"] = str(cs["currentCharacter"])
                             else:
@@ -342,6 +383,11 @@ def _recv_loop() -> None:
                                     "posX": int(cs.get("posX", 0)),
                                     "posY": int(cs.get("posY", 0)),
                                     "posZ": int(cs.get("posZ", 0)),
+                                    "velX": int(cs.get("velX", 0)),
+                                    "velY": int(cs.get("velY", 0)),
+                                    "velZ": int(cs.get("velZ", 0)),
+                                    "posSeq": int(cs.get("posSeq", 0)),
+                                    "posT": int(cs.get("posT", 0)),
                                     "character": str(cs.get("currentCharacter", "")),
                                 }
 
@@ -358,8 +404,12 @@ def _recv_loop() -> None:
 
 def _do_disconnect() -> None:
     """Close the socket and mark as disconnected (idempotent)."""
-    global _sock, _connected, _local_room_id
+    global _sock, _connected, _local_room_id, _local_character
+    global _last_position_sent, _last_position_sent_ms
     _local_room_id = -1
+    _local_character = ""
+    _last_position_sent = None
+    _last_position_sent_ms = 0
     _connected = False
     s = _sock
     _sock = None
@@ -399,6 +449,7 @@ def connect(
     Returns True on success, False on failure.
     """
     global _sock, _connected, _client_id, _room_id, _team_id, _player_name
+    global _last_position_sent, _last_position_sent_ms, _position_seq, _local_character
     global _rx_thread, _disabled
 
     if _connected:
@@ -410,6 +461,10 @@ def connect(
     _player_name = player_name
     _client_id = client_id
     _disabled = False
+    _last_position_sent = None
+    _last_position_sent_ms = 0
+    _position_seq = 0
+    _local_character = ""
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -671,8 +726,12 @@ def send_custom_packet(
 
 def set_position(x: int, y: int, z: int) -> bool:
     """
-    Broadcast this client's world-space position to teammates and store it
-    locally so the player-list panel reflects our own position immediately.
+    Broadcast this client's world-space position to teammates.
+
+    This is the hot movement payload, so it intentionally avoids repeating
+    identity/team fields that are sent by handshake, room, and character
+    updates.  A small velocity estimate and sequence number are included so
+    clients can smooth short gaps between server updates.
 
     Args:
         x: World X coordinate (int, from CLS_BG_W::position.x truncated).
@@ -681,24 +740,46 @@ def set_position(x: int, y: int, z: int) -> bool:
 
     Returns True if the packet was sent.
     """
+    global _last_position_sent, _last_position_sent_ms, _position_seq
+
     if not _connected:
         return False
+    now_ms = int(time.monotonic() * 1000)
+    vel_x = 0
+    vel_y = 0
+    vel_z = 0
+    if _last_position_sent is not None and _last_position_sent_ms > 0:
+        dt_ms = max(1, now_ms - _last_position_sent_ms)
+        vel_x = int((x - _last_position_sent[0]) * 1000 / dt_ms)
+        vel_y = int((y - _last_position_sent[1]) * 1000 / dt_ms)
+        vel_z = int((z - _last_position_sent[2]) * 1000 / dt_ms)
+    _last_position_sent = (x, y, z)
+    _last_position_sent_ms = now_ms
+    _position_seq = (_position_seq + 1) & 0x7fffffff
+
     with _player_states_lock:
         if _client_id in _player_states:
             _player_states[_client_id]["posX"] = x
             _player_states[_client_id]["posY"] = y
             _player_states[_client_id]["posZ"] = z
+            _player_states[_client_id]["velX"] = vel_x
+            _player_states[_client_id]["velY"] = vel_y
+            _player_states[_client_id]["velZ"] = vel_z
+            _player_states[_client_id]["posSeq"] = _position_seq
+            _player_states[_client_id]["posT"] = now_ms
     return _send_raw({
-        "type": "UPDATE_CLIENT_STATE",
-        "state": {
-            "clientId": _client_id,
-            "teamId": _team_id,
-            "name": _player_name,
-            "online": True,
-            "posX": x,
-            "posY": y,
-            "posZ": z,
-        },
+        "type": "MNSG_PLAYER_POS",
+        "clientId": _client_id,
+        "currentRoomId": _local_room_id,
+        "posX": x,
+        "posY": y,
+        "posZ": z,
+        "velX": vel_x,
+        "velY": vel_y,
+        "velZ": vel_z,
+        "posSeq": _position_seq,
+        "posT": now_ms,
+        "quiet": True,
     })
 
 
@@ -716,8 +797,12 @@ def set_character(char_name: str) -> bool:
 
     Returns True if the packet was sent.
     """
+    global _local_character
     if not _connected:
         return False
+    if char_name == _local_character:
+        return False
+    _local_character = char_name
     with _player_states_lock:
         if _client_id in _player_states:
             _player_states[_client_id]["character"] = char_name
@@ -938,7 +1023,20 @@ def get_lobby_positions_json() -> str:
             pz = int(v.get("posZ", 0)) if has_pos else 0
             char_lookup = {"Goemon": 0, "Ebisumaru": 1, "Sasuke": 2, "Yae": 3}
             ch = char_lookup.get(v.get("character", "Goemon"), 0)
-            result.append({"cid": cid, "n": v.get("name", f"Player{cid}"), "room": room_id, "x": px, "y": py, "z": pz, "hp": 1 if has_pos else 0, "ch": ch})
+            result.append({
+                "cid": cid,
+                "n": v.get("name", f"Player{cid}"),
+                "room": room_id,
+                "x": px,
+                "y": py,
+                "z": pz,
+                "hp": 1 if has_pos else 0,
+                "ch": ch,
+                "vx": int(v.get("velX", 0)),
+                "vy": int(v.get("velY", 0)),
+                "vz": int(v.get("velZ", 0)),
+                "s": int(v.get("posSeq", 0)),
+            })
     return json.dumps(result, separators=(",", ":"))
 
 
