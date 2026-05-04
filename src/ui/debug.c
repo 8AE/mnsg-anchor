@@ -26,6 +26,7 @@
 #include "recomputils.h"
 #include "recompui.h"
 #include "anchor.h"
+#include "anchor_runtime.h"
 
 /* Set to 1 to show the DBG button in the bottom-right corner. */
 static int DEBUG_BUTTON_ENABLED = 0;
@@ -695,7 +696,17 @@ void debug_ui_frame_hook(void)
         return;
     }
 
-    /* Show the toggle button once at startup. */
+    if (!anchor_startup_menu_is_complete())
+    {
+        if (s_toggle_visible)
+        {
+            recompui_hide_context(s_toggle_ctx);
+            s_toggle_visible = 0;
+        }
+        return;
+    }
+
+    /* Show the toggle button once after the startup menu is finished. */
     if (!s_toggle_visible)
     {
         recompui_show_context(s_toggle_ctx);
@@ -705,7 +716,8 @@ void debug_ui_frame_hook(void)
     /* Show or hide the NET button based on config. */
     if (s_net_btn != RECOMPUI_NULL_RESOURCE)
     {
-        int show_net = (recomp_get_config_u32("anchor_show_net_button") == 0);
+        int show_net = anchor_startup_menu_is_complete() &&
+                       (recomp_get_config_u32("anchor_show_net_button") == 0);
         recompui_open_context(s_toggle_ctx);
         recompui_set_display(s_net_btn, show_net ? DISPLAY_BLOCK : DISPLAY_NONE);
         recompui_close_context(s_toggle_ctx);

@@ -63,7 +63,8 @@ REPY_PREINIT_ADD_NRM_TO_ALL_INTERPRETERS;
 REPY_ON_POST_INIT void anchor_init(void)
 {
     /* Preload the Python module so the first real call is instant.
-     * Connection is now handled by the startup UI in anchor_connect_ui.c –
+     * Connection is now handled by the startup UI in startup_menu.c and
+     * startup_multiplayer_ui.c –
      * the player fills in their settings interactively before the game
      * begins, rather than reading values from the mod config file.         */
     REPY_FN_SETUP;

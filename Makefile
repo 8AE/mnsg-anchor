@@ -25,11 +25,11 @@ CPPFLAGS := -nostdinc -D_LANGUAGE_C -DMIPS -DF3DEX_GBI -I include -I include/dum
 			-I mnsg/include -I mnsg/include/libultra -I mnsg/src
 LDFLAGS  := -nostdlib -T $(LDSCRIPT) -Map $(BUILD_DIR)/mod.map --unresolved-symbols=ignore-all --emit-relocs -e 0 --no-nmagic
 
-C_SRCS := $(wildcard src/*.c)
+C_SRCS := $(shell find src -name '*.c' | sort)
 C_OBJS := $(addprefix $(BUILD_DIR)/, $(C_SRCS:.c=.o))
 C_DEPS := $(addprefix $(BUILD_DIR)/, $(C_SRCS:.c=.d))
 
-S_SRCS := $(wildcard src/*.s)
+S_SRCS := $(shell find src -name '*.s' | sort)
 S_OBJS := $(addprefix $(BUILD_DIR)/, $(S_SRCS:.s=.o))
 
 all: $(TARGET)
@@ -44,10 +44,20 @@ else
 	mkdir -p $@
 endif
 
-$(C_OBJS): $(BUILD_DIR)/%.o : %.c | $(BUILD_DIR) $(BUILD_DIR)/src
+$(C_OBJS): $(BUILD_DIR)/%.o : %.c | $(BUILD_DIR)
+ifeq ($(OS),Windows_NT)
+	mkdir $(subst /,\,$(@D)) 2>NUL || exit 0
+else
+	mkdir -p $(@D)
+endif
 	$(CC) $(CFLAGS) $(CPPFLAGS) $< -MMD -MF $(@:.o=.d) -c -o $@
 
-$(S_OBJS): $(BUILD_DIR)/%.o : %.s | $(BUILD_DIR) $(BUILD_DIR)/src
+$(S_OBJS): $(BUILD_DIR)/%.o : %.s | $(BUILD_DIR)
+ifeq ($(OS),Windows_NT)
+	mkdir $(subst /,\,$(@D)) 2>NUL || exit 0
+else
+	mkdir -p $(@D)
+endif
 	$(CC) $(ASFLAGS) -I src -nostdinc -D_LANGUAGE_C -DMIPS -DF3DEX_GBI -I include -I include/dummy_headers -I mnsg/include -I mnsg/include/libultra -I mnsg/src $< -c -o $@
 
 clean:
