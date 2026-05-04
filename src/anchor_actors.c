@@ -333,6 +333,7 @@ static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, co
     float rel_y;
     float rel_z;
     float depth;
+    float vertical_depth;
     float side;
     float screen_x;
     float screen_y;
@@ -369,8 +370,9 @@ static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, co
     }
 
     side = rel_x * right_x + rel_z * right_z;
+    vertical_depth = depth + 260.0f;
     screen_x = clamp_dp(half_width + (side / depth) * focal_x, 80.0f, 1840.0f);
-    screen_y = clamp_dp(half_height - (rel_y / depth) * focal_y, 60.0f, 980.0f);
+    screen_y = clamp_dp(half_height - (rel_y / vertical_depth) * focal_y, 60.0f, 980.0f);
 
     recompui_open_context(s_nameplate_ctx);
     recompui_set_text(s_nameplate_labels[slot_index], remote->name);
