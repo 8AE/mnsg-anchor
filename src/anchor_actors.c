@@ -8,6 +8,7 @@
  */
 
 #include "modding.h"
+#include "recompui.h"
 #include "anchor.h"
 
 #define ANCHOR_REMOTE_MAX 8
@@ -23,6 +24,13 @@ typedef struct PlayerObject
     float z;
 } PlayerObject;
 
+typedef struct Vec3f
+{
+    float x;
+    float y;
+    float z;
+} Vec3f;
+
 typedef struct RemotePlayer
 {
     int cid;
@@ -32,12 +40,15 @@ typedef struct RemotePlayer
     int z;
     int has_pos;
     int ch;
+    char name[32];
 } RemotePlayer;
 
 extern unsigned short D_800C7AB2;
 
 extern void *D_801FC604_5B8514;
 extern PlayerObject *D_801FC60C_5B851C;
+extern Vec3f D_8020D1C0_5C90D0;
+extern float D_8020D1D0_5C90E0;
 
 extern void *func_80034E08_35A08(void *task_list, void (*update)(void *, void *), unsigned short flags);
 extern void *func_80035EEC_36AEC(void *task, short kind, unsigned int count);
@@ -58,9 +69,16 @@ static int s_lobby_refresh_timer;
 static void *s_marker_tasks[ANCHOR_REMOTE_MAX];
 static void *s_marker_particles[ANCHOR_REMOTE_MAX];
 static void *s_marker_owner_task;
+static RecompuiContext s_nameplate_ctx = RECOMPUI_NULL_CONTEXT;
+static RecompuiResource s_nameplate_labels[ANCHOR_REMOTE_MAX];
+static int s_nameplate_initialized;
+static int s_nameplate_ctx_visible;
 
 static const char *const s_char_names[4] = {
     "Goemon", "Ebisumaru", "Sasuke", "Yae"};
+
+static const RecompuiColor NAMEPLATE_TEXT = {255, 255, 255, 235};
+static const RecompuiColor NAMEPLATE_BG = {0, 0, 0, 150};
 
 static const char *sfind(const char *hay, const char *needle)
 {
@@ -159,6 +177,36 @@ static int parse_int_after(const char *obj, const char *key, int fallback)
     return saw_digit ? value * sign : fallback;
 }
 
+static void parse_string_after(const char *obj, const char *key, char *out, int out_size)
+{
+    const char *p = sfind(obj, key);
+    int n = 0;
+
+    if (out_size <= 0)
+        return;
+    out[0] = '\0';
+    if (!p)
+        return;
+
+    while (*p && *p != ':')
+        ++p;
+    if (*p == ':')
+        ++p;
+    while (*p == ' ' || *p == '\t')
+        ++p;
+    if (*p != '"')
+        return;
+    ++p;
+
+    while (*p && *p != '"' && n < out_size - 1)
+    {
+        if (*p == '\\' && *(p + 1))
+            ++p;
+        out[n++] = *p++;
+    }
+    out[n] = '\0';
+}
+
 static int parse_lobby_positions(const char *json)
 {
     const char *p = json;
@@ -177,6 +225,12 @@ static int parse_lobby_positions(const char *json)
         s_remote_players[count].z = parse_int_after(p, "\"z\"", 0);
         s_remote_players[count].has_pos = parse_int_after(p, "\"hp\"", 0);
         s_remote_players[count].ch = parse_int_after(p, "\"ch\"", 0) & 3;
+        parse_string_after(p, "\"n\"", s_remote_players[count].name, (int)sizeof(s_remote_players[count].name));
+        if (!s_remote_players[count].name[0])
+        {
+            s_remote_players[count].name[0] = 'P';
+            s_remote_players[count].name[1] = '\0';
+        }
         if (s_remote_players[count].cid > 0)
             count++;
 
@@ -186,6 +240,144 @@ static int parse_lobby_positions(const char *json)
     }
 
     return count;
+}
+
+static void nameplates_ensure_init(void)
+{
+    int i;
+    RecompuiResource root;
+
+    if (s_nameplate_initialized)
+        return;
+    s_nameplate_initialized = 1;
+
+    s_nameplate_ctx = recompui_create_context();
+    recompui_set_context_captures_input(s_nameplate_ctx, 0);
+    recompui_set_context_captures_mouse(s_nameplate_ctx, 0);
+    recompui_open_context(s_nameplate_ctx);
+
+    root = recompui_context_root(s_nameplate_ctx);
+    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+    {
+        s_nameplate_labels[i] = recompui_create_label(s_nameplate_ctx, root, "", LABELSTYLE_ANNOTATION);
+        recompui_set_position(s_nameplate_labels[i], POSITION_ABSOLUTE);
+        recompui_set_width(s_nameplate_labels[i], 180.0f, UNIT_DP);
+        recompui_set_margin_left(s_nameplate_labels[i], -90.0f, UNIT_DP);
+        recompui_set_text_align(s_nameplate_labels[i], TEXT_ALIGN_CENTER);
+        recompui_set_font_size(s_nameplate_labels[i], 20.0f, UNIT_DP);
+        recompui_set_font_weight(s_nameplate_labels[i], 700);
+        recompui_set_color(s_nameplate_labels[i], &NAMEPLATE_TEXT);
+        recompui_set_background_color(s_nameplate_labels[i], &NAMEPLATE_BG);
+        recompui_set_border_radius(s_nameplate_labels[i], 4.0f, UNIT_DP);
+        recompui_set_padding(s_nameplate_labels[i], 3.0f, UNIT_DP);
+        recompui_set_display(s_nameplate_labels[i], DISPLAY_NONE);
+    }
+
+    recompui_close_context(s_nameplate_ctx);
+}
+
+static float clamp_dp(float value, float lo, float hi)
+{
+    if (value < lo)
+        return lo;
+    if (value > hi)
+        return hi;
+    return value;
+}
+
+static void hide_nameplate_slot(int slot_index)
+{
+    nameplates_ensure_init();
+    if (s_nameplate_labels[slot_index] != RECOMPUI_NULL_RESOURCE)
+    {
+        recompui_open_context(s_nameplate_ctx);
+        recompui_set_display(s_nameplate_labels[slot_index], DISPLAY_NONE);
+        recompui_close_context(s_nameplate_ctx);
+    }
+}
+
+static void set_nameplates_context_visible(int visible)
+{
+    nameplates_ensure_init();
+    if (visible)
+    {
+        if (!s_nameplate_ctx_visible)
+        {
+            recompui_show_context(s_nameplate_ctx);
+            s_nameplate_ctx_visible = 1;
+        }
+    }
+    else if (s_nameplate_ctx_visible)
+    {
+        recompui_hide_context(s_nameplate_ctx);
+        s_nameplate_ctx_visible = 0;
+    }
+}
+
+static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, const PlayerObject *local_obj)
+{
+    const float half_width = 960.0f;
+    const float half_height = 540.0f;
+    const float focal_x = 900.0f;
+    const float focal_y = 620.0f;
+    const float label_height = 55.0f;
+    float eye_x;
+    float eye_y;
+    float eye_z;
+    float radius;
+    float forward_x;
+    float forward_z;
+    float right_x;
+    float right_z;
+    float rel_x;
+    float rel_y;
+    float rel_z;
+    float depth;
+    float side;
+    float screen_x;
+    float screen_y;
+
+    nameplates_ensure_init();
+    if (!remote || !local_obj || s_nameplate_labels[slot_index] == RECOMPUI_NULL_RESOURCE)
+    {
+        hide_nameplate_slot(slot_index);
+        return;
+    }
+
+    radius = D_8020D1D0_5C90E0;
+    if (radius < 1.0f)
+        radius = 1.0f;
+
+    eye_x = local_obj->x + D_8020D1C0_5C90D0.x;
+    eye_y = local_obj->y + D_8020D1C0_5C90D0.y;
+    eye_z = local_obj->z + D_8020D1C0_5C90D0.z;
+
+    forward_x = -D_8020D1C0_5C90D0.x / radius;
+    forward_z = -D_8020D1C0_5C90D0.z / radius;
+    right_x = -forward_z;
+    right_z = forward_x;
+
+    rel_x = (float)remote->x - eye_x;
+    rel_y = ((float)remote->y + label_height) - eye_y;
+    rel_z = (float)remote->z - eye_z;
+    depth = rel_x * forward_x + rel_z * forward_z;
+
+    if (depth < 20.0f)
+    {
+        hide_nameplate_slot(slot_index);
+        return;
+    }
+
+    side = rel_x * right_x + rel_z * right_z;
+    screen_x = clamp_dp(half_width + (side / depth) * focal_x, 80.0f, 1840.0f);
+    screen_y = clamp_dp(half_height - (rel_y / depth) * focal_y, 60.0f, 980.0f);
+
+    recompui_open_context(s_nameplate_ctx);
+    recompui_set_text(s_nameplate_labels[slot_index], remote->name);
+    recompui_set_left(s_nameplate_labels[slot_index], screen_x, UNIT_DP);
+    recompui_set_top(s_nameplate_labels[slot_index], screen_y, UNIT_DP);
+    recompui_set_display(s_nameplate_labels[slot_index], DISPLAY_BLOCK);
+    recompui_close_context(s_nameplate_ctx);
 }
 
 static void publish_local_state(PlayerObject *local_obj)
@@ -393,7 +585,7 @@ static int ensure_remote_particle_marker(const RemotePlayer *remote, int slot_in
     return 1;
 }
 
-static void update_remote_particle_markers(void)
+static void update_remote_particle_markers(PlayerObject *local_obj)
 {
     int remote_index;
     int slot_index = 0;
@@ -406,7 +598,11 @@ static void update_remote_particle_markers(void)
     {
         s_remote_count = 0;
         for (hide_index = 0; hide_index < ANCHOR_REMOTE_MAX; ++hide_index)
+        {
             set_marker_slot_visible(hide_index, 0);
+            hide_nameplate_slot(hide_index);
+        }
+        set_nameplates_context_visible(0);
         return;
     }
 
@@ -420,11 +616,17 @@ static void update_remote_particle_markers(void)
             continue;
 
         ensure_remote_particle_marker(remote, slot_index);
+        update_nameplate_slot(slot_index, remote, local_obj);
         slot_index++;
     }
 
     for (hide_index = slot_index; hide_index < ANCHOR_REMOTE_MAX; ++hide_index)
+    {
         set_marker_slot_visible(hide_index, 0);
+        hide_nameplate_slot(hide_index);
+    }
+
+    set_nameplates_context_visible(slot_index > 0);
 }
 
 RECOMP_HOOK_RETURN("func_80002040_2C40")
@@ -434,5 +636,5 @@ void anchor_actors_update_particle_markers(void)
 
     publish_local_state(local_obj);
     refresh_lobby();
-    update_remote_particle_markers();
+    update_remote_particle_markers(local_obj);
 }

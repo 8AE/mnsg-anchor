@@ -907,7 +907,7 @@ def get_lobby_positions_json() -> str:
     Return a compact JSON array of all online non-self lobby members with their
     current room ID and world-space position, for use by the phantom actor system.
 
-    Each entry: {"cid": int, "room": int, "x": int, "y": int, "z": int, "hp": int}
+    Each entry: {"cid": int, "n": str, "room": int, "x": int, "y": int, "z": int, "hp": int}
 
     Fields:
       "cid"  – client ID (unique per player, stable within a session).
@@ -938,7 +938,7 @@ def get_lobby_positions_json() -> str:
             pz = int(v.get("posZ", 0)) if has_pos else 0
             char_lookup = {"Goemon": 0, "Ebisumaru": 1, "Sasuke": 2, "Yae": 3}
             ch = char_lookup.get(v.get("character", "Goemon"), 0)
-            result.append({"cid": cid, "room": room_id, "x": px, "y": py, "z": pz, "hp": 1 if has_pos else 0, "ch": ch})
+            result.append({"cid": cid, "n": v.get("name", f"Player{cid}"), "room": room_id, "x": px, "y": py, "z": pz, "hp": 1 if has_pos else 0, "ch": ch})
     return json.dumps(result, separators=(",", ":"))
 
 
