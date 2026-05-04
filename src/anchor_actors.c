@@ -25,6 +25,11 @@
 #define REMOTE_SNAP_DISTANCE_SQ 250000.0f
 #define REMOTE_SMOOTHING_FACTOR 0.35f
 #define REMOTE_VELOCITY_LEAD_SECONDS 0.04f
+#define NAMEPLATE_NEAR_DEPTH 350.0f
+#define NAMEPLATE_FAR_DEPTH 3600.0f
+#define NAMEPLATE_HIDE_DEPTH 5200.0f
+#define NAMEPLATE_MIN_SCALE 0.60f
+#define NAMEPLATE_MAX_SCALE 1.15f
 
 typedef struct PlayerObject
 {
@@ -440,6 +445,19 @@ static float clamp_dp(float value, float lo, float hi)
     return value;
 }
 
+static float nameplate_scale_from_depth(float depth)
+{
+    float t;
+
+    if (depth <= NAMEPLATE_NEAR_DEPTH)
+        return NAMEPLATE_MAX_SCALE;
+    if (depth >= NAMEPLATE_FAR_DEPTH)
+        return NAMEPLATE_MIN_SCALE;
+
+    t = (depth - NAMEPLATE_NEAR_DEPTH) / (NAMEPLATE_FAR_DEPTH - NAMEPLATE_NEAR_DEPTH);
+    return NAMEPLATE_MAX_SCALE + (NAMEPLATE_MIN_SCALE - NAMEPLATE_MAX_SCALE) * t;
+}
+
 static void hide_nameplate_slot(int slot_index)
 {
     nameplates_ensure_init();
@@ -492,6 +510,10 @@ static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, co
     float side;
     float screen_x;
     float screen_y;
+    float label_scale;
+    float card_width;
+    float icon_size;
+    float font_size;
 
     nameplates_ensure_init();
     if (!remote || !local_obj || s_nameplate_cards[slot_index] == RECOMPUI_NULL_RESOURCE)
@@ -518,11 +540,16 @@ static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, co
     rel_z = (float)remote->z - eye_z;
     depth = rel_x * forward_x + rel_z * forward_z;
 
-    if (depth < 20.0f)
+    if (depth < 20.0f || depth > NAMEPLATE_HIDE_DEPTH)
     {
         hide_nameplate_slot(slot_index);
         return;
     }
+
+    label_scale = nameplate_scale_from_depth(depth);
+    card_width = 220.0f * label_scale;
+    icon_size = NAMEPLATE_ICON_SIZE * label_scale;
+    font_size = 20.0f * label_scale;
 
     side = rel_x * right_x + rel_z * right_z;
     vertical_depth = depth + 260.0f;
@@ -530,10 +557,18 @@ static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, co
     screen_y = clamp_dp(half_height - (rel_y / vertical_depth) * focal_y, 60.0f, 980.0f);
 
     recompui_open_context(s_nameplate_ctx);
+    recompui_set_width(s_nameplate_cards[slot_index], card_width, UNIT_DP);
+    recompui_set_margin_left(s_nameplate_cards[slot_index], -(card_width * 0.5f), UNIT_DP);
+    recompui_set_gap(s_nameplate_cards[slot_index], 6.0f * label_scale, UNIT_DP);
+    recompui_set_padding(s_nameplate_cards[slot_index], 3.0f * label_scale, UNIT_DP);
+    recompui_set_border_radius(s_nameplate_cards[slot_index], 4.0f * label_scale, UNIT_DP);
+    recompui_set_width(s_nameplate_icons[slot_index], icon_size, UNIT_DP);
+    recompui_set_height(s_nameplate_icons[slot_index], icon_size, UNIT_DP);
     recompui_set_imageview_texture(
         s_nameplate_icons[slot_index],
         (remote->ch >= 0 && remote->ch < 4) ? s_nameplate_char_textures[remote->ch] : s_nameplate_blank_texture);
     recompui_set_text(s_nameplate_labels[slot_index], remote->name);
+    recompui_set_font_size(s_nameplate_labels[slot_index], font_size, UNIT_DP);
     recompui_set_color(s_nameplate_labels[slot_index], remote->same_team ? &NAMEPLATE_TEXT : &NAMEPLATE_TEXT_OPPONENT);
     recompui_set_left(s_nameplate_cards[slot_index], screen_x, UNIT_DP);
     recompui_set_top(s_nameplate_cards[slot_index], screen_y, UNIT_DP);
