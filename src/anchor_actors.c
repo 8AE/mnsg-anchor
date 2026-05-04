@@ -10,11 +10,16 @@
 #include "modding.h"
 #include "recompui.h"
 #include "anchor.h"
+#include "icon_goemon.h"
+#include "icon_ebisumaru.h"
+#include "icon_sasuke.h"
+#include "icon_yae.h"
 
 #define ANCHOR_REMOTE_MAX 8
 #define STATE_SEND_FRAMES 6
 #define LOBBY_REFRESH_FRAMES 3
 #define PARTICLE_COUNT 3
+#define NAMEPLATE_ICON_SIZE 22.0f
 
 typedef struct PlayerObject
 {
@@ -70,15 +75,39 @@ static void *s_marker_tasks[ANCHOR_REMOTE_MAX];
 static void *s_marker_particles[ANCHOR_REMOTE_MAX];
 static void *s_marker_owner_task;
 static RecompuiContext s_nameplate_ctx = RECOMPUI_NULL_CONTEXT;
+static RecompuiResource s_nameplate_cards[ANCHOR_REMOTE_MAX];
+static RecompuiResource s_nameplate_icons[ANCHOR_REMOTE_MAX];
 static RecompuiResource s_nameplate_labels[ANCHOR_REMOTE_MAX];
 static int s_nameplate_initialized;
 static int s_nameplate_ctx_visible;
+static RecompuiTextureHandle s_nameplate_char_textures[4];
+static RecompuiTextureHandle s_nameplate_blank_texture;
+static int s_nameplate_textures_initialized;
 
 static const char *const s_char_names[4] = {
     "Goemon", "Ebisumaru", "Sasuke", "Yae"};
 
 static const RecompuiColor NAMEPLATE_TEXT = {255, 255, 255, 235};
 static const RecompuiColor NAMEPLATE_BG = {0, 0, 0, 150};
+
+static void nameplates_load_textures(void)
+{
+    static const unsigned char blank_px[4] = {0, 0, 0, 0};
+
+    if (s_nameplate_textures_initialized)
+        return;
+    s_nameplate_textures_initialized = 1;
+
+    s_nameplate_blank_texture = recompui_create_texture_rgba32((void *)blank_px, 1, 1);
+    s_nameplate_char_textures[0] = recompui_create_texture_rgba32(
+        (void *)icon_goemon_data, ICON_GOEMON_WIDTH, ICON_GOEMON_HEIGHT);
+    s_nameplate_char_textures[1] = recompui_create_texture_rgba32(
+        (void *)icon_ebisumaru_data, ICON_EBISUMARU_WIDTH, ICON_EBISUMARU_HEIGHT);
+    s_nameplate_char_textures[2] = recompui_create_texture_rgba32(
+        (void *)icon_sasuke_data, ICON_SASUKE_WIDTH, ICON_SASUKE_HEIGHT);
+    s_nameplate_char_textures[3] = recompui_create_texture_rgba32(
+        (void *)icon_yae_data, ICON_YAE_WIDTH, ICON_YAE_HEIGHT);
+}
 
 static const char *sfind(const char *hay, const char *needle)
 {
@@ -251,6 +280,8 @@ static void nameplates_ensure_init(void)
         return;
     s_nameplate_initialized = 1;
 
+    nameplates_load_textures();
+
     s_nameplate_ctx = recompui_create_context();
     recompui_set_context_captures_input(s_nameplate_ctx, 0);
     recompui_set_context_captures_mouse(s_nameplate_ctx, 0);
@@ -259,18 +290,29 @@ static void nameplates_ensure_init(void)
     root = recompui_context_root(s_nameplate_ctx);
     for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
     {
-        s_nameplate_labels[i] = recompui_create_label(s_nameplate_ctx, root, "", LABELSTYLE_ANNOTATION);
-        recompui_set_position(s_nameplate_labels[i], POSITION_ABSOLUTE);
-        recompui_set_width(s_nameplate_labels[i], 180.0f, UNIT_DP);
-        recompui_set_margin_left(s_nameplate_labels[i], -90.0f, UNIT_DP);
+        s_nameplate_cards[i] = recompui_create_element(s_nameplate_ctx, root);
+        recompui_set_position(s_nameplate_cards[i], POSITION_ABSOLUTE);
+        recompui_set_width(s_nameplate_cards[i], 220.0f, UNIT_DP);
+        recompui_set_margin_left(s_nameplate_cards[i], -110.0f, UNIT_DP);
+        recompui_set_display(s_nameplate_cards[i], DISPLAY_NONE);
+        recompui_set_flex_direction(s_nameplate_cards[i], FLEX_DIRECTION_ROW);
+        recompui_set_align_items(s_nameplate_cards[i], ALIGN_ITEMS_CENTER);
+        recompui_set_justify_content(s_nameplate_cards[i], JUSTIFY_CONTENT_CENTER);
+        recompui_set_gap(s_nameplate_cards[i], 6.0f, UNIT_DP);
+        recompui_set_background_color(s_nameplate_cards[i], &NAMEPLATE_BG);
+        recompui_set_border_radius(s_nameplate_cards[i], 4.0f, UNIT_DP);
+        recompui_set_padding(s_nameplate_cards[i], 3.0f, UNIT_DP);
+
+        s_nameplate_icons[i] = recompui_create_imageview(
+            s_nameplate_ctx, s_nameplate_cards[i], s_nameplate_blank_texture);
+        recompui_set_width(s_nameplate_icons[i], NAMEPLATE_ICON_SIZE, UNIT_DP);
+        recompui_set_height(s_nameplate_icons[i], NAMEPLATE_ICON_SIZE, UNIT_DP);
+
+        s_nameplate_labels[i] = recompui_create_label(s_nameplate_ctx, s_nameplate_cards[i], "", LABELSTYLE_ANNOTATION);
         recompui_set_text_align(s_nameplate_labels[i], TEXT_ALIGN_CENTER);
         recompui_set_font_size(s_nameplate_labels[i], 20.0f, UNIT_DP);
         recompui_set_font_weight(s_nameplate_labels[i], 700);
         recompui_set_color(s_nameplate_labels[i], &NAMEPLATE_TEXT);
-        recompui_set_background_color(s_nameplate_labels[i], &NAMEPLATE_BG);
-        recompui_set_border_radius(s_nameplate_labels[i], 4.0f, UNIT_DP);
-        recompui_set_padding(s_nameplate_labels[i], 3.0f, UNIT_DP);
-        recompui_set_display(s_nameplate_labels[i], DISPLAY_NONE);
     }
 
     recompui_close_context(s_nameplate_ctx);
@@ -288,10 +330,10 @@ static float clamp_dp(float value, float lo, float hi)
 static void hide_nameplate_slot(int slot_index)
 {
     nameplates_ensure_init();
-    if (s_nameplate_labels[slot_index] != RECOMPUI_NULL_RESOURCE)
+    if (s_nameplate_cards[slot_index] != RECOMPUI_NULL_RESOURCE)
     {
         recompui_open_context(s_nameplate_ctx);
-        recompui_set_display(s_nameplate_labels[slot_index], DISPLAY_NONE);
+        recompui_set_display(s_nameplate_cards[slot_index], DISPLAY_NONE);
         recompui_close_context(s_nameplate_ctx);
     }
 }
@@ -339,7 +381,7 @@ static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, co
     float screen_y;
 
     nameplates_ensure_init();
-    if (!remote || !local_obj || s_nameplate_labels[slot_index] == RECOMPUI_NULL_RESOURCE)
+    if (!remote || !local_obj || s_nameplate_cards[slot_index] == RECOMPUI_NULL_RESOURCE)
     {
         hide_nameplate_slot(slot_index);
         return;
@@ -375,10 +417,13 @@ static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, co
     screen_y = clamp_dp(half_height - (rel_y / vertical_depth) * focal_y, 60.0f, 980.0f);
 
     recompui_open_context(s_nameplate_ctx);
+    recompui_set_imageview_texture(
+        s_nameplate_icons[slot_index],
+        (remote->ch >= 0 && remote->ch < 4) ? s_nameplate_char_textures[remote->ch] : s_nameplate_blank_texture);
     recompui_set_text(s_nameplate_labels[slot_index], remote->name);
-    recompui_set_left(s_nameplate_labels[slot_index], screen_x, UNIT_DP);
-    recompui_set_top(s_nameplate_labels[slot_index], screen_y, UNIT_DP);
-    recompui_set_display(s_nameplate_labels[slot_index], DISPLAY_BLOCK);
+    recompui_set_left(s_nameplate_cards[slot_index], screen_x, UNIT_DP);
+    recompui_set_top(s_nameplate_cards[slot_index], screen_y, UNIT_DP);
+    recompui_set_display(s_nameplate_cards[slot_index], DISPLAY_FLEX);
     recompui_close_context(s_nameplate_ctx);
 }
 
