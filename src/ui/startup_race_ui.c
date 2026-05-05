@@ -9,6 +9,7 @@ void item_sync_force_flag(const char *name);
 void item_sync_force_flag_val(const char *name, int val);
 int item_sync_save_is_loaded(void);
 int item_sync_write_local_flag_val(const char *name, int val);
+void anchor_set_current_character_if_needed(void);
 
 extern void func_8000B640_C240(void);
 extern void func_8000B5D0_C1D0(void);
@@ -91,6 +92,7 @@ static void apply_pending_race_flags(void)
         if (s_race_pending_keys[i])
             item_sync_write_local_flag_val(s_race_pending_keys[i], s_race_pending_values[i]);
     }
+    anchor_set_current_character_if_needed();
 
     s_race_apply_pending = 0;
     s_race_pending_count = 0;
