@@ -30,6 +30,7 @@ extern unsigned char *D_8015C5C8_15D1C8;
 #define SAVE_SPAWN_Y 0x20E
 #define SAVE_CAM_ROT 0x210
 #define SAVE_CHARACTER_BASE 0x94
+#define SAVE_WARP_GOEMON_HOUSE 0x2A4
 #define RACE_CHARACTER_ENFORCE_FRAMES 180
 
 typedef struct
@@ -209,6 +210,11 @@ static void write_save_s32(int offset, int value)
     *(int *)&D_8015C608_15D208[offset] = value;
 }
 
+static int read_save_s32(int offset)
+{
+    return *(int *)&D_8015C608_15D208[offset];
+}
+
 static int race_key_equals(const char *a, const char *b)
 {
     int i = 0;
@@ -239,14 +245,36 @@ static int character_index_for_key(const char *key)
     return -1;
 }
 
-static void apply_race_character_selection(int update_sync_cache)
+static int race_flag_selected_by_key(const char *key)
 {
     int i;
 
     for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
     {
         const AnchorFlagEntry *entry = anchor_flag_catalog_get(i);
+        if (entry && entry->key && race_key_equals(entry->key, key))
+            return s_start_selected[i] != 0;
+    }
+
+    return 0;
+}
+
+static int race_goemon_house_warp_unlocked(void)
+{
+    return race_flag_selected_by_key("wp_goemon_h") ||
+           read_save_s32(SAVE_WARP_GOEMON_HOUSE) != 0;
+}
+
+static void apply_race_character_selection(int update_sync_cache)
+{
+    int i;
+    int house_warp_unlocked = race_goemon_house_warp_unlocked();
+
+    for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
+    {
+        const AnchorFlagEntry *entry = anchor_flag_catalog_get(i);
         int character_index;
+        int enabled;
 
         if (!entry || !entry->key)
             continue;
@@ -255,10 +283,14 @@ static void apply_race_character_selection(int update_sync_cache)
         if (character_index < 0)
             continue;
 
+        enabled = s_start_selected[i] ? 1 : 0;
+        if (house_warp_unlocked && (character_index == 0 || character_index == 1))
+            enabled = 1;
+
         if (update_sync_cache)
-            item_sync_write_local_flag_val(entry->key, s_start_selected[i] ? 1 : 0);
+            item_sync_write_local_flag_val(entry->key, enabled);
         else
-            write_save_s32(SAVE_CHARACTER_BASE + character_index * 4, s_start_selected[i] ? 1 : 0);
+            write_save_s32(SAVE_CHARACTER_BASE + character_index * 4, enabled);
     }
 }
 
@@ -273,7 +305,7 @@ static int race_has_start_character(void)
             return 1;
     }
 
-    return 0;
+    return race_goemon_house_warp_unlocked();
 }
 
 static void apply_race_start_location(void)
@@ -370,6 +402,20 @@ static int is_default_start_flag(const AnchorFlagEntry *entry)
 
     return text_equals(entry->key, "chr_goemon") ||
            text_equals(entry->key, "chr_ebisu");
+}
+
+static int find_flag_index_by_key(const char *key)
+{
+    int i;
+
+    for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
+    {
+        const AnchorFlagEntry *entry = anchor_flag_catalog_get(i);
+        if (entry && entry->key && race_key_equals(entry->key, key))
+            return i;
+    }
+
+    return -1;
 }
 
 static void set_status(const char *text, int ok)
@@ -900,6 +946,16 @@ static void build_category_detail_view(RecompuiResource parent, int cat_idx)
     recompui_set_color(hint, &R_DIM);
     recompui_set_font_size(hint, 14.0f, UNIT_DP);
 
+    if (text_equals(s_category_names[cat_idx], "Characters"))
+    {
+        RecompuiResource character_note = recompui_create_label(
+            s_ctx, s_category_views[cat_idx],
+            "Goemon and Ebisumaru are also unlocked when Goemon's House warp is available.",
+            LABELSTYLE_SMALL);
+        recompui_set_color(character_note, &R_DIM);
+        recompui_set_font_size(character_note, 13.0f, UNIT_DP);
+    }
+
     RecompuiResource list = recompui_create_element(s_ctx, s_category_views[cat_idx]);
     recompui_set_display(list, DISPLAY_FLEX);
     recompui_set_flex_direction(list, FLEX_DIRECTION_COLUMN);
@@ -1258,6 +1314,7 @@ static void race_ui_init(void)
     if (s_flag_count > RACE_MAX_FLAGS)
         s_flag_count = RACE_MAX_FLAGS;
     build_category_index();
+    s_goal_idx = find_flag_index_by_key("fl_congo");
 
     s_ctx = recompui_create_context();
     recompui_set_context_captures_input(s_ctx, 1);
@@ -1362,6 +1419,8 @@ static void race_ui_init(void)
         update_category_count(i);
         update_goal_category_count(i);
     }
+    update_goal_buttons(-1, s_goal_idx);
+    update_goal_label();
 }
 
 static void start_race(void)
