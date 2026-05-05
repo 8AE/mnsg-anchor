@@ -30,7 +30,6 @@ extern unsigned char *D_8015C5C8_15D1C8;
 #define SAVE_SPAWN_Y 0x20E
 #define SAVE_CAM_ROT 0x210
 #define SAVE_CHARACTER_BASE 0x94
-#define SAVE_WARP_GOEMON_HOUSE 0x2A4
 #define RACE_CHARACTER_ENFORCE_FRAMES 180
 
 typedef struct
@@ -193,6 +192,7 @@ static int s_category_count = 0;
 static int s_active_category = -1;
 static int s_active_goal_category = -1;
 static int s_screen = 0;
+static int s_race_started = 0;
 static int s_race_apply_pending = 0;
 static int s_race_autoload_pending = 0;
 static int s_race_character_enforce_frames = 0;
@@ -208,11 +208,6 @@ static void write_save_s16(int offset, short value)
 static void write_save_s32(int offset, int value)
 {
     *(int *)&D_8015C608_15D208[offset] = value;
-}
-
-static int read_save_s32(int offset)
-{
-    return *(int *)&D_8015C608_15D208[offset];
 }
 
 static int race_key_equals(const char *a, const char *b)
@@ -245,30 +240,9 @@ static int character_index_for_key(const char *key)
     return -1;
 }
 
-static int race_flag_selected_by_key(const char *key)
-{
-    int i;
-
-    for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
-    {
-        const AnchorFlagEntry *entry = anchor_flag_catalog_get(i);
-        if (entry && entry->key && race_key_equals(entry->key, key))
-            return s_start_selected[i] != 0;
-    }
-
-    return 0;
-}
-
-static int race_goemon_house_warp_unlocked(void)
-{
-    return race_flag_selected_by_key("wp_goemon_h") ||
-           read_save_s32(SAVE_WARP_GOEMON_HOUSE) != 0;
-}
-
 static void apply_race_character_selection(int update_sync_cache)
 {
     int i;
-    int house_warp_unlocked = race_goemon_house_warp_unlocked();
 
     for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
     {
@@ -284,9 +258,6 @@ static void apply_race_character_selection(int update_sync_cache)
             continue;
 
         enabled = s_start_selected[i] ? 1 : 0;
-        if (house_warp_unlocked && (character_index == 0 || character_index == 1))
-            enabled = 1;
-
         if (update_sync_cache)
             item_sync_write_local_flag_val(entry->key, enabled);
         else
@@ -305,7 +276,7 @@ static int race_has_start_character(void)
             return 1;
     }
 
-    return race_goemon_house_warp_unlocked();
+    return 0;
 }
 
 static void apply_race_start_location(void)
@@ -950,7 +921,7 @@ static void build_category_detail_view(RecompuiResource parent, int cat_idx)
     {
         RecompuiResource character_note = recompui_create_label(
             s_ctx, s_category_views[cat_idx],
-            "Goemon and Ebisumaru are also unlocked when Goemon's House warp is available.",
+            "During a race, Goemon and Ebisumaru unlock when Goemon's House warp is set.",
             LABELSTYLE_SMALL);
         recompui_set_color(character_note, &R_DIM);
         recompui_set_font_size(character_note, 13.0f, UNIT_DP);
@@ -1468,6 +1439,7 @@ static void start_race(void)
     s_race_apply_pending = 1;
     s_race_autoload_pending = 1;
     s_race_character_enforce_frames = RACE_CHARACTER_ENFORCE_FRAMES;
+    s_race_started = 1;
     anchor_startup_menu_finish();
     if (s_visible)
     {
@@ -1679,4 +1651,9 @@ void anchor_race_file_select_autoload(void *entity, int param2)
     func_8003521C_35E1C(func_801CD890_660740);
     apply_pending_race_flags();
     recomp_printf("[Race] Auto-loaded race file from file select.\n");
+}
+
+int anchor_race_is_active(void)
+{
+    return s_race_started;
 }
