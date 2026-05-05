@@ -11,6 +11,8 @@ int item_sync_save_is_loaded(void);
 int item_sync_write_local_flag_val(const char *name, int val);
 void anchor_set_current_character_if_needed(void);
 
+extern unsigned char D_8015C608_15D208[];
+extern signed short D_8006B780_6C380[];
 extern void func_8000B640_C240(void);
 extern void func_8000B5D0_C1D0(void);
 extern void func_8003521C_35E1C(void *func_ptr);
@@ -19,7 +21,116 @@ extern unsigned char *D_8015C5C8_15D1C8;
 
 #define RACE_MAX_FLAGS 320
 #define RACE_MAX_CATEGORIES 64
+#define RACE_MAX_LOCATIONS 96
 #define RACE_TEXT_LEN 96
+#define SAVE_SPAWN_ROOM 0x204
+#define SAVE_PLAYER_ROT 0x208
+#define SAVE_SPAWN_X 0x20A
+#define SAVE_SPAWN_Z 0x20C
+#define SAVE_SPAWN_Y 0x20E
+#define SAVE_CAM_ROT 0x210
+
+typedef struct
+{
+    unsigned short room;
+    short x;
+    short y;
+    short z;
+    const char *name;
+} RaceStartLocation;
+
+typedef struct
+{
+    short posX;
+    short posY;
+    short posZ;
+    short camRot;
+    short playerRot;
+} RaceDebugStartingData;
+
+static const RaceStartLocation s_start_locations[] = {
+    {0x1D1, 56, -40, 51, "Goemon's House"},
+    {0x161, -97, 0, -190, "Oedo Town Housing"},
+    {0x15F, -103, 0, 5, "Oedo Town Shopping District"},
+    {0x15E, -440, 0, -47, "Oedo Town Super Pass Bridge"},
+    {0x160, 62, 7, 45, "Oedo Town Shrine Area"},
+    {0x162, -238, 8, 228, "Oedo Town Nihon Bashi Bridge"},
+    {0x164, -350, 7, 93, "Oedo Castle Main Gate"},
+    {0x165, 101, 7, 109, "Stairs to Oedo Castle"},
+    {0x166, -143, 147, 264, "Oedo Castle Entrance"},
+    {0x163, 34, -14, 6, "Oedo Town Road to Mt Fuji"},
+    {0x167, 3, 0, 153, "Zazen Town Entrance"},
+    {0x168, 0, 27, 90, "Zazen Town Bridge"},
+    {0x169, 61, 8, 231, "Zazen Town Main Town"},
+    {0x16A, 5, 27, 97, "Zazen Town Watering Hole"},
+    {0x16C, 60, 7, 221, "Zazen Town Back"},
+    {0x16D, -106, 7, 2, "Zazen Town Golden Temple"},
+    {0x16F, -226, 7, 0, "Zazen Town Mt Nyoigatake Sidewalk"},
+    {0x170, -224, 140, -1, "Zazen Town Mt Nyoigatake Fire Shrine"},
+    {0x172, -62, 6, -91, "Zazen Town Duck Creek Upstream"},
+    {0x173, -143, -48, -136, "Zazen Town Duck Creek Ushiwaka"},
+    {0x171, 102, 7, 0, "Zazen Town Benkei Bridge"},
+    {0x16B, -269, -49, -118, "Zazen Town Duck Creek Jump Area"},
+    {0x16E, 282, 7, 57, "Zazen Town Bizen Bridge"},
+    {0x130, -10, 56, -976, "Musashi Beach"},
+    {0x131, -377, -48, -430, "Musashi Tunnel"},
+    {0x14F, -377, -48, -430, "Tunnel to Northeast 1"},
+    {0x150, -577, -106, 400, "Tunnel to Northeast 2"},
+    {0x132, -2975, -293, -311, "Iga"},
+    {0x151, 328, -150, 302, "Mutsu Crossroads"},
+    {0x152, -547, -24, 27, "Uzen Tunnel"},
+    {0x154, 29, -319, -535, "Waterfall of Kegon"},
+    {0x179, -372, 70, -129, "Festival Village Entrance"},
+    {0x17A, -3, 0, -385, "Festival Village Shopping District"},
+    {0x17B, 224, 0, 0, "Festival Village Stage"},
+    {0x17C, -176, 70, 87, "Festival Village Rear"},
+    {0x14B, 441, -299, 758, "Mt Fear"},
+    {0x14B, 56, -40, 51, "Witches House"},
+    {0x14D, -242, 200, -816, "Shoreline"},
+    {0x14C, 0, -46, -576, "Ugo Stone Circle"},
+    {0x178, 74, 98, 179, "Folkypoke Village Entrance"},
+    {0x175, -62, 0, 214, "Folkypoke Village Hay Farm"},
+    {0x176, -125, -14, 90, "Folkypoke Village Housing"},
+    {0x177, 172, 98, -66, "Folkypoke Village Shopping District"},
+    {0x1B8, 142, -70, 77, "Oedo Tourist Center - Awa Branch"},
+    {0x13A, 491, -33, -39, "Tosa Fields"},
+    {0x13B, -29, 0, 723, "Tosa Bridge"},
+    {0x1B5, 48, -50, 35, "Iyo Coffee Shop"},
+    {0x141, 48, -50, 35, "Iyo Hills"},
+    {0x1B1, 48, -50, 35, "Kai's Coffee Shop"},
+    {0x12C, 48, -50, 35, "Kai Highway"},
+    {0x12D, 264, 352, 87, "Mt Fuji (Bottom)"},
+    {0x12E, 173, 90, 144, "Mt Fuji Crater"},
+    {0x12F, 180, -131, 69, "Mt Fuji (Peak)"},
+    {0x1D2, 56, -40, 51, "Mt Fuji Salesman Room"},
+    {0x133, -167, 351, -1226, "Yamato Shrine Exterior"},
+    {0x136, -167, 351, -1226, "Yamato Bamboo Forest"},
+    {0x137, -595, -96, 108, "Turtle Stone"},
+    {0x134, 51, -330, 202, "Yamato Shrine Interior"},
+    {0x1B3, 48, -50, 35, "Kii's Coffee Shop"},
+    {0x138, -595, -96, 108, "Kii Awaji Island"},
+    {0x1B9, 142, -70, 77, "Oedo Tourist Center - Awaji Island Branch"},
+    {0x139, 142, -70, 77, "Husband and Wife Rocks"},
+    {0x13C, 9, -86, 282, "Kompira Mountain First Block"},
+    {0x13D, 9, -86, 282, "Kompira Mountain Second Block"},
+    {0x1B4, 48, -50, 35, "Kompiras Coffee Shop"},
+    {0x13E, 48, -50, 35, "Kompira Mountain Third Block"},
+    {0x13F, 0, -313, 763, "Kompira Mountain Fourth Block"},
+    {0x140, -2, -44, 189, "Kompira Mountain Grounds"},
+    {0x143, 593, 78, 0, "Kurashiki"},
+    {0x144, -880, 52, 901, "Nagato"},
+    {0x145, 791, -20, -792, "Hagi"},
+    {0x146, -98, 159, -1152, "Akiyoshidai"},
+    {0x147, -881, -24, -361, "Shuhodo"},
+    {0x153, -443, 33, -236, "Gateway Viewpoint"},
+    {0x1B6, 48, -50, 35, "Izumo Coffee Shop"},
+    {0x148, -443, 33, -236, "Izumo"},
+    {0x149, -27, -62, -467, "Lake with a Large Tree"},
+    {0x14A, -27, 62, -467, "Inaba"},
+};
+
+static const int s_start_location_count =
+    (int)(sizeof(s_start_locations) / sizeof(s_start_locations[0]));
 
 static const RecompuiColor R_BG = {8, 8, 12, 230};
 static const RecompuiColor R_PANEL = {14, 14, 22, 255};
@@ -36,16 +147,20 @@ static const RecompuiColor R_RED = {220, 68, 68, 255};
 static RecompuiContext s_ctx = RECOMPUI_NULL_CONTEXT;
 static RecompuiResource s_setup_view = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_goal_view = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_location_view = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_category_views[RACE_MAX_CATEGORIES];
 static RecompuiResource s_goal_category_views[RACE_MAX_CATEGORIES];
 static RecompuiResource s_goal_lbl = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_location_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_goal_btns[RACE_MAX_FLAGS];
 static RecompuiResource s_start_btns[RACE_MAX_FLAGS];
+static RecompuiResource s_location_btns[RACE_MAX_LOCATIONS];
 static RecompuiResource s_category_count_lbls[RACE_MAX_CATEGORIES];
 static RecompuiResource s_goal_category_count_lbls[RACE_MAX_CATEGORIES];
 static char s_goal_btn_text[RACE_MAX_FLAGS][RACE_TEXT_LEN];
 static char s_start_btn_text[RACE_MAX_FLAGS][RACE_TEXT_LEN];
+static char s_location_btn_text[RACE_MAX_LOCATIONS][RACE_TEXT_LEN];
 static char s_category_count_text[RACE_MAX_CATEGORIES][32];
 static char s_goal_category_count_text[RACE_MAX_CATEGORIES][32];
 static unsigned char s_start_selected[RACE_MAX_FLAGS];
@@ -60,12 +175,16 @@ static int s_pending_open = 0;
 static int s_pending_back = 0;
 static int s_pending_start = 0;
 static int s_pending_choose_goal = 0;
+static int s_pending_choose_location = 0;
 static int s_pending_goal_done = 0;
+static int s_pending_location_done = 0;
 static int s_pending_category_idx = -1;
 static int s_pending_goal_category_idx = -1;
 static int s_pending_goal_idx = -1;
+static int s_pending_location_idx = -1;
 static int s_pending_toggle_idx = -1;
 static int s_goal_idx = -1;
+static int s_location_idx = 0;
 static int s_flag_count = 0;
 static int s_category_count = 0;
 static int s_active_category = -1;
@@ -76,6 +195,30 @@ static int s_race_autoload_pending = 0;
 static int s_race_pending_count = 0;
 static const char *s_race_pending_keys[RACE_MAX_FLAGS];
 static int s_race_pending_values[RACE_MAX_FLAGS];
+
+static void write_save_s16(int offset, short value)
+{
+    *(short *)&D_8015C608_15D208[offset] = value;
+}
+
+static void apply_race_start_location(void)
+{
+    const RaceStartLocation *loc;
+    RaceDebugStartingData *debug_start;
+
+    if (s_location_idx < 0 || s_location_idx >= s_start_location_count)
+        s_location_idx = 0;
+
+    loc = &s_start_locations[s_location_idx];
+    debug_start = (RaceDebugStartingData *)&D_8006B780_6C380[loc->room * 5];
+
+    write_save_s16(SAVE_SPAWN_ROOM, (short)loc->room);
+    write_save_s16(SAVE_SPAWN_X, loc->x);
+    write_save_s16(SAVE_SPAWN_Z, loc->y);
+    write_save_s16(SAVE_SPAWN_Y, loc->z);
+    write_save_s16(SAVE_CAM_ROT, debug_start->camRot);
+    write_save_s16(SAVE_PLAYER_ROT, debug_start->playerRot);
+}
 
 static void apply_pending_race_flags(void)
 {
@@ -92,11 +235,12 @@ static void apply_pending_race_flags(void)
         if (s_race_pending_keys[i])
             item_sync_write_local_flag_val(s_race_pending_keys[i], s_race_pending_values[i]);
     }
+    apply_race_start_location();
     anchor_set_current_character_if_needed();
 
     s_race_apply_pending = 0;
     s_race_pending_count = 0;
-    recomp_printf("[Race] Applied configured starting flags to loaded save.\n");
+    recomp_printf("[Race] Applied configured starting flags and start location to loaded save.\n");
 }
 
 static void copy_text(char *dst, const char *src, int max_len)
@@ -280,6 +424,7 @@ static void set_screen(int screen)
     recompui_open_context(s_ctx);
     recompui_set_display(s_setup_view, screen == 0 ? DISPLAY_FLEX : DISPLAY_NONE);
     recompui_set_display(s_goal_view, screen == 1 ? DISPLAY_FLEX : DISPLAY_NONE);
+    recompui_set_display(s_location_view, screen == 4 ? DISPLAY_FLEX : DISPLAY_NONE);
     for (i = 0; i < s_category_count; i++)
     {
         if (s_category_views[i] != RECOMPUI_NULL_RESOURCE)
@@ -289,6 +434,19 @@ static void set_screen(int screen)
             recompui_set_display(s_goal_category_views[i],
                                   (screen == 3 && i == s_active_goal_category) ? DISPLAY_FLEX : DISPLAY_NONE);
     }
+    recompui_close_context(s_ctx);
+}
+
+static void update_location_label(void)
+{
+    const char *text = "Goemon's House";
+
+    if (s_location_idx >= 0 && s_location_idx < s_start_location_count)
+        text = s_start_locations[s_location_idx].name;
+
+    recompui_open_context(s_ctx);
+    if (s_location_lbl != RECOMPUI_NULL_RESOURCE)
+        recompui_set_text(s_location_lbl, text);
     recompui_close_context(s_ctx);
 }
 
@@ -320,6 +478,27 @@ static void update_start_button(int idx)
     recompui_close_context(s_ctx);
 
     update_category_count(category_for_flag(idx));
+}
+
+static void update_location_buttons(int old_idx, int new_idx)
+{
+    recompui_open_context(s_ctx);
+
+    if (old_idx >= 0 && old_idx < s_start_location_count && old_idx < RACE_MAX_LOCATIONS &&
+        s_location_btns[old_idx] != RECOMPUI_NULL_RESOURCE)
+    {
+        make_toggle_text(s_location_btn_text[old_idx], "[ ] ", s_start_locations[old_idx].name);
+        recompui_set_text(s_location_btns[old_idx], s_location_btn_text[old_idx]);
+    }
+
+    if (new_idx >= 0 && new_idx < s_start_location_count && new_idx < RACE_MAX_LOCATIONS &&
+        s_location_btns[new_idx] != RECOMPUI_NULL_RESOURCE)
+    {
+        make_toggle_text(s_location_btn_text[new_idx], "[x] ", s_start_locations[new_idx].name);
+        recompui_set_text(s_location_btns[new_idx], s_location_btn_text[new_idx]);
+    }
+
+    recompui_close_context(s_ctx);
 }
 
 static void update_goal_buttons(int old_idx, int new_idx)
@@ -367,12 +546,28 @@ static void on_choose_goal_clicked(RecompuiResource res, const RecompuiEventData
         s_pending_choose_goal = 1;
 }
 
+static void on_choose_location_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_choose_location = 1;
+}
+
 static void on_goal_done_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
 {
     (void)res;
     (void)ud;
     if (ev->type == UI_EVENT_CLICK)
         s_pending_goal_done = 1;
+}
+
+static void on_location_done_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_location_done = 1;
 }
 
 static void on_category_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
@@ -394,6 +589,13 @@ static void on_goal_clicked(RecompuiResource res, const RecompuiEventData *ev, v
     (void)res;
     if (ev->type == UI_EVENT_CLICK)
         s_pending_goal_idx = (int)(unsigned long)ud;
+}
+
+static void on_location_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_location_idx = (int)(unsigned long)ud;
 }
 
 static void on_start_flag_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
@@ -459,6 +661,27 @@ static void add_goal_flag_button(RecompuiResource row, int idx, const AnchorFlag
     recompui_set_padding_right(s_goal_btns[idx], 12.0f, UNIT_DP);
     recompui_set_tab_index(s_goal_btns[idx], TAB_INDEX_AUTO);
     recompui_register_callback(s_goal_btns[idx], on_goal_clicked, (void *)(unsigned long)idx);
+}
+
+static void add_location_button(RecompuiResource row, int idx)
+{
+    make_toggle_text(s_location_btn_text[idx],
+                     idx == s_location_idx ? "[x] " : "[ ] ",
+                     s_start_locations[idx].name);
+
+    s_location_btns[idx] = recompui_create_button(s_ctx, row, s_location_btn_text[idx], BUTTONSTYLE_SECONDARY);
+    recompui_set_cursor(s_location_btns[idx], CURSOR_POINTER);
+    recompui_set_font_size(s_location_btns[idx], 12.0f, UNIT_DP);
+    recompui_set_text_align(s_location_btns[idx], TEXT_ALIGN_LEFT);
+    recompui_set_flex_grow(s_location_btns[idx], 1.0f);
+    recompui_set_flex_basis(s_location_btns[idx], 50.0f, UNIT_PERCENT);
+    recompui_set_height(s_location_btns[idx], 34.0f, UNIT_DP);
+    recompui_set_padding_top(s_location_btns[idx], 3.0f, UNIT_DP);
+    recompui_set_padding_bottom(s_location_btns[idx], 3.0f, UNIT_DP);
+    recompui_set_padding_left(s_location_btns[idx], 12.0f, UNIT_DP);
+    recompui_set_padding_right(s_location_btns[idx], 12.0f, UNIT_DP);
+    recompui_set_tab_index(s_location_btns[idx], TAB_INDEX_AUTO);
+    recompui_register_callback(s_location_btns[idx], on_location_clicked, (void *)(unsigned long)idx);
 }
 
 static void build_category_index(void)
@@ -736,6 +959,48 @@ static void build_setup_view(RecompuiResource parent)
     recompui_set_tab_index(choose_btn, TAB_INDEX_AUTO);
     recompui_register_callback(choose_btn, on_choose_goal_clicked, 0);
 
+    RecompuiResource location_card = recompui_create_element(s_ctx, s_setup_view);
+    recompui_set_display(location_card, DISPLAY_FLEX);
+    recompui_set_flex_direction(location_card, FLEX_DIRECTION_ROW);
+    recompui_set_align_items(location_card, ALIGN_ITEMS_CENTER);
+    recompui_set_justify_content(location_card, JUSTIFY_CONTENT_SPACE_BETWEEN);
+    recompui_set_gap(location_card, 12.0f, UNIT_DP);
+    recompui_set_padding_left(location_card, 16.0f, UNIT_DP);
+    recompui_set_padding_right(location_card, 12.0f, UNIT_DP);
+    recompui_set_padding_top(location_card, 10.0f, UNIT_DP);
+    recompui_set_padding_bottom(location_card, 10.0f, UNIT_DP);
+    recompui_set_min_height(location_card, 66.0f, UNIT_DP);
+    recompui_set_background_color(location_card, &R_CARD_ALT);
+    recompui_set_border_radius(location_card, 6.0f, UNIT_DP);
+    recompui_set_border_width(location_card, 1.0f, UNIT_DP);
+    recompui_set_border_color(location_card, &R_BORDER);
+
+    RecompuiResource location_text = recompui_create_element(s_ctx, location_card);
+    recompui_set_display(location_text, DISPLAY_FLEX);
+    recompui_set_flex_direction(location_text, FLEX_DIRECTION_COLUMN);
+    recompui_set_gap(location_text, 4.0f, UNIT_DP);
+    recompui_set_flex_grow(location_text, 1.0f);
+
+    RecompuiResource location_title = recompui_create_label(s_ctx, location_text, "Starting Location", LABELSTYLE_SMALL);
+    recompui_set_color(location_title, &R_DIM);
+    recompui_set_font_size(location_title, 14.0f, UNIT_DP);
+
+    s_location_lbl = recompui_create_label(s_ctx, location_text, "Goemon's House", LABELSTYLE_NORMAL);
+    recompui_set_color(s_location_lbl, &R_WHITE);
+    recompui_set_font_size(s_location_lbl, 18.0f, UNIT_DP);
+
+    RecompuiResource choose_location_btn = recompui_create_button(s_ctx, location_card, "Choose Start", BUTTONSTYLE_PRIMARY);
+    recompui_set_cursor(choose_location_btn, CURSOR_POINTER);
+    recompui_set_font_size(choose_location_btn, 13.0f, UNIT_DP);
+    recompui_set_height(choose_location_btn, 36.0f, UNIT_DP);
+    recompui_set_width(choose_location_btn, 140.0f, UNIT_DP);
+    recompui_set_padding_top(choose_location_btn, 4.0f, UNIT_DP);
+    recompui_set_padding_bottom(choose_location_btn, 4.0f, UNIT_DP);
+    recompui_set_padding_left(choose_location_btn, 10.0f, UNIT_DP);
+    recompui_set_padding_right(choose_location_btn, 10.0f, UNIT_DP);
+    recompui_set_tab_index(choose_location_btn, TAB_INDEX_AUTO);
+    recompui_register_callback(choose_location_btn, on_choose_location_clicked, 0);
+
     RecompuiResource intro = recompui_create_label(
         s_ctx, s_setup_view,
         "Starting flags are applied when the race begins. Pick only what the route should begin with.",
@@ -811,6 +1076,73 @@ static void build_goal_view(RecompuiResource parent)
     build_goal_category_picker(list);
 }
 
+static void build_location_view(RecompuiResource parent)
+{
+    RecompuiResource row = RECOMPUI_NULL_RESOURCE;
+    int cols = 0;
+    int i;
+
+    s_location_view = recompui_create_element(s_ctx, parent);
+    recompui_set_display(s_location_view, DISPLAY_NONE);
+    recompui_set_flex_direction(s_location_view, FLEX_DIRECTION_COLUMN);
+    recompui_set_gap(s_location_view, 10.0f, UNIT_DP);
+    recompui_set_padding_left(s_location_view, 18.0f, UNIT_DP);
+    recompui_set_padding_right(s_location_view, 18.0f, UNIT_DP);
+    recompui_set_padding_top(s_location_view, 12.0f, UNIT_DP);
+    recompui_set_padding_bottom(s_location_view, 12.0f, UNIT_DP);
+    recompui_set_flex_grow(s_location_view, 1.0f);
+
+    RecompuiResource top = recompui_create_element(s_ctx, s_location_view);
+    recompui_set_display(top, DISPLAY_FLEX);
+    recompui_set_flex_direction(top, FLEX_DIRECTION_ROW);
+    recompui_set_align_items(top, ALIGN_ITEMS_CENTER);
+    recompui_set_justify_content(top, JUSTIFY_CONTENT_SPACE_BETWEEN);
+    recompui_set_gap(top, 12.0f, UNIT_DP);
+
+    RecompuiResource label = recompui_create_label(s_ctx, top, "Choose Starting Location", LABELSTYLE_NORMAL);
+    recompui_set_color(label, &R_WHITE);
+    recompui_set_font_weight(label, 700);
+    recompui_set_font_size(label, 20.0f, UNIT_DP);
+
+    RecompuiResource done_btn = recompui_create_button(s_ctx, top, "Done", BUTTONSTYLE_PRIMARY);
+    recompui_set_cursor(done_btn, CURSOR_POINTER);
+    recompui_set_font_size(done_btn, 13.0f, UNIT_DP);
+    recompui_set_height(done_btn, 36.0f, UNIT_DP);
+    recompui_set_width(done_btn, 110.0f, UNIT_DP);
+    recompui_set_padding_top(done_btn, 4.0f, UNIT_DP);
+    recompui_set_padding_bottom(done_btn, 4.0f, UNIT_DP);
+    recompui_set_tab_index(done_btn, TAB_INDEX_AUTO);
+    recompui_register_callback(done_btn, on_location_done_clicked, 0);
+
+    RecompuiResource hint = recompui_create_label(
+        s_ctx, s_location_view,
+        "Only one start can be active. The race launch will skip the original intro and spawn here.",
+        LABELSTYLE_SMALL);
+    recompui_set_color(hint, &R_DIM);
+    recompui_set_font_size(hint, 14.0f, UNIT_DP);
+
+    RecompuiResource list = recompui_create_element(s_ctx, s_location_view);
+    recompui_set_display(list, DISPLAY_FLEX);
+    recompui_set_flex_direction(list, FLEX_DIRECTION_COLUMN);
+    recompui_set_gap(list, 4.0f, UNIT_DP);
+    recompui_set_flex_grow(list, 1.0f);
+    recompui_set_overflow_y(list, OVERFLOW_SCROLL);
+    recompui_set_padding_left(list, 10.0f, UNIT_DP);
+    recompui_set_padding_right(list, 10.0f, UNIT_DP);
+    recompui_set_padding_bottom(list, 10.0f, UNIT_DP);
+
+    for (i = 0; i < s_start_location_count && i < RACE_MAX_LOCATIONS; i++)
+    {
+        if (row == RECOMPUI_NULL_RESOURCE || cols >= 2)
+        {
+            row = make_grid_row(list);
+            cols = 0;
+        }
+        add_location_button(row, i);
+        cols++;
+    }
+}
+
 static void race_ui_init(void)
 {
     int i;
@@ -827,6 +1159,11 @@ static void race_ui_init(void)
         s_start_selected[i] = is_default_start_flag(entry);
         s_goal_btn_text[i][0] = '\0';
         s_start_btn_text[i][0] = '\0';
+    }
+    for (i = 0; i < RACE_MAX_LOCATIONS; i++)
+    {
+        s_location_btns[i] = RECOMPUI_NULL_RESOURCE;
+        s_location_btn_text[i][0] = '\0';
     }
     for (i = 0; i < RACE_MAX_CATEGORIES; i++)
     {
@@ -905,6 +1242,7 @@ static void race_ui_init(void)
 
         build_setup_view(panel);
         build_goal_view(panel);
+        build_location_view(panel);
         for (i = 0; i < s_category_count; i++)
         {
             build_category_detail_view(panel, i);
@@ -960,6 +1298,11 @@ static void start_race(void)
         set_status("Select a race end condition first.", 0);
         return;
     }
+    if (s_location_idx < 0 || s_location_idx >= s_start_location_count)
+    {
+        set_status("Select a starting location first.", 0);
+        return;
+    }
 
     s_race_pending_count = 0;
     for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
@@ -978,8 +1321,9 @@ static void start_race(void)
      * TODO: Race protocol.
      * This is where the selected end condition and starting flags should be
      * published to Anchor once the race packet format exists. For now this
-     * queues the configured starting flags and auto-loads the first file.
-     * The flags are written when the game has initialized save memory.
+     * queues the configured starting flags/location and auto-loads the
+     * first file. The save writes happen when the game has initialized
+     * save memory.
      */
     s_race_apply_pending = 1;
     s_race_autoload_pending = 1;
@@ -1031,6 +1375,7 @@ void anchor_startup_race_frame_hook(void)
             s_active_goal_category = -1;
             set_screen(0);
             update_goal_label();
+            update_location_label();
             recompui_show_context(s_ctx);
             s_visible = 1;
         }
@@ -1042,12 +1387,25 @@ void anchor_startup_race_frame_hook(void)
         set_screen(1);
     }
 
+    if (s_pending_choose_location)
+    {
+        s_pending_choose_location = 0;
+        set_screen(4);
+    }
+
     if (s_pending_goal_done)
     {
         s_pending_goal_done = 0;
         s_active_goal_category = -1;
         set_screen(0);
         update_goal_label();
+    }
+
+    if (s_pending_location_done)
+    {
+        s_pending_location_done = 0;
+        set_screen(0);
+        update_location_label();
     }
 
     if (s_pending_category_idx >= 0)
@@ -1078,6 +1436,16 @@ void anchor_startup_race_frame_hook(void)
         set_status("Race end condition selected.", 1);
     }
 
+    if (s_pending_location_idx >= 0)
+    {
+        int old_location = s_location_idx;
+        s_location_idx = s_pending_location_idx;
+        s_pending_location_idx = -1;
+        update_location_buttons(old_location, s_location_idx);
+        update_location_label();
+        set_status("Starting location selected.", 1);
+    }
+
     if (s_pending_toggle_idx >= 0)
     {
         int idx = s_pending_toggle_idx;
@@ -1098,12 +1466,13 @@ void anchor_startup_race_frame_hook(void)
             s_active_goal_category = -1;
             set_screen(1);
         }
-        else if (s_screen == 1 || s_screen == 2)
+        else if (s_screen == 1 || s_screen == 2 || s_screen == 4)
         {
             s_active_category = -1;
             s_active_goal_category = -1;
             set_screen(0);
             update_goal_label();
+            update_location_label();
         }
         else
         {
@@ -1134,6 +1503,13 @@ RECOMP_HOOK_RETURN("func_8000B5D0_C1D0")
 void anchor_race_file_started_hook(void)
 {
     apply_pending_race_flags();
+}
+
+RECOMP_HOOK("func_8000B2A0_BEA0")
+void anchor_race_spawn_read_hook(void)
+{
+    if (s_race_apply_pending && item_sync_save_is_loaded())
+        apply_race_start_location();
 }
 
 RECOMP_HOOK("func_801CE1F0_6610A0")
