@@ -33,6 +33,7 @@
 #include "recomputils.h"
 #include "recompui.h"
 #include "anchor.h"
+#include "anchor_runtime.h"
 
 /* =========================================================================
    Game save-data symbol (datasyms VRAM 0x8015C608)
@@ -1329,7 +1330,7 @@ static void process_incoming_packets(void)
         else if (is_packet_type(pkt, "DAMAGE_SYNC"))
         {
             signed int dmg = 0;
-            if (recomp_get_config_u32("anchor_damage_sync") == 0 &&
+            if (anchor_runtime_damage_sync_enabled() &&
                 get_ds_damage(pkt, &dmg) && dmg > 0 && save_is_loaded())
             {
                 unsigned char cur_hp = DS_HP_READ();
@@ -1349,7 +1350,7 @@ static void process_incoming_packets(void)
         else if (is_packet_type(pkt, "HEAL_SYNC"))
         {
             signed int heal = 0;
-            if (recomp_get_config_u32("anchor_damage_sync") == 0 &&
+            if (anchor_runtime_damage_sync_enabled() &&
                 get_ds_heal(pkt, &heal) && heal > 0 && save_is_loaded())
             {
                 unsigned char cur_hp = DS_HP_READ();
@@ -1640,7 +1641,7 @@ void item_sync_update(void)
             /* HP decreased this frame – the active character took damage.  */
             unsigned char damage = (unsigned char)(s_ds_prev_hp - ds_cur_hp);
 
-            if (recomp_get_config_u32("anchor_damage_sync") == 0)
+            if (anchor_runtime_damage_sync_enabled())
             {
                 /* Build JSON payload {"damage":N} without printf.          */
                 char ds_payload[20];
@@ -1674,7 +1675,7 @@ void item_sync_update(void)
             /* HP increased this frame – the active character was healed.   */
             unsigned char healed = (unsigned char)(ds_cur_hp - s_ds_prev_hp);
 
-            if (recomp_get_config_u32("anchor_damage_sync") == 0)
+            if (anchor_runtime_damage_sync_enabled())
             {
                 /* Build JSON payload {"heal":N} without printf.            */
                 char hs_payload[18];

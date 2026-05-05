@@ -28,6 +28,7 @@
 #include "recompui.h"
 #include "recompconfig.h"
 #include "anchor.h"
+#include "anchor_runtime.h"
 #include "icon_goemon.h"
 #include "icon_ebisumaru.h"
 #include "icon_sasuke.h"
@@ -346,6 +347,20 @@ void anchor_ui_update(void)
         s_notif_timer--;
         if (s_notif_timer == 0 && s_notif_ctx != RECOMPUI_NULL_CONTEXT)
             recompui_hide_context(s_notif_ctx);
+    }
+
+    /* Startup/race configuration screens are full-screen interactive modals.
+     * Keep the player list out of the UI stack until the game has actually
+     * launched so RT64 and startup menus retain control. */
+    if (!anchor_startup_menu_is_complete())
+    {
+        if (s_plist_visible && s_plist_ctx != RECOMPUI_NULL_CONTEXT)
+        {
+            recompui_hide_context(s_plist_ctx);
+            s_plist_visible = 0;
+        }
+        s_plist_refresh_timer = 0;
+        return;
     }
 
     /* ----- Player list maintenance --------------------------------------- */

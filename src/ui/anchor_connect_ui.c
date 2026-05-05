@@ -12,7 +12,7 @@
  *     corner that reopens the connection modal at any time during gameplay,
  *     allowing players to disconnect or change settings.
  *
- * Both contexts are created lazily on the very first game frame via a
+ * The connection modal is created lazily on the very first game frame via a
  * RECOMP_HOOK_RETURN on func_80002040_2C40 (the same hook used by debug.c
  * and anchor_ui.c).  The callback/frame-hook pattern from debug.c is used
  * throughout: callbacks only set flags, never call context API functions
@@ -77,12 +77,6 @@ static int s_pending_open = 0;
 static int s_pending_close = 0;
 static int s_pending_connect = 0;
 static int s_pending_disconnect = 0;
-
-/* Countdown for the one-shot startup open.  Set to 1 after init so the
- * modal is shown on the frame AFTER debug.c's toggle context has been
- * raised — preventing the toggle context (captures_mouse=1) from landing
- * above the modal and blocking all input.  0 = already fired / inactive. */
-static int s_startup_open_delay = 0;
 
 /* Pending status text and its colour indication (1=green / 0=red). */
 static const char *s_pending_status = 0;
@@ -494,8 +488,9 @@ static void apply_status_update(void)
 
 /**
  * Hooked on the game's main per-frame tick.  On the very first frame it
- * builds all UI and shows the connection modal; thereafter it drains the
- * pending-action flags produced by the button callbacks.
+ * builds all UI; thereafter it drains the pending-action flags produced by
+ * the NET button and modal callbacks. Startup flow is handled by
+ * startup_menu.c and startup_multiplayer_ui.c.
  */
 RECOMP_HOOK_RETURN("func_80002040_2C40")
 void anchor_connect_ui_frame_hook(void)
@@ -505,28 +500,7 @@ void anchor_connect_ui_frame_hook(void)
     {
         s_initialized = 1;
         connect_ui_init();
-        /* Delay the startup open by one frame so debug.c's toggle context
-         * (captures_mouse=1) is already shown before the modal appears.
-         * Both hooks fire on the same frame; anchor runs before debug
-         * (alphabetical), so without this delay the toggle ends up above
-         * the modal and blocks all input.                                */
-        s_startup_open_delay = 1;
         return;
-    }
-
-    /* ── Startup open (fires the frame after debug.c shows toggle_ctx) ─ */
-    if (s_startup_open_delay > 0)
-    {
-        s_startup_open_delay--;
-        if (s_startup_open_delay == 0)
-        {
-            /* Set the flag and return – the modal will be shown NEXT frame,
-             * after debug_ui_frame_hook has already raised s_toggle_ctx.
-             * Processing it this frame would still race with the toggle show
-             * and leave toggle above the modal (blocking all input).       */
-            s_pending_open = 1;
-            return;
-        }
     }
 
     /* ── Connect action ─────────────────────────────────────────────── */
