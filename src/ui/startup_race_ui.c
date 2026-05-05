@@ -29,6 +29,8 @@ extern unsigned char *D_8015C5C8_15D1C8;
 #define SAVE_SPAWN_Z 0x20C
 #define SAVE_SPAWN_Y 0x20E
 #define SAVE_CAM_ROT 0x210
+#define SAVE_CHARACTER_BASE 0x94
+#define RACE_CHARACTER_ENFORCE_FRAMES 180
 
 typedef struct
 {
@@ -192,6 +194,7 @@ static int s_active_goal_category = -1;
 static int s_screen = 0;
 static int s_race_apply_pending = 0;
 static int s_race_autoload_pending = 0;
+static int s_race_character_enforce_frames = 0;
 static int s_race_pending_count = 0;
 static const char *s_race_pending_keys[RACE_MAX_FLAGS];
 static int s_race_pending_values[RACE_MAX_FLAGS];
@@ -199,6 +202,78 @@ static int s_race_pending_values[RACE_MAX_FLAGS];
 static void write_save_s16(int offset, short value)
 {
     *(short *)&D_8015C608_15D208[offset] = value;
+}
+
+static void write_save_s32(int offset, int value)
+{
+    *(int *)&D_8015C608_15D208[offset] = value;
+}
+
+static int race_key_equals(const char *a, const char *b)
+{
+    int i = 0;
+
+    if (!a || !b)
+        return 0;
+
+    while (a[i] && b[i])
+    {
+        if (a[i] != b[i])
+            return 0;
+        i++;
+    }
+
+    return a[i] == b[i];
+}
+
+static int character_index_for_key(const char *key)
+{
+    if (race_key_equals(key, "chr_goemon"))
+        return 0;
+    if (race_key_equals(key, "chr_ebisu"))
+        return 1;
+    if (race_key_equals(key, "chr_sasuke"))
+        return 2;
+    if (race_key_equals(key, "chr_yae"))
+        return 3;
+    return -1;
+}
+
+static void apply_race_character_selection(int update_sync_cache)
+{
+    int i;
+
+    for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
+    {
+        const AnchorFlagEntry *entry = anchor_flag_catalog_get(i);
+        int character_index;
+
+        if (!entry || !entry->key)
+            continue;
+
+        character_index = character_index_for_key(entry->key);
+        if (character_index < 0)
+            continue;
+
+        if (update_sync_cache)
+            item_sync_write_local_flag_val(entry->key, s_start_selected[i] ? 1 : 0);
+        else
+            write_save_s32(SAVE_CHARACTER_BASE + character_index * 4, s_start_selected[i] ? 1 : 0);
+    }
+}
+
+static int race_has_start_character(void)
+{
+    int i;
+
+    for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
+    {
+        const AnchorFlagEntry *entry = anchor_flag_catalog_get(i);
+        if (entry && entry->key && character_index_for_key(entry->key) >= 0 && s_start_selected[i])
+            return 1;
+    }
+
+    return 0;
 }
 
 static void apply_race_start_location(void)
@@ -235,6 +310,7 @@ static void apply_pending_race_flags(void)
         if (s_race_pending_keys[i])
             item_sync_write_local_flag_val(s_race_pending_keys[i], s_race_pending_values[i]);
     }
+    apply_race_character_selection(1);
     apply_race_start_location();
     anchor_set_current_character_if_needed();
 
@@ -1303,6 +1379,11 @@ static void start_race(void)
         set_status("Select a starting location first.", 0);
         return;
     }
+    if (!race_has_start_character())
+    {
+        set_status("Select at least one starting character.", 0);
+        return;
+    }
 
     s_race_pending_count = 0;
     for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
@@ -1327,6 +1408,7 @@ static void start_race(void)
      */
     s_race_apply_pending = 1;
     s_race_autoload_pending = 1;
+    s_race_character_enforce_frames = RACE_CHARACTER_ENFORCE_FRAMES;
     anchor_startup_menu_finish();
     if (s_visible)
     {
@@ -1363,6 +1445,12 @@ void anchor_startup_race_frame_hook(void)
             s_visible = 0;
         }
         apply_pending_race_flags();
+        if (s_race_character_enforce_frames > 0 && item_sync_save_is_loaded())
+        {
+            apply_race_character_selection(0);
+            anchor_set_current_character_if_needed();
+            s_race_character_enforce_frames--;
+        }
         return;
     }
 
@@ -1509,7 +1597,10 @@ RECOMP_HOOK("func_8000B2A0_BEA0")
 void anchor_race_spawn_read_hook(void)
 {
     if (s_race_apply_pending && item_sync_save_is_loaded())
+    {
+        apply_race_character_selection(0);
         apply_race_start_location();
+    }
 }
 
 RECOMP_HOOK("func_801CE1F0_6610A0")
