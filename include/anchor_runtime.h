@@ -9,5 +9,7 @@ void anchor_startup_menu_finish(void);
 int anchor_startup_menu_is_complete(void);
 void anchor_startup_menu_open(void);
 void anchor_startup_multiplayer_open(void);
+void anchor_startup_multiplayer_open_for_race(void);
+void anchor_startup_race_open(void);
 
 #endif

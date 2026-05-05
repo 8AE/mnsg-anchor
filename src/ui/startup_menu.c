@@ -19,6 +19,7 @@ static int s_visible = 0;
 static int s_pending_open = 0;
 static int s_pending_single = 0;
 static int s_pending_multiplayer = 0;
+static int s_pending_race = 0;
 
 static void on_single_clicked(RecompuiResource res,
                               const RecompuiEventData *ev, void *ud)
@@ -38,6 +39,15 @@ static void on_multiplayer_clicked(RecompuiResource res,
         s_pending_multiplayer = 1;
 }
 
+static void on_race_clicked(RecompuiResource res,
+                            const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_race = 1;
+}
+
 static RecompuiResource make_mode_button(RecompuiContext ctx, RecompuiResource parent,
                                          const char *title_text, const char *desc_text,
                                          const RecompuiColor *accent,
@@ -52,7 +62,7 @@ static RecompuiResource make_mode_button(RecompuiContext ctx, RecompuiResource p
     recompui_set_border_radius(card, 7.0f, UNIT_DP);
     recompui_set_border_width(card, 1.0f, UNIT_DP);
     recompui_set_border_color(card, &SM_BORDER);
-    recompui_set_flex_grow(card, 1.0f);
+    recompui_set_width(card, 100.0f, UNIT_PERCENT);
 
     RecompuiResource title = recompui_create_label(ctx, card, title_text, LABELSTYLE_NORMAL);
     recompui_set_color(title, accent);
@@ -139,8 +149,8 @@ static void startup_menu_init(void)
 
         RecompuiResource body = recompui_create_element(s_menu_ctx, panel);
         recompui_set_display(body, DISPLAY_FLEX);
-        recompui_set_flex_direction(body, FLEX_DIRECTION_ROW);
-        recompui_set_gap(body, 16.0f, UNIT_DP);
+        recompui_set_flex_direction(body, FLEX_DIRECTION_COLUMN);
+        recompui_set_gap(body, 12.0f, UNIT_DP);
         recompui_set_padding(body, 24.0f, UNIT_DP);
 
         make_mode_button(s_menu_ctx, body, "Single Player",
@@ -148,6 +158,9 @@ static void startup_menu_init(void)
         make_mode_button(s_menu_ctx, body, "Multiplayer",
                          "Connect through Anchor before starting.", &SM_TEAL,
                          on_multiplayer_clicked);
+        make_mode_button(s_menu_ctx, body, "Race",
+                         "Connect online, choose a goal, and configure starting flags.",
+                         &SM_BLUE, on_race_clicked);
     }
     recompui_close_context(s_menu_ctx);
 }
@@ -195,11 +208,6 @@ void anchor_startup_menu_frame_hook(void)
             s_visible = 1;
         }
     }
-    else if (s_visible)
-    {
-        recompui_hide_context(s_menu_ctx);
-        recompui_show_context(s_menu_ctx);
-    }
 
     if (s_pending_single)
     {
@@ -222,5 +230,16 @@ void anchor_startup_menu_frame_hook(void)
             s_visible = 0;
         }
         anchor_startup_multiplayer_open();
+    }
+
+    if (s_pending_race)
+    {
+        s_pending_race = 0;
+        if (s_visible)
+        {
+            recompui_hide_context(s_menu_ctx);
+            s_visible = 0;
+        }
+        anchor_startup_multiplayer_open_for_race();
     }
 }

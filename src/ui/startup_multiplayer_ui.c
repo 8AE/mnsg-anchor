@@ -27,6 +27,7 @@ static RecompuiResource s_in_port = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_in_room = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_in_name = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_in_team = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_title_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_damage_state_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
 
@@ -37,6 +38,7 @@ static int s_pending_open = 0;
 static int s_pending_back = 0;
 static int s_pending_connect = 0;
 static int s_pending_toggle_damage = 0;
+static int s_launches_race = 0;
 
 static void int_to_str(int value, char *out)
 {
@@ -171,12 +173,15 @@ static void try_connect_from_ui(void)
     if (ok)
     {
         anchor_runtime_set_damage_sync_enabled(s_damage_enabled);
-        anchor_startup_menu_finish();
         if (s_visible)
         {
             recompui_hide_context(s_ctx);
             s_visible = 0;
         }
+        if (s_launches_race)
+            anchor_startup_race_open();
+        else
+            anchor_startup_menu_finish();
     }
     else
     {
@@ -256,11 +261,11 @@ static void multiplayer_ui_init(void)
         recompui_set_border_bottom_width(header, 1.0f, UNIT_DP);
         recompui_set_border_bottom_color(header, &MP_BORDER);
 
-        RecompuiResource title = recompui_create_label(
+        s_title_lbl = recompui_create_label(
             s_ctx, header, "Multiplayer", LABELSTYLE_NORMAL);
-        recompui_set_color(title, &MP_TEAL);
-        recompui_set_font_weight(title, 700);
-        recompui_set_font_size(title, 24.0f, UNIT_DP);
+        recompui_set_color(s_title_lbl, &MP_TEAL);
+        recompui_set_font_weight(s_title_lbl, 700);
+        recompui_set_font_size(s_title_lbl, 24.0f, UNIT_DP);
 
         RecompuiResource back_btn = recompui_create_button(
             s_ctx, header, "Back", BUTTONSTYLE_SECONDARY);
@@ -385,6 +390,13 @@ static void multiplayer_ui_init(void)
 
 void anchor_startup_multiplayer_open(void)
 {
+    s_launches_race = 0;
+    s_pending_open = 1;
+}
+
+void anchor_startup_multiplayer_open_for_race(void)
+{
+    s_launches_race = 1;
     s_pending_open = 1;
 }
 
@@ -409,14 +421,16 @@ void anchor_startup_multiplayer_frame_hook(void)
         s_pending_open = 0;
         if (!anchor_startup_menu_is_complete() && !s_visible)
         {
+            recompui_open_context(s_ctx);
+            recompui_set_text(s_title_lbl,
+                              s_launches_race ? "Race: Connect Online" : "Multiplayer");
+            recompui_set_text(s_status_lbl,
+                              s_launches_race ? "Connect before configuring the race." : "Ready to connect.");
+            recompui_set_color(s_status_lbl, &MP_DIM);
+            recompui_close_context(s_ctx);
             recompui_show_context(s_ctx);
             s_visible = 1;
         }
-    }
-    else if (!anchor_startup_menu_is_complete() && s_visible)
-    {
-        recompui_hide_context(s_ctx);
-        recompui_show_context(s_ctx);
     }
 
     if (s_pending_toggle_damage)

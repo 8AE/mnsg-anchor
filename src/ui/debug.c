@@ -27,6 +27,7 @@
 #include "recompui.h"
 #include "anchor.h"
 #include "anchor_runtime.h"
+#include "anchor_flag_catalog.h"
 
 /* Set to 1 to show the DBG button in the bottom-right corner. */
 static int DEBUG_BUTTON_ENABLED = 0;
@@ -46,14 +47,7 @@ extern void anchor_connect_ui_net_btn_callback(RecompuiResource res,
    are clickable rows backed by a flag in item_sync.c's sync tables.
    ========================================================================= */
 
-typedef struct
-{
-    const char *key;     /* NULL → section header; otherwise the anchor flag name */
-    const char *display; /* Section title, or human-readable item/flag name       */
-    int force_val;       /* 0 → write default (1); otherwise write this value  */
-} DebugEntry;
-
-static const DebugEntry s_entries[] = {
+static const AnchorFlagEntry s_entries[] = {
     /* ── Characters ─────────────────────────────────────────────────── */
     {0, "Characters"},
     {"chr_goemon", "Goemon"},
@@ -303,6 +297,18 @@ static const DebugEntry s_entries[] = {
 };
 
 #define NUM_ENTRIES ((int)(sizeof(s_entries) / sizeof(s_entries[0])))
+
+int anchor_flag_catalog_count(void)
+{
+    return NUM_ENTRIES;
+}
+
+const AnchorFlagEntry *anchor_flag_catalog_get(int index)
+{
+    if (index < 0 || index >= NUM_ENTRIES)
+        return 0;
+    return &s_entries[index];
+}
 
 /* =========================================================================
    Colours
