@@ -510,3 +510,14 @@ char *anchor_get_host_race_config_json(void)
     REPY_FN_CLEANUP;
     return result;
 }
+
+char *anchor_get_race_finish_payload_json(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_get_race_finish_payload_json_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.get_race_finish_payload_json()\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}

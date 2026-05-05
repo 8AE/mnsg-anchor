@@ -400,6 +400,14 @@ extern "C"
     */
    char *anchor_get_host_race_config_json(void);
 
+   /**
+    * @brief Return {"team":"...","players":"..."} for the local race team.
+    *
+    * Used as the payload for MNSG_RACE_FINISH packets. The caller must free
+    * the returned string with recomp_free().
+    */
+   char *anchor_get_race_finish_payload_json(void);
+
 #ifdef __cplusplus
 }
 #endif

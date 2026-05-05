@@ -147,6 +147,7 @@ static const RecompuiColor R_GREEN = {70, 190, 90, 255};
 static const RecompuiColor R_RED = {220, 68, 68, 255};
 
 static RecompuiContext s_ctx = RECOMPUI_NULL_CONTEXT;
+static RecompuiContext s_result_ctx = RECOMPUI_NULL_CONTEXT;
 static RecompuiResource s_setup_view = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_goal_view = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_location_view = RECOMPUI_NULL_RESOURCE;
@@ -155,6 +156,9 @@ static RecompuiResource s_goal_category_views[RACE_MAX_CATEGORIES];
 static RecompuiResource s_goal_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_location_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_result_title_lbl = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_result_team_lbl = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_result_players_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_goal_btns[RACE_MAX_FLAGS];
 static RecompuiResource s_start_btns[RACE_MAX_FLAGS];
 static RecompuiResource s_location_btns[RACE_MAX_LOCATIONS];
@@ -165,6 +169,8 @@ static char s_start_btn_text[RACE_MAX_FLAGS][RACE_TEXT_LEN];
 static char s_location_btn_text[RACE_MAX_LOCATIONS][RACE_TEXT_LEN];
 static char s_category_count_text[RACE_MAX_CATEGORIES][32];
 static char s_goal_category_count_text[RACE_MAX_CATEGORIES][32];
+static char s_result_team_text[128];
+static char s_result_players_text[512];
 static char s_config_json[8192];
 static unsigned char s_start_selected[RACE_MAX_FLAGS];
 static const char *s_category_names[RACE_MAX_CATEGORIES];
@@ -193,6 +199,8 @@ static int s_active_category = -1;
 static int s_active_goal_category = -1;
 static int s_screen = 0;
 static int s_race_started = 0;
+static int s_race_finished = 0;
+static int s_result_visible = 0;
 static int s_race_apply_pending = 0;
 static int s_race_autoload_pending = 0;
 static int s_race_character_enforce_frames = 0;
@@ -504,6 +512,123 @@ static int parse_json_string_after(const char *json, const char *key, char *out,
         out[i++] = *p++;
     out[i] = '\0';
     return i > 0;
+}
+
+static void race_result_ui_init(void)
+{
+    if (s_result_ctx != RECOMPUI_NULL_CONTEXT)
+        return;
+
+    s_result_ctx = recompui_create_context();
+    recompui_set_context_captures_input(s_result_ctx, 1);
+    recompui_set_context_captures_mouse(s_result_ctx, 1);
+
+    recompui_open_context(s_result_ctx);
+    {
+        RecompuiResource root = recompui_context_root(s_result_ctx);
+        RecompuiResource overlay = recompui_create_element(s_result_ctx, root);
+        RecompuiResource panel;
+        RecompuiResource prompt;
+
+        recompui_set_position(overlay, POSITION_ABSOLUTE);
+        recompui_set_left(overlay, 0.0f, UNIT_PERCENT);
+        recompui_set_top(overlay, 0.0f, UNIT_PERCENT);
+        recompui_set_width(overlay, 100.0f, UNIT_PERCENT);
+        recompui_set_height(overlay, 100.0f, UNIT_PERCENT);
+        recompui_set_background_color(overlay, &R_BG);
+
+        panel = recompui_create_element(s_result_ctx, root);
+        recompui_set_position(panel, POSITION_ABSOLUTE);
+        recompui_set_left(panel, 50.0f, UNIT_PERCENT);
+        recompui_set_top(panel, 16.0f, UNIT_PERCENT);
+        recompui_set_margin_left(panel, -280.0f, UNIT_DP);
+        recompui_set_width(panel, 560.0f, UNIT_DP);
+        recompui_set_display(panel, DISPLAY_FLEX);
+        recompui_set_flex_direction(panel, FLEX_DIRECTION_COLUMN);
+        recompui_set_gap(panel, 14.0f, UNIT_DP);
+        recompui_set_padding(panel, 28.0f, UNIT_DP);
+        recompui_set_background_color(panel, &R_PANEL);
+        recompui_set_border_radius(panel, 8.0f, UNIT_DP);
+        recompui_set_border_width(panel, 1.5f, UNIT_DP);
+        recompui_set_border_color(panel, &R_BORDER);
+
+        s_result_title_lbl = recompui_create_label(s_result_ctx, panel, "Race Complete", LABELSTYLE_NORMAL);
+        recompui_set_color(s_result_title_lbl, &R_PURPLE);
+        recompui_set_font_weight(s_result_title_lbl, 800);
+        recompui_set_font_size(s_result_title_lbl, 30.0f, UNIT_DP);
+        recompui_set_text_align(s_result_title_lbl, TEXT_ALIGN_CENTER);
+
+        s_result_team_lbl = recompui_create_label(s_result_ctx, panel, "", LABELSTYLE_NORMAL);
+        recompui_set_color(s_result_team_lbl, &R_WHITE);
+        recompui_set_font_weight(s_result_team_lbl, 700);
+        recompui_set_font_size(s_result_team_lbl, 20.0f, UNIT_DP);
+        recompui_set_text_align(s_result_team_lbl, TEXT_ALIGN_CENTER);
+
+        s_result_players_lbl = recompui_create_label(s_result_ctx, panel, "", LABELSTYLE_SMALL);
+        recompui_set_color(s_result_players_lbl, &R_DIM);
+        recompui_set_font_size(s_result_players_lbl, 16.0f, UNIT_DP);
+        recompui_set_text_align(s_result_players_lbl, TEXT_ALIGN_CENTER);
+
+        prompt = recompui_create_label(
+            s_result_ctx, panel,
+            "Please restart the game client to return to a fresh race state.",
+            LABELSTYLE_SMALL);
+        recompui_set_color(prompt, &R_GREEN);
+        recompui_set_font_weight(prompt, 700);
+        recompui_set_font_size(prompt, 16.0f, UNIT_DP);
+        recompui_set_text_align(prompt, TEXT_ALIGN_CENTER);
+    }
+    recompui_close_context(s_result_ctx);
+}
+
+static int local_team_matches(const char *team)
+{
+    int same = 0;
+    char *local_team;
+
+    if (!team || !team[0])
+        return 0;
+
+    local_team = anchor_get_team_id();
+    if (local_team)
+    {
+        same = text_equals(local_team, team);
+        recomp_free(local_team);
+    }
+
+    return same;
+}
+
+static void show_race_result(int victory, const char *team, const char *players)
+{
+    int pos;
+
+    race_result_ui_init();
+
+    copy_text(s_result_team_text, "Winning Team: ", (int)sizeof(s_result_team_text));
+    pos = 13;
+    append_text_limited(s_result_team_text, &pos, (int)sizeof(s_result_team_text),
+                        (team && team[0]) ? team : "default");
+    s_result_team_text[pos] = '\0';
+
+    copy_text(s_result_players_text, "Players: ", (int)sizeof(s_result_players_text));
+    pos = 9;
+    append_text_limited(s_result_players_text, &pos, (int)sizeof(s_result_players_text),
+                        (players && players[0]) ? players : "Player");
+    s_result_players_text[pos] = '\0';
+
+    recompui_open_context(s_result_ctx);
+    recompui_set_text(s_result_title_lbl, victory ? "Victory!" : "Defeated");
+    recompui_set_color(s_result_title_lbl, victory ? &R_GREEN : &R_RED);
+    recompui_set_text(s_result_team_lbl, s_result_team_text);
+    recompui_set_text(s_result_players_lbl, s_result_players_text);
+    recompui_close_context(s_result_ctx);
+
+    if (!s_result_visible)
+    {
+        recompui_show_context(s_result_ctx);
+        s_result_visible = 1;
+    }
 }
 
 static void update_category_count(int cat_idx)
@@ -1553,6 +1678,85 @@ void anchor_race_apply_config_json(const char *json)
     }
 }
 
+static void finish_race_with_payload(const char *payload_json, int local_finish)
+{
+    char team[96];
+    char players[384];
+    int victory;
+
+    if (s_race_finished)
+        return;
+
+    parse_json_string_after(payload_json, "\"team\"", team, (int)sizeof(team));
+    parse_json_string_after(payload_json, "\"players\"", players, (int)sizeof(players));
+
+    victory = local_finish || local_team_matches(team);
+    s_race_finished = 1;
+    s_race_started = 0;
+    s_race_apply_pending = 0;
+    s_race_autoload_pending = 0;
+    s_race_character_enforce_frames = 0;
+
+    if (local_finish)
+    {
+        anchor_send_custom_packet("MNSG_RACE_FINISH", payload_json ? payload_json : "{}", "", 0, 1);
+        anchor_send_game_complete();
+    }
+    anchor_set_race_lobby_state("finished", anchor_race_get_config_json());
+    show_race_result(victory, team, players);
+
+    recomp_printf("[Race] Race finished. Winning team='%s' players='%s'\n",
+                  team[0] ? team : "default", players[0] ? players : "Player");
+}
+
+void anchor_race_on_finish_packet(const char *packet_json)
+{
+    if (!s_race_started || !packet_json || !packet_json[0])
+        return;
+
+    finish_race_with_payload(packet_json, 0);
+}
+
+static int race_flag_is_goal(const char *flag_name, int flag_value)
+{
+    const AnchorFlagEntry *goal;
+
+    if (!s_race_started || s_race_finished || !flag_name || flag_value == 0)
+        return 0;
+
+    goal = anchor_flag_catalog_get(s_goal_idx);
+    if (!goal || !goal->key || !race_key_equals(goal->key, flag_name))
+        return 0;
+
+    return 1;
+}
+
+void anchor_race_on_flag_synced(const char *flag_name, int flag_value)
+{
+    char *payload;
+
+    if (!race_flag_is_goal(flag_name, flag_value))
+        return;
+
+    payload = anchor_get_race_finish_payload_json();
+    finish_race_with_payload(payload ? payload : "{}", 1);
+    if (payload)
+        recomp_free(payload);
+}
+
+void anchor_race_on_remote_flag_synced(const char *flag_name, int flag_value)
+{
+    char *payload;
+
+    if (!race_flag_is_goal(flag_name, flag_value))
+        return;
+
+    payload = anchor_get_race_finish_payload_json();
+    finish_race_with_payload(payload ? payload : "{}", 0);
+    if (payload)
+        recomp_free(payload);
+}
+
 int anchor_race_start_from_lobby(void)
 {
     int i;
@@ -1599,6 +1803,8 @@ int anchor_race_start_from_lobby(void)
     s_race_autoload_pending = 1;
     s_race_character_enforce_frames = RACE_CHARACTER_ENFORCE_FRAMES;
     s_race_started = 1;
+    s_race_finished = 0;
+    s_result_visible = 0;
     anchor_startup_menu_finish();
     if (s_visible)
     {

@@ -35,6 +35,10 @@
 #include "anchor.h"
 #include "anchor_runtime.h"
 
+void anchor_race_on_flag_synced(const char *flag_name, int flag_value);
+void anchor_race_on_remote_flag_synced(const char *flag_name, int flag_value);
+void anchor_race_on_finish_packet(const char *packet_json);
+
 /* =========================================================================
    Game save-data symbol (datasyms VRAM 0x8015C608)
    ========================================================================= */
@@ -1314,6 +1318,7 @@ static void process_incoming_packets(void)
                 get_flag_value(pkt, &fval))
             {
                 const char *display = apply_flag(fname, fval);
+                anchor_race_on_remote_flag_synced(fname, (int)fval);
                 if (display)
                     item_notif_push("Received from team", display);
             }
@@ -1385,6 +1390,10 @@ static void process_incoming_packets(void)
                 recomp_printf("[RyoSync] Applied +%d ryo (%d -> %d)\n",
                               (int)delta, (int)cur_ryo, (int)(cur_ryo + delta));
             }
+        }
+        else if (is_packet_type(pkt, "MNSG_RACE_FINISH"))
+        {
+            anchor_race_on_finish_packet(pkt);
         }
         /* All other packet types (ALL_CLIENT_STATE, UPDATE_CLIENT_STATE,
          * UPDATE_TEAM_STATE, etc.) are consumed here.  Python's internal
@@ -1480,6 +1489,7 @@ static void monitor_and_send_changes(void)
                 continue; /* budget exhausted – defer to next frame (cache not updated) */
 
             anchor_send_flag(s_fields[i].name, (int)cur, 1);
+            anchor_race_on_flag_synced(s_fields[i].name, (int)cur);
             ++sends;
             recomp_printf("[ItemSync] Sent field '%s' = %d\n",
                           s_fields[i].name, cur);
@@ -1505,6 +1515,7 @@ static void monitor_and_send_changes(void)
                 continue; /* defer to next frame */
 
             anchor_send_flag(s_flag_bits[i].name, 1, 1);
+            anchor_race_on_flag_synced(s_flag_bits[i].name, 1);
             ++sends;
             recomp_printf("[ItemSync] Sent flag '%s' (id=0x%X)\n",
                           s_flag_bits[i].name, s_flag_bits[i].id);

@@ -1153,6 +1153,27 @@ def get_host_race_config_json() -> str:
         return str(host.get("mnsgRaceConfig", ""))
 
 
+def get_race_finish_payload_json() -> str:
+    """
+    Return a JSON payload describing the local team for a race finish packet.
+
+    The C side sends this as an MNSG_RACE_FINISH custom packet when the
+    configured goal flag is reached.
+    """
+    with _player_states_lock:
+        names = [
+            v.get("name", f"Player{cid}")
+            for cid, v in sorted(_player_states.items())
+            if v.get("online", True) and v.get("teamId", "") == _team_id
+        ]
+    if not names:
+        names = [_player_name or "Player"]
+    return json.dumps({
+        "team": _team_id or "default",
+        "players": ", ".join(names),
+    }, separators=(",", ":"))
+
+
 def _decode_png_rgba(png: bytes) -> bytes:
     """
     Minimal PNG → RGBA32 decoder using stdlib only (``zlib`` + ``struct``).
