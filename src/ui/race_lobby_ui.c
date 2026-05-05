@@ -149,6 +149,26 @@ static void set_status(const char *text, const RecompuiColor *color)
     recompui_close_context(s_ctx);
 }
 
+static void close_lobby_to_startup(int disconnect)
+{
+    if (disconnect)
+        anchor_disconnect();
+
+    s_pending_open = 0;
+    s_pending_back = 0;
+    s_pending_configure = 0;
+    s_pending_start = 0;
+    s_join_check_frames = 0;
+    s_join_accepted = 0;
+
+    if (s_visible)
+    {
+        recompui_hide_context(s_ctx);
+        s_visible = 0;
+    }
+    anchor_startup_menu_open();
+}
+
 static int local_is_host(void)
 {
     unsigned int self_id = anchor_get_client_id();
@@ -430,9 +450,15 @@ void anchor_race_lobby_frame_hook(void)
     if (!s_visible)
         return;
 
+    if (s_pending_back)
+    {
+        close_lobby_to_startup(1);
+        return;
+    }
+
     if (!anchor_is_connected())
     {
-        set_status("Disconnected.", &L_RED);
+        close_lobby_to_startup(0);
         return;
     }
 
@@ -440,8 +466,7 @@ void anchor_race_lobby_frame_hook(void)
     {
         if (anchor_race_has_started())
         {
-            anchor_disconnect();
-            set_status("Race already started. Join a pending lobby instead.", &L_RED);
+            close_lobby_to_startup(1);
             return;
         }
         if (s_join_check_frames > 0)
@@ -506,15 +531,4 @@ void anchor_race_lobby_frame_hook(void)
         }
     }
 
-    if (s_pending_back)
-    {
-        s_pending_back = 0;
-        anchor_disconnect();
-        if (s_visible)
-        {
-            recompui_hide_context(s_ctx);
-            s_visible = 0;
-        }
-        anchor_startup_menu_open();
-    }
 }

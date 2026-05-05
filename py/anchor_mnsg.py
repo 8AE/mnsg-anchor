@@ -109,6 +109,8 @@ _local_character: str = ""
 _last_position_sent: "tuple[int, int, int] | None" = None
 _last_position_sent_ms: int = 0
 _position_seq: int = 0
+_race_status: str = ""
+_race_config_json: str = ""
 
 ###############################################################################
 # Constants
@@ -467,7 +469,7 @@ def connect(
     """
     global _sock, _connected, _client_id, _room_id, _team_id, _player_name
     global _last_position_sent, _last_position_sent_ms, _position_seq, _local_character
-    global _rx_thread, _disabled
+    global _rx_thread, _disabled, _race_status, _race_config_json
 
     if _connected:
         logger.info("anchor_mnsg: already connected.")
@@ -482,6 +484,8 @@ def connect(
     _last_position_sent_ms = 0
     _position_seq = 0
     _local_character = ""
+    _race_status = ""
+    _race_config_json = ""
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -623,11 +627,21 @@ def update_client_state(state_json: str) -> bool:
 
     # Server requires these fields.
     state.setdefault("teamId", _team_id)
+    if _race_status:
+        state.setdefault("mnsgRace", _race_status)
+    if _race_config_json:
+        state.setdefault("mnsgRaceConfig", _race_config_json)
     state["clientId"] = _client_id
     state["name"] = _player_name
     state["online"] = True
 
-    return _send_raw({"type": "UPDATE_CLIENT_STATE", "state": state})
+    sent = _send_raw({"type": "UPDATE_CLIENT_STATE", "state": state})
+    if sent and _client_id:
+        with _player_states_lock:
+            local = _player_states.setdefault(_client_id, {})
+            local.update(state)
+            local["self"] = True
+    return sent
 
 
 def set_save_loaded(is_loaded: bool) -> bool:
@@ -1066,9 +1080,13 @@ def set_race_lobby_state(status: str, config_json: str = "") -> bool:
       lobby   - waiting in the race lobby
       started - race has begun
     """
-    payload = {"mnsgRace": status or "lobby"}
+    global _race_status, _race_config_json
+    _race_status = status or "lobby"
     if config_json:
-        payload["mnsgRaceConfig"] = config_json
+        _race_config_json = config_json
+    payload = {"mnsgRace": _race_status}
+    if _race_config_json:
+        payload["mnsgRaceConfig"] = _race_config_json
     return update_client_state(json.dumps(payload, separators=(",", ":")))
 
 
