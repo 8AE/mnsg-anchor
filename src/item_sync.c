@@ -58,6 +58,11 @@ static int save_is_loaded(void)
     return SAVE_READ32(SAVE_HP_MAX_OFFSET) > 0;
 }
 
+int item_sync_save_is_loaded(void)
+{
+    return save_is_loaded();
+}
+
 /* =========================================================================
    Minimal string / JSON helpers  (no <string.h> / <stdio.h> required)
    ========================================================================= */
@@ -1833,6 +1838,45 @@ void item_sync_force_flag(const char *name)
     }
 
     recomp_printf("[Debug] item_sync_force_flag: unknown name '%s'\n", name);
+}
+
+int item_sync_write_local_flag_val(const char *name, int val)
+{
+    int i;
+
+    for (i = 0; i < NUM_FIELDS; ++i)
+    {
+        if (!streq(s_fields[i].name, name))
+            continue;
+
+        SAVE_WRITE32(s_fields[i].off, val);
+        if (s_fields[i].off == -0x028)
+        {
+            SAVE_WRITE32(-0x024, val);
+            s_ds_prev_hp = (unsigned char)val;
+        }
+        s_fields[i].cached = val;
+        recomp_printf("[Race] Wrote local field '%s' = %d\n", name, val);
+        return 1;
+    }
+
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        if (!streq(s_flag_bits[i].name, name))
+            continue;
+
+        if (val)
+        {
+            FLAG_SET_BIT(s_flag_bits[i].id);
+            s_flag_bits[i].cached = 1;
+        }
+        recomp_printf("[Race] Wrote local flag '%s' (id=0x%03X)\n",
+                      name, s_flag_bits[i].id);
+        return 1;
+    }
+
+    recomp_printf("[Race] item_sync_write_local_flag_val: unknown name '%s'\n", name);
+    return 0;
 }
 
 /**

@@ -1,4 +1,5 @@
 #include "modding.h"
+#include "recomputils.h"
 #include "recompui.h"
 #include "anchor.h"
 #include "anchor_runtime.h"
@@ -6,6 +7,14 @@
 
 void item_sync_force_flag(const char *name);
 void item_sync_force_flag_val(const char *name, int val);
+int item_sync_save_is_loaded(void);
+int item_sync_write_local_flag_val(const char *name, int val);
+
+extern void func_8000B640_C240(void);
+extern void func_8000B5D0_C1D0(void);
+extern void func_8003521C_35E1C(void *func_ptr);
+extern void func_801CD890_660740(void);
+extern unsigned char *D_8015C5C8_15D1C8;
 
 #define RACE_MAX_FLAGS 320
 #define RACE_MAX_CATEGORIES 64
@@ -61,6 +70,32 @@ static int s_category_count = 0;
 static int s_active_category = -1;
 static int s_active_goal_category = -1;
 static int s_screen = 0;
+static int s_race_apply_pending = 0;
+static int s_race_autoload_pending = 0;
+static int s_race_pending_count = 0;
+static const char *s_race_pending_keys[RACE_MAX_FLAGS];
+static int s_race_pending_values[RACE_MAX_FLAGS];
+
+static void apply_pending_race_flags(void)
+{
+    int i;
+
+    if (!s_race_apply_pending)
+        return;
+
+    if (!item_sync_save_is_loaded())
+        return;
+
+    for (i = 0; i < s_race_pending_count; i++)
+    {
+        if (s_race_pending_keys[i])
+            item_sync_write_local_flag_val(s_race_pending_keys[i], s_race_pending_values[i]);
+    }
+
+    s_race_apply_pending = 0;
+    s_race_pending_count = 0;
+    recomp_printf("[Race] Applied configured starting flags to loaded save.\n");
+}
 
 static void copy_text(char *dst, const char *src, int max_len)
 {
@@ -924,25 +959,28 @@ static void start_race(void)
         return;
     }
 
+    s_race_pending_count = 0;
     for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
     {
         const AnchorFlagEntry *entry = anchor_flag_catalog_get(i);
         if (!s_start_selected[i] || !entry || !entry->key)
             continue;
 
-        if (entry->force_val != 0)
-            item_sync_force_flag_val(entry->key, entry->force_val);
-        else
-            item_sync_force_flag(entry->key);
+        s_race_pending_keys[s_race_pending_count] = entry->key;
+        s_race_pending_values[s_race_pending_count] =
+            entry->force_val != 0 ? entry->force_val : 1;
+        s_race_pending_count++;
     }
 
     /*
      * TODO: Race protocol.
      * This is where the selected end condition and starting flags should be
      * published to Anchor once the race packet format exists. For now this
-     * applies the configured starting flags through the existing item-sync
-     * path and launches the online game.
+     * queues the configured starting flags and auto-loads the first file.
+     * The flags are written when the game has initialized save memory.
      */
+    s_race_apply_pending = 1;
+    s_race_autoload_pending = 1;
     anchor_startup_menu_finish();
     if (s_visible)
     {
@@ -978,6 +1016,7 @@ void anchor_startup_race_frame_hook(void)
             recompui_hide_context(s_ctx);
             s_visible = 0;
         }
+        apply_pending_race_flags();
         return;
     }
 
@@ -1081,4 +1120,35 @@ void anchor_startup_race_frame_hook(void)
         s_pending_start = 0;
         start_race();
     }
+}
+
+RECOMP_HOOK_RETURN("func_8000B640_C240")
+void anchor_race_save_start_hook(void)
+{
+    apply_pending_race_flags();
+}
+
+RECOMP_HOOK_RETURN("func_8000B5D0_C1D0")
+void anchor_race_file_started_hook(void)
+{
+    apply_pending_race_flags();
+}
+
+RECOMP_HOOK("func_801CE1F0_6610A0")
+void anchor_race_file_select_autoload(void *entity, int param2)
+{
+    (void)entity;
+    (void)param2;
+
+    if (!s_race_autoload_pending)
+        return;
+
+    s_race_autoload_pending = 0;
+    func_8000B640_C240();
+    func_8000B5D0_C1D0();
+    if (D_8015C5C8_15D1C8)
+        *(int *)(D_8015C5C8_15D1C8 + 0x3B040) = -1;
+    func_8003521C_35E1C(func_801CD890_660740);
+    apply_pending_race_flags();
+    recomp_printf("[Race] Auto-loaded race file from file select.\n");
 }
