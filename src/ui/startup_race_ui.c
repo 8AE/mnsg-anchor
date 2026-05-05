@@ -165,6 +165,7 @@ static char s_start_btn_text[RACE_MAX_FLAGS][RACE_TEXT_LEN];
 static char s_location_btn_text[RACE_MAX_LOCATIONS][RACE_TEXT_LEN];
 static char s_category_count_text[RACE_MAX_CATEGORIES][32];
 static char s_goal_category_count_text[RACE_MAX_CATEGORIES][32];
+static char s_config_json[8192];
 static unsigned char s_start_selected[RACE_MAX_FLAGS];
 static const char *s_category_names[RACE_MAX_CATEGORIES];
 static int s_category_start[RACE_MAX_CATEGORIES];
@@ -175,7 +176,6 @@ static int s_initialized = 0;
 static int s_visible = 0;
 static int s_pending_open = 0;
 static int s_pending_back = 0;
-static int s_pending_start = 0;
 static int s_pending_choose_goal = 0;
 static int s_pending_choose_location = 0;
 static int s_pending_goal_done = 0;
@@ -421,6 +421,89 @@ static void append_uint(char *dst, int *pos, int max_len, int value)
 
     for (i = len - 1; i >= 0 && *pos < max_len - 1; i--)
         dst[(*pos)++] = tmp[i];
+}
+
+static void append_char_limited(char *dst, int *pos, int max_len, char value)
+{
+    if (*pos < max_len - 1)
+        dst[(*pos)++] = value;
+}
+
+static void append_text_limited(char *dst, int *pos, int max_len, const char *text)
+{
+    int i = 0;
+    if (!text)
+        return;
+    while (text[i] && *pos < max_len - 1)
+        dst[(*pos)++] = text[i++];
+}
+
+static const char *find_text(const char *text, const char *needle)
+{
+    int i;
+    int j;
+
+    if (!text || !needle || !needle[0])
+        return 0;
+
+    for (i = 0; text[i]; i++)
+    {
+        for (j = 0; needle[j] && text[i + j] == needle[j]; j++)
+            ;
+        if (!needle[j])
+            return &text[i];
+    }
+
+    return 0;
+}
+
+static int parse_json_int_after(const char *json, const char *key, int fallback)
+{
+    const char *p = find_text(json, key);
+    int value = 0;
+    int found = 0;
+
+    if (!p)
+        return fallback;
+    while (*p && *p != ':')
+        p++;
+    if (*p == ':')
+        p++;
+    while (*p == ' ')
+        p++;
+    while (*p >= '0' && *p <= '9')
+    {
+        value = value * 10 + (*p - '0');
+        found = 1;
+        p++;
+    }
+
+    return found ? value : fallback;
+}
+
+static int parse_json_string_after(const char *json, const char *key, char *out, int out_len)
+{
+    const char *p = find_text(json, key);
+    int i = 0;
+
+    if (!out || out_len <= 0)
+        return 0;
+    out[0] = '\0';
+    if (!p)
+        return 0;
+    while (*p && *p != ':')
+        p++;
+    if (*p == ':')
+        p++;
+    while (*p && *p != '"')
+        p++;
+    if (*p != '"')
+        return 0;
+    p++;
+    while (*p && *p != '"' && i < out_len - 1)
+        out[i++] = *p++;
+    out[i] = '\0';
+    return i > 0;
 }
 
 static void update_category_count(int cat_idx)
@@ -696,14 +779,6 @@ static void on_start_flag_clicked(RecompuiResource res, const RecompuiEventData 
     (void)res;
     if (ev->type == UI_EVENT_CLICK)
         s_pending_toggle_idx = (int)(unsigned long)ud;
-}
-
-static void on_start_race_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
-{
-    (void)res;
-    (void)ud;
-    if (ev->type == UI_EVENT_CLICK)
-        s_pending_start = 1;
 }
 
 static RecompuiResource make_grid_row(RecompuiResource section)
@@ -1368,20 +1443,10 @@ static void race_ui_init(void)
 
         s_status_lbl = recompui_create_label(
             s_ctx, footer,
-            "Configure the race, then start online.",
+            "Configure the race, then return to the lobby.",
             LABELSTYLE_SMALL);
         recompui_set_color(s_status_lbl, &R_DIM);
         recompui_set_font_size(s_status_lbl, 14.0f, UNIT_DP);
-
-        RecompuiResource start_btn = recompui_create_button(s_ctx, footer, "Start Race", BUTTONSTYLE_PRIMARY);
-        recompui_set_cursor(start_btn, CURSOR_POINTER);
-        recompui_set_font_size(start_btn, 14.0f, UNIT_DP);
-        recompui_set_height(start_btn, 38.0f, UNIT_DP);
-        recompui_set_width(start_btn, 150.0f, UNIT_DP);
-        recompui_set_padding_top(start_btn, 5.0f, UNIT_DP);
-        recompui_set_padding_bottom(start_btn, 5.0f, UNIT_DP);
-        recompui_set_tab_index(start_btn, TAB_INDEX_AUTO);
-        recompui_register_callback(start_btn, on_start_race_clicked, 0);
     }
     recompui_close_context(s_ctx);
 
@@ -1394,7 +1459,101 @@ static void race_ui_init(void)
     update_goal_label();
 }
 
-static void start_race(void)
+const char *anchor_race_get_config_json(void)
+{
+    int i;
+    int pos = 0;
+    const AnchorFlagEntry *goal = anchor_flag_catalog_get(s_goal_idx);
+    int wrote_flag = 0;
+
+    s_config_json[0] = '\0';
+    append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), "{\"g\":\"");
+    append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json),
+                        goal && goal->key ? goal->key : "");
+    append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), "\",\"loc\":");
+    append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_location_idx);
+    append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"flags\":[");
+
+    for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
+    {
+        const AnchorFlagEntry *entry = anchor_flag_catalog_get(i);
+        if (!s_start_selected[i] || !entry || !entry->key)
+            continue;
+        if (wrote_flag)
+            append_char_limited(s_config_json, &pos, (int)sizeof(s_config_json), ',');
+        append_char_limited(s_config_json, &pos, (int)sizeof(s_config_json), '"');
+        append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), entry->key);
+        append_char_limited(s_config_json, &pos, (int)sizeof(s_config_json), '"');
+        wrote_flag = 1;
+    }
+
+    append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), "]}");
+    s_config_json[pos] = '\0';
+    return s_config_json;
+}
+
+void anchor_race_apply_config_json(const char *json)
+{
+    int i;
+    int old_goal = s_goal_idx;
+    int old_location = s_location_idx;
+    char key[RACE_TEXT_LEN];
+    const char *flags;
+
+    if (!json || !json[0])
+        return;
+
+    if (parse_json_string_after(json, "\"g\"", key, RACE_TEXT_LEN))
+    {
+        int idx = find_flag_index_by_key(key);
+        if (idx >= 0)
+            s_goal_idx = idx;
+    }
+
+    s_location_idx = parse_json_int_after(json, "\"loc\"", s_location_idx);
+    if (s_location_idx < 0 || s_location_idx >= s_start_location_count)
+        s_location_idx = 0;
+
+    for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
+        s_start_selected[i] = 0;
+
+    flags = find_text(json, "\"flags\"");
+    if (flags)
+    {
+        flags = find_text(flags, "[");
+        while (flags && *flags && *flags != ']')
+        {
+            if (*flags == '"')
+            {
+                int out = 0;
+                flags++;
+                while (*flags && *flags != '"' && out < RACE_TEXT_LEN - 1)
+                    key[out++] = *flags++;
+                key[out] = '\0';
+                i = find_flag_index_by_key(key);
+                if (i >= 0 && i < RACE_MAX_FLAGS)
+                    s_start_selected[i] = 1;
+            }
+            if (*flags)
+                flags++;
+        }
+    }
+
+    if (s_ui_built)
+    {
+        for (i = 0; i < s_category_count; i++)
+        {
+            update_category_count(i);
+            update_goal_category_count(i);
+        }
+        update_goal_buttons(old_goal, s_goal_idx);
+        update_location_buttons(old_location, s_location_idx);
+        update_goal_label();
+        update_location_label();
+    }
+}
+
+int anchor_race_start_from_lobby(void)
 {
     int i;
 
@@ -1402,17 +1561,17 @@ static void start_race(void)
         !anchor_flag_catalog_get(s_goal_idx)->key)
     {
         set_status("Select a race end condition first.", 0);
-        return;
+        return 0;
     }
     if (s_location_idx < 0 || s_location_idx >= s_start_location_count)
     {
         set_status("Select a starting location first.", 0);
-        return;
+        return 0;
     }
     if (!race_has_start_character())
     {
         set_status("Select at least one starting character.", 0);
-        return;
+        return 0;
     }
 
     s_race_pending_count = 0;
@@ -1446,6 +1605,7 @@ static void start_race(void)
         recompui_hide_context(s_ctx);
         s_visible = 0;
     }
+    return 1;
 }
 
 void anchor_startup_race_open(void)
@@ -1600,15 +1760,8 @@ void anchor_startup_race_frame_hook(void)
                 recompui_hide_context(s_ctx);
                 s_visible = 0;
             }
-            anchor_disconnect();
-            anchor_startup_menu_open();
+            anchor_race_lobby_open();
         }
-    }
-
-    if (s_pending_start)
-    {
-        s_pending_start = 0;
-        start_race();
     }
 }
 

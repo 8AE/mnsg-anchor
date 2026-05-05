@@ -453,3 +453,60 @@ char *anchor_get_lobby_positions_json(void)
     REPY_FN_CLEANUP;
     return result; /* caller must recomp_free() */
 }
+
+int anchor_set_race_lobby_state(const char *status, const char *config_json)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_STR("status", (status && status[0]) ? status : "lobby");
+    REPY_FN_SET_STR("config_json", (config_json && config_json[0]) ? config_json : "");
+    REPY_FN_EXEC_CACHE(anchor_set_race_lobby_state_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.set_race_lobby_state(status, config_json)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+char *anchor_get_race_lobby_json(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_get_race_lobby_json_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.get_race_lobby_json()\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+unsigned int anchor_get_race_host_id(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_get_race_host_id_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.get_race_host_id()\n");
+    unsigned int result = (unsigned int)REPY_FN_GET_U32("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_race_has_started(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_race_has_started_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.race_has_started()\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+char *anchor_get_host_race_config_json(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_get_host_race_config_json_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.get_host_race_config_json()\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}

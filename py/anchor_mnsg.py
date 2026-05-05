@@ -300,7 +300,16 @@ def _recv_loop() -> None:
                             name = cs.get("name", "") or s.get("name", f"Player{cid}")
                             online = bool(cs.get("online", True))
                             location = cs.get("currentRoom", "")
-                            new_players[cid] = {"name": name, "teamId": cs.get("teamId", ""), "online": online, "self": bool(s.get("self")), "location": location, "roomId": int(cs.get("currentRoomId", -1))}
+                            new_players[cid] = {
+                                "name": name,
+                                "teamId": cs.get("teamId", ""),
+                                "online": online,
+                                "self": bool(s.get("self")),
+                                "location": location,
+                                "roomId": int(cs.get("currentRoomId", -1)),
+                                "mnsgRace": str(cs.get("mnsgRace", "")),
+                                "mnsgRaceConfig": str(cs.get("mnsgRaceConfig", "")),
+                            }
                     with _player_states_lock:
                         _player_states.clear()
                         _player_states.update(new_players)
@@ -346,8 +355,14 @@ def _recv_loop() -> None:
                             if cid in _player_states:
                                 if "name" in cs:
                                     _player_states[cid]["name"] = cs["name"]
+                                if "teamId" in cs:
+                                    _player_states[cid]["teamId"] = cs["teamId"]
                                 if "online" in cs:
                                     _player_states[cid]["online"] = bool(cs["online"])
+                                if "mnsgRace" in cs:
+                                    _player_states[cid]["mnsgRace"] = str(cs["mnsgRace"])
+                                if "mnsgRaceConfig" in cs:
+                                    _player_states[cid]["mnsgRaceConfig"] = str(cs["mnsgRaceConfig"])
                                 if "currentRoom" in cs:
                                     _player_states[cid]["location"] = cs["currentRoom"]
                                 if "currentRoomId" in cs:
@@ -380,6 +395,8 @@ def _recv_loop() -> None:
                                     "self": False,
                                     "location": location,
                                     "roomId": int(cs.get("currentRoomId", -1)),
+                                    "mnsgRace": str(cs.get("mnsgRace", "")),
+                                    "mnsgRaceConfig": str(cs.get("mnsgRaceConfig", "")),
                                     "posX": int(cs.get("posX", 0)),
                                     "posY": int(cs.get("posY", 0)),
                                     "posZ": int(cs.get("posZ", 0)),
@@ -1039,6 +1056,83 @@ def get_lobby_positions_json() -> str:
                 "tm": 1 if v.get("teamId", "") == _team_id else 0,
             })
     return json.dumps(result, separators=(",", ":"))
+
+
+def set_race_lobby_state(status: str, config_json: str = "") -> bool:
+    """
+    Publish this client's race-lobby status in Anchor client state.
+
+    status values used by the mod are:
+      lobby   - waiting in the race lobby
+      started - race has begun
+    """
+    payload = {"mnsgRace": status or "lobby"}
+    if config_json:
+        payload["mnsgRaceConfig"] = config_json
+    return update_client_state(json.dumps(payload, separators=(",", ":")))
+
+
+def get_race_lobby_json() -> str:
+    """
+    Return compact online lobby membership grouped by team on the C side.
+
+    Each entry: {"cid": int, "n": str, "t": str, "s": str, "self": 0|1}
+    """
+    if not _connected:
+        return "[]"
+    with _player_states_lock:
+        result = []
+        for cid, v in sorted(_player_states.items(), key=lambda kv: (kv[1].get("teamId", ""), kv[0])):
+            if not v.get("online", True):
+                continue
+            result.append({
+                "cid": int(cid),
+                "n": v.get("name", f"Player{cid}"),
+                "t": v.get("teamId", "") or "default",
+                "s": v.get("mnsgRace", ""),
+                "self": 1 if cid == _client_id or v.get("self") else 0,
+            })
+    return json.dumps(result, separators=(",", ":"))
+
+
+def get_race_host_id() -> int:
+    """
+    Elect host as the lowest online client id in the room.
+    """
+    if not _connected:
+        return 0
+    with _player_states_lock:
+        ids = [
+            int(cid)
+            for cid, v in _player_states.items()
+            if v.get("online", True)
+        ]
+    return min(ids) if ids else int(_client_id)
+
+
+def race_has_started() -> bool:
+    """
+    Return True when any online player is advertising an active race.
+    """
+    if not _connected:
+        return False
+    with _player_states_lock:
+        for _cid, v in _player_states.items():
+            if v.get("online", True) and v.get("mnsgRace", "") == "started":
+                return True
+    return False
+
+
+def get_host_race_config_json() -> str:
+    """
+    Return the elected host's published race config, if available.
+    """
+    host_id = get_race_host_id()
+    if not host_id:
+        return ""
+    with _player_states_lock:
+        host = _player_states.get(host_id, {})
+        return str(host.get("mnsgRaceConfig", ""))
 
 
 def _decode_png_rgba(png: bytes) -> bytes:

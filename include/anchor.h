@@ -370,6 +370,36 @@ extern "C"
     */
    char *anchor_get_lobby_positions_json(void);
 
+   /**
+    * @brief Publish this client's race lobby status and optional race config.
+    *
+    * @param status      "lobby" or "started".
+    * @param config_json Host-authored race config JSON, or ""/NULL.
+    */
+   int anchor_set_race_lobby_state(const char *status, const char *config_json);
+
+   /**
+    * @brief Return compact race lobby player info as JSON.
+    *
+    * Each element: {"cid":int,"n":"name","t":"team","s":"status","self":0|1}
+    */
+   char *anchor_get_race_lobby_json(void);
+
+   /**
+    * @brief Return the elected race host client id, lowest online client id.
+    */
+   unsigned int anchor_get_race_host_id(void);
+
+   /**
+    * @brief Return 1 if any online player in the room has started the race.
+    */
+   int anchor_race_has_started(void);
+
+   /**
+    * @brief Return the elected host's published race config JSON.
+    */
+   char *anchor_get_host_race_config_json(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -11,5 +11,9 @@ void anchor_startup_menu_open(void);
 void anchor_startup_multiplayer_open(void);
 void anchor_startup_multiplayer_open_for_race(void);
 void anchor_startup_race_open(void);
+void anchor_race_lobby_open(void);
+int anchor_race_start_from_lobby(void);
+const char *anchor_race_get_config_json(void);
+void anchor_race_apply_config_json(const char *json);
 
 #endif

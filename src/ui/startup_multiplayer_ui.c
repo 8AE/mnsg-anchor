@@ -179,7 +179,7 @@ static void try_connect_from_ui(void)
             s_visible = 0;
         }
         if (s_launches_race)
-            anchor_startup_race_open();
+            anchor_race_lobby_open();
         else
             anchor_startup_menu_finish();
     }
