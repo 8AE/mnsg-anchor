@@ -12,3 +12,4 @@ patches.map
 build/
 .vscode/settings.json
 .DS_Store
+py/__pycache__/
