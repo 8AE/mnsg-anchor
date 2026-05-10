@@ -67,10 +67,10 @@ static int debug_text_equals(const char *a, const char *b)
 static const AnchorFlagEntry s_entries[] = {
     /* ── Characters ─────────────────────────────────────────────────── */
     {0, "Characters", 0},
-    {"chr_goemon", "Goemon with Normal Pipe", 0},
-    {"chr_ebisu", "Ebismaru with Normal Hammer", 0},
-    {"chr_sasuke", "Sasuke Availability", 0},
-    {"chr_yae", "Yae with Weapon", 0},
+    {"chr_goemon", "Goemon", 0},
+    {"chr_ebisu", "Ebismaru", 0},
+    {"chr_sasuke", "Sasuke", 0},
+    {"chr_yae", "Yae", 0},
 
     /* ── Equipment ───────────────────────────────────────────────────── */
     {0, "Equipment", 0},
@@ -81,7 +81,7 @@ static const AnchorFlagEntry s_entries[] = {
     {"eq_camera", "Windup Camera", 0},
     {"eq_kunai", "Ebismaru Camera", 0},
     {"eq_bazooka", "Sasuke Ice Kunai", 0},
-    {"eq_fire_ryo", "Fire Ryo (bit 0)", 0},
+    {"eq_fire_ryo", "Fire Ryo", 0},
 
     /* ── Abilities ───────────────────────────────────────────────────── */
     {0, "Abilities", 0},
@@ -92,9 +92,9 @@ static const AnchorFlagEntry s_entries[] = {
 
     /* ── Quest Items ─────────────────────────────────────────────────── */
     {0, "Quest Items", 0},
-    {"ki_triton", "Triton Shell (from 0x8015C6FC 00) (Item)", 0},
-    {"ki_superps", "Super Pass (from 0x8015C6FC 04) (Item)", 0},
-    {"ki_achilles", "Achilles Heel (from 0x8015C70C 00)", 0},
+    {"ki_triton", "Triton Shell (Item)", 0},
+    {"ki_superps", "Super Pass (Item)", 0},
+    {"ki_achilles", "Achilles Heel", 0},
     {"ki_traindoor", "Key (Gold, Silver or Diamond)", 0},
     {"ki_cucumber", "Pickle", 0},
     {"ki_map_jpn", "Map of Japan", 0},
@@ -142,7 +142,7 @@ static const AnchorFlagEntry s_entries[] = {
 
     /* ── Quest Flags ─────────────────────────────────────────────────── */
     {0, "Quest Flags", 0},
-    {"fl_superpass", "Aquired Lords Super Pass ( Also Seemingly Beat Ghost Toys Entirely)", 0},
+    {"fl_superpass", "Aquired Lords Super Pass", 0},
     {"fl_sp_gate", "Bridge Guards Opened Gate Already", 0},
     {"fl_gym_key", "Jump Gym Key", 0},
     {"fl_chain", "Chain Pipe (Flag)", 0},
@@ -302,15 +302,15 @@ static const AnchorFlagEntry s_entries[] = {
     {"cs_witch_6", "Fishing Quest Fish Red", 0},
 
     /* ── Weapon Upgrades ─────────────────────────────────────────────── */ {0, "Weapon Upgrades", 0},
-    {"wpn_goemon", "Goemon Weapons (0=Default, 1=Silver, 2=Gold)", 1},
-    {"wpn_goemon", "Goemon Weapons (0=Default, 1=Silver, 2=Gold)", 2},
-    {"wpn_ebisu", "Ebismaru Weapons (0=Default, 1=Silver, 2=Gold)", 1},
-    {"wpn_ebisu", "Ebismaru Weapons (0=Default, 1=Silver, 2=Gold)", 2},
-    {"wpn_sasuke", "Sasuke Weapons (0=Default, 1=Silver, 2=Gold)", 1},
-    {"wpn_sasuke", "Sasuke Weapons (0=Default, 1=Silver, 2=Gold)", 2},
-    {"wpn_yae", "Yae Weapons (0=Default, 1=Silver, 2=Gold)", 1},
-    {"wpn_yae", "Yae Weapons (0=Default, 1=Silver, 2=Gold)", 2},
-    {"fl_gold_wpn", "Gold Weapon Flag (0x01A)", 0},
+    {"wpn_goemon", "Goemon Weapons (Silver)", 1},
+    {"wpn_goemon", "Goemon Weapons (Gold)", 2},
+    {"wpn_ebisu", "Ebismaru Weapons (Silver)", 1},
+    {"wpn_ebisu", "Ebismaru Weapons (Gold)", 2},
+    {"wpn_sasuke", "Sasuke Weapons (Silver)", 1},
+    {"wpn_sasuke", "Sasuke Weapons (Gold)", 2},
+    {"wpn_yae", "Yae Weapons (Silver)", 1},
+    {"wpn_yae", "Yae Weapons (Gold)", 2},
+    {"fl_gold_wpn", "Gold Weapon Flag", 0},
 };
 
 #define NUM_ENTRIES ((int)(sizeof(s_entries) / sizeof(s_entries[0])))
