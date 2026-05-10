@@ -68,18 +68,18 @@ static const AnchorFlagEntry s_entries[] = {
     /* ── Characters ─────────────────────────────────────────────────── */
     {0, "Characters", 0},
     {"chr_goemon", "Goemon", 0},
-    {"chr_ebisu", "Ebismaru", 0},
+    {"chr_ebisu", "Ebisumaru", 0},
     {"chr_sasuke", "Sasuke", 0},
     {"chr_yae", "Yae", 0},
 
     /* ── Equipment ───────────────────────────────────────────────────── */
     {0, "Equipment", 0},
     {"eq_chain", "Goemon Chain Pipe", 0},
-    {"eq_hammer", "Ebismaru Meat Hammer", 0},
+    {"eq_hammer", "Ebisumaru Meat Hammer", 0},
     {"eq_firecrk", "Sasuke Bomb", 0},
     {"eq_flute", "Yae Flute (Item)", 0},
     {"eq_camera", "Windup Camera", 0},
-    {"eq_kunai", "Ebismaru Camera", 0},
+    {"eq_kunai", "Ebisumaru Camera", 0},
     {"eq_bazooka", "Sasuke Ice Kunai", 0},
     {"eq_fire_ryo", "Fire Ryo", 0},
 
@@ -234,7 +234,7 @@ static const AnchorFlagEntry s_entries[] = {
     {"fl_met_benkei", "Started Fishing Quest Blue Fish", 0},
     {"fl_ushi_ben", "Ushiwaka: Can Talk Benkei", 0},
     {"fl_ushi_id", "Get the fourth miracle item (Traded Cucumber)", 0},
-    {"fl_ushi_gt", "Got Mini Ebismaru", 0},
+    {"fl_ushi_gt", "Got Mini Ebisumaru", 0},
 
     /* ── Kihachi Food Quest ───────────────────────────────────────────── */
     {0, "Kihachi Food Quest", 0},
@@ -304,8 +304,8 @@ static const AnchorFlagEntry s_entries[] = {
     /* ── Weapon Upgrades ─────────────────────────────────────────────── */ {0, "Weapon Upgrades", 0},
     {"wpn_goemon", "Goemon Weapons (Silver)", 1},
     {"wpn_goemon", "Goemon Weapons (Gold)", 2},
-    {"wpn_ebisu", "Ebismaru Weapons (Silver)", 1},
-    {"wpn_ebisu", "Ebismaru Weapons (Gold)", 2},
+    {"wpn_ebisu", "Ebisumaru Weapons (Silver)", 1},
+    {"wpn_ebisu", "Ebisumaru Weapons (Gold)", 2},
     {"wpn_sasuke", "Sasuke Weapons (Silver)", 1},
     {"wpn_sasuke", "Sasuke Weapons (Gold)", 2},
     {"wpn_yae", "Yae Weapons (Silver)", 1},
