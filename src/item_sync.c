@@ -41,6 +41,10 @@ void anchor_race_on_finish_packet(const char *packet_json);
 
 /* =========================================================================
    Game save-data symbol (datasyms VRAM 0x8015C608)
+
+   Ghidra xrefs show func_8000B640 clears and seeds this 0x304-byte block for
+   a new file, and func_8000B5D0 copies it into the runtime mirror. The mod
+   therefore treats it as the authoritative packed flag/item backing store.
    ========================================================================= */
 extern unsigned char D_8015C608_15D208[];
 

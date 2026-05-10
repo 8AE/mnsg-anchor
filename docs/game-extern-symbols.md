@@ -1,0 +1,230 @@
+# Game Extern Symbols
+
+This mod calls directly into Mystical Ninja Starring Goemon game code through
+extern functions and data symbols. The notes below are based on the loaded
+Ghidra decompilation and cross references for the current USA symbol set.
+
+## Frame And Room State
+
+### `func_80002040_2C40`
+
+This is the frame-step dispatcher used by several `RECOMP_HOOK_RETURN` hooks.
+Ghidra shows it copying a small callback table from `PTR_ARRAY_80058908`, then
+calling the entry selected by `PTR_g_system_8015c5c8->stepw`.
+
+The mod hooks its return so Anchor work runs after the normal game step:
+
+- `item_sync_update` drains network packets and writes save flags.
+- `anchor_character_frame_hook` keeps the selected character legal.
+- `anchor_actors_update_particle_markers` publishes local position and updates
+  remote markers/nameplates.
+- Race UI hooks apply pending race setup once save memory exists.
+
+### `D_800C7AB2`
+
+Current room/scene id. Actor manager references read this while deciding which
+actors belong in the active room. The mod uses it as the local room id for
+Anchor state and as a visibility filter so remote markers are only drawn when a
+teammate is in the same room.
+
+## Save Data And Character State
+
+### `D_8015C608_15D208`
+
+Main save-data flag/item block at VRAM `0x8015C608`. The mod treats this as the
+authoritative save store:
+
+- `+0x000 .. +0x303` contains packed one-bit flags.
+- Positive offsets such as `+0x94`, `+0x204`, and `+0x20a` hold 32-bit or
+  16-bit item/spawn fields depending on the game field.
+- Negative offsets such as `-0x28` are nearby stats fields; this mod uses
+  `hp_max > 0` as the save-loaded check.
+
+Ghidra confirms `func_8000B640_C240` clears/seeds this block for a new file and
+`func_8000B5D0_C1D0` mirrors it into the backup block at `D_8015C910`.
+
+### `D_8015C5D8_15D1D8`
+
+Runtime save/control mirror. `func_8000B5D0_C1D0` copies data into this region
+from `D_8015C66C`. The character patch uses:
+
+- `D_8015C5D8[1]`: current character id.
+- `D_8015C5D8[0x2c / 4]`: dirty/changed flag set by the original cycler.
+
+### `func_801DD5C0_5994D0`
+
+Applies a live character change to the player object. Decompiled behavior:
+
+- Writes the selected character to `player + 0x60` and global `D_8015C5DC`.
+- Marks the actor's change flag at `*(player + 0x5c) + 0x69`.
+- Clears movement/action fields and some state timers.
+- Sets the player object's callback with `FUN_8003522c(player, FUN_801e0944)`.
+
+The mod calls this after choosing the next enabled character so the in-memory
+player object, runtime save mirror, and animation/state callback all agree.
+
+## Race Startup And Autoload
+
+### `func_8000B640_C240`
+
+Initializes a new save file. Ghidra shows it clearing `D_8015C608` for `0x304`
+bytes, setting default health/item/character values, setting the default spawn
+room to Goemon's house (`0x1d1`), writing default spawn coordinates, then
+copying the block to `D_8015C910`.
+
+The race autoload path calls this first so later race setup writes land on a
+known clean save layout.
+
+### `func_8000B5D0_C1D0`
+
+Marks the freshly initialized save as started/loaded. It clears a global system
+field, copies the short runtime save/control block into `D_8015C5D8`, mirrors
+`D_8015C608` into `D_8015C910`, and sets `D_8015C5D8` to `1`.
+
+The mod hooks this function's return and also calls it during file-select
+autoload so pending race flags can be applied as soon as save memory is live.
+
+### `func_8000B2A0_BEA0`
+
+Reads the spawn fields from save data into the global destination fields:
+destination room, player rotation, player x/y/z, and camera rotation. The race
+spawn hook runs before this function so `apply_race_start_location()` can write
+the selected start location into the fields the game is about to consume.
+
+### `D_8006B780_6C380`
+
+Room-indexed debug/start-position table. The race UI treats each room entry as
+five signed shorts:
+
+1. X position
+2. Y position
+3. Z position
+4. Camera rotation
+5. Player rotation
+
+These values populate race start choices and are copied into the save spawn
+fields when a race starts.
+
+### `func_8003521C_35E1C`
+
+Scheduler callback setter. The decompiled body is a single store:
+
+```c
+*(undefined4 *)(DAT_8016dab4 + 0xc) = param_1;
+```
+
+The race autoload hook installs `func_801CD890_660740` through this setter after
+creating/starting the save, which moves the game out of file select and into
+the normal gameplay load flow.
+
+### `func_801CD890_660740`
+
+Callback target used by the original file-select path. Ghidra's function
+boundaries currently do not start exactly at `0x801CD890`; the address falls
+inside a larger player/load-state routine beginning at `0x801CD310`. The mod
+keeps the known symbol name because this is the callback pointer used by the
+runtime flow.
+
+### `D_8015C5C8_15D1C8`
+
+Global game-system pointer. Race autoload writes `*(D_8015C5C8 + 0x3B040) = -1`
+before switching callbacks. That matches the file-select flow's sentinel for
+clearing the active/pending file-select entity.
+
+## Remote Marker Effect Tasks
+
+### `D_801FC604_5B8514`
+
+Current actor/task owner. Effect code and actor spawning read this pointer as
+the active parent task. Anchor remote marker tasks are parented to it; if the
+pointer changes during a room transition, the mod discards cached marker task
+pointers and creates new ones.
+
+### `D_801FC60C_5B851C`
+
+Current player world object pointer. The mod only relies on the first known
+position fields:
+
+- `+0x08`: world X
+- `+0x0c`: world Y
+- `+0x10`: world Z
+
+Those fields are used for local position publishing and for projecting remote
+nameplates relative to the local player.
+
+### `D_8020D1C0_5C90D0` And `D_8020D1D0_5C90E0`
+
+Camera vector and horizontal radius. Camera routines write both globals; the
+nameplate code uses the vector as the offset from player position to camera
+position, then divides by the radius to derive a forward vector for simple 3D
+to 2D projection.
+
+### `func_80034E08_35A08`
+
+Allocates and inserts an engine task. Decompilation shows this wrapper:
+
+1. Calls `func_80034B58(task_list, update, flags)` to take a task from the
+   global free list, clear it, attach it to `task_list`, store the update
+   callback at task `+0x0c`, set flags at `+0x28`, and stamp it with a frame or
+   time value.
+2. Calls `func_80034D24(task)` to reorder the task in its linked list by
+   priority/depth.
+
+Anchor uses it to create a persistent effect task per visible remote player
+slot.
+
+### `func_80035EEC_36AEC`
+
+Allocates a chain of particle/effect records from the game's effect pool. It
+masks `count` to one byte, checks the remaining pool capacity for `kind`, calls
+an allocator for each record, and appends them through task offsets `+0x18` and
+`+0x1c`. It returns the first allocated particle, or `NULL` if allocation fails.
+
+Anchor requests three kind-2 particles for each marker sparkle.
+
+### `func_801EE4AC_5AA3BC`
+
+Initializes the common effect-task header from a parent task:
+
+- Clears bytes/halfwords at offsets `0x60..0x68`.
+- Stores `effect_type` at `+0x64`.
+- Stores the parent task pointer at `+0x84`.
+- Copies parent state from parent `+0x5c` into task `+0x5c`.
+
+Anchor calls it immediately after task allocation so the effect task behaves
+like a normal child effect owned by the current scene task.
+
+### `func_801EE750_5AA660`
+
+Initializes particle draw/config state. Ghidra shows it calling a reset helper,
+then setting particle `+0x30` to a render-mode table entry selected by `type`
+ORed with the caller-provided `flags`.
+
+Anchor passes `particle + 0x80` in the flags so the particle draws the display
+list built into its own memory.
+
+### `func_801EF684_5AB594`
+
+Initializes the tiny state block paired with a particle. The game writes a
+default config/vtable pointer, clears a state byte, stores `0xffff` in a
+halfword, then runs a common reset helper. Anchor keeps one of these state
+blocks in the effect task at `task + 0xa0 + particle_index * 8`.
+
+### `func_801DC554_598464`
+
+Builds and cache-writes a tiny display list:
+
+1. `gSPDisplayList(texture)`
+2. Optional primitive color
+3. Environment color
+4. `gSPEndDisplayList()`
+
+Anchor uses it to recolor the stock sparkle texture and pulse marker alpha
+without maintaining separate display-list assets.
+
+### `D_80204DA0_5C0CB0` And `D_802049C0_5C08D0`
+
+Stock effect assets. Cross references show `D_80204DA0` being passed into
+particle init helpers and `D_802049C0` being used as a texture/display-list
+asset by multiple effect routines. Anchor reuses them for lightweight remote
+presence markers.

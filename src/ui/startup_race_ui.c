@@ -11,12 +11,37 @@ int item_sync_save_is_loaded(void);
 int item_sync_write_local_flag_val(const char *name, int val);
 void anchor_set_current_character_if_needed(void);
 
+/* Save-data base. Race startup writes selected characters, room, rotation, and
+ * spawn coordinates here before the game's spawn-read routine consumes them. */
 extern unsigned char D_8015C608_15D208[];
+
+/* Room-indexed starting-position table. Each room entry is five signed shorts:
+ * posX, posY, posZ, camera rotation, and player rotation. */
 extern signed short D_8006B780_6C380[];
+
+/* Initialize a fresh save block. Decompilation clears D_8015C608 for 0x304
+ * bytes, seeds default health/items/character flags, sets Goemon's house as
+ * the default room, and mirrors the block to D_8015C910. */
 extern void func_8000B640_C240(void);
+
+/* Mark a save as started/loaded. The game clears a system field, copies
+ * D_8015C66C.. into D_8015C5D8, mirrors D_8015C608 into D_8015C910, and sets
+ * D_8015C5D8 to 1. */
 extern void func_8000B5D0_C1D0(void);
+
+/* Replace the current game-step callback stored at the active scheduler task's
+ * +0x0c slot. Race autoload uses it to jump out of file select and into the
+ * normal gameplay/load path. */
 extern void func_8003521C_35E1C(void *func_ptr);
+
+/* Gameplay/load step callback installed after race autoload. Ghidra does not
+ * split a function at this exact address, but the surrounding function is the
+ * player physics/load-state routine used by the original file-select flow. */
 extern void func_801CD890_660740(void);
+
+/* Global game-system pointer. The race autoload path writes +0x3b040 to -1,
+ * matching the original file-select code's "no pending file-select entity"
+ * sentinel before switching callbacks. */
 extern unsigned char *D_8015C5C8_15D1C8;
 
 #define RACE_MAX_FLAGS 320

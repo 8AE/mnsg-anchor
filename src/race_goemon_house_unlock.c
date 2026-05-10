@@ -1,6 +1,11 @@
 #include "modding.h"
 
+/* Save-data base used by the race unlock check. SAVE_WARP_GOEMON_HOUSE at
+ * +0x2a4 is the randomizer warp/unlock flag for Goemon's house. */
 extern unsigned char D_8015C608_15D208[];
+
+/* Current room id. The hook treats room 0x1d1 as an in-room confirmation that
+ * the starter save has reached Goemon's house even before the warp flag exists. */
 extern signed short D_800C7AB2;
 
 int anchor_race_is_active(void);

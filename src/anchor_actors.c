@@ -74,20 +74,62 @@ typedef struct RemoteSmoothing
     int seq;
 } RemoteSmoothing;
 
+/* Game room/scene id. Actor manager code reads this while deciding which
+ * room actors to spawn, so the mod uses it as the local room filter for
+ * remote player markers and nameplates. */
 extern unsigned short D_800C7AB2;
 
+/* Current actor/task owner. Ghidra xrefs show this pointer is used by the
+ * engine's actor and effect update code as the active parent task. Marker
+ * tasks must be recreated when it changes because their parent link becomes
+ * stale across scene transitions. */
 extern void *D_801FC604_5B8514;
+
+/* Current player background/world object. The first fields match CLS_BG_W:
+ * bytes 0x08, 0x0c, and 0x10 are world x/y/z floats. */
 extern PlayerObject *D_801FC60C_5B851C;
+
+/* Camera offset from the player and its horizontal radius. Camera routines
+ * update these each frame; the nameplate projection uses them to derive a
+ * cheap forward/right basis without calling the game's renderer. */
 extern Vec3f D_8020D1C0_5C90D0;
 extern float D_8020D1D0_5C90E0;
 
+/* Allocate and insert an engine task under `task_list`. Decompilation shows
+ * this wraps func_80034B58 (take a task from the free list, set callback and
+ * flags) and func_80034D24 (reorder by priority/depth). */
 extern void *func_80034E08_35A08(void *task_list, void (*update)(void *, void *), unsigned short flags);
+
+/* Allocate `count` particle/effect records of `kind` and append them to
+ * task+0x18/task+0x1c's linked list. Returns the first record, or NULL if the
+ * global pool for that kind does not have enough free entries. */
 extern void *func_80035EEC_36AEC(void *task, short kind, unsigned int count);
+
+/* Initialize the common effect-task header from its parent task. The game
+ * copies parent state at +0x5c, stores the parent at +0x84, clears effect
+ * state bytes 0x60..0x68, and records the effect type at +0x64. */
 extern void func_801EE4AC_5AA3BC(void *task, void *parent_task, unsigned char effect_type);
+
+/* Initialize one particle's draw/config data. The decompiled body resets the
+ * particle, then writes particle+0x30 with a render-mode entry selected by
+ * `type` ORed with `flags`; this mod passes particle+0x80 as the display-list
+ * address through `flags`. */
 extern void func_801EE750_5AA660(void *particle, void *config, int type, unsigned int flags);
+
+/* Initialize the small per-particle state block used by the effect updater.
+ * The game writes a default state vtable/config pointer, zeroes the state
+ * byte, stores -1 in the state halfword, then calls the common reset helper. */
 extern void func_801EF684_5AB594(void *particle, void *state);
+
+/* Build a tiny display list:
+ *   gSPDisplayList(texture), optional gDPSetPrimColor(...),
+ *   gDPSetEnvColor(...), gSPEndDisplayList().
+ * The helper writes the display list back to cache before returning it. */
 extern void func_801DC554_598464(int set_prim, void *dl, void *texture, int prim_r, unsigned int prim_g, unsigned int prim_b, int env_r, unsigned int env_g, unsigned int env_b, unsigned int alpha);
 
+/* Stock particle assets used by the engine. D_80204DA0 is the sparkle/effect
+ * config passed into particle initialization; D_802049C0 is the texture
+ * display list chained into the generated marker display list. */
 extern unsigned char D_80204DA0_5C0CB0[];
 extern unsigned char D_802049C0_5C08D0[];
 

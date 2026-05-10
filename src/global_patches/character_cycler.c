@@ -1,8 +1,19 @@
 #include "modding.h"
 #include "recomputils.h"
 
+/* Save-data base. The character unlock fields live at +0x94..+0xa0, and
+ * hp_max lives before the base at -0x28. func_8000B640 initializes this block
+ * for a new file and func_8000B5D0 copies it into the runtime save mirror. */
 extern unsigned char D_8015C608_15D208[];
+
+/* Runtime save/control mirror copied from D_8015C66C by func_8000B5D0.
+ * D_8015C5D8[1] is the current character id; D_8015C5D8[0x2c / 4] is a dirty
+ * flag the original character cycler sets after changing that id. */
 extern unsigned int D_8015C5D8_15D1D8[];
+
+/* Apply a character swap to the live player object. Decompilation shows it
+ * writes arg0+0x60 and D_8015C5DC, clears movement/action fields, marks the
+ * actor's character-change flag, and switches the player state callback. */
 extern void func_801DD5C0_5994D0(void *arg0, unsigned char value);
 
 #define SAVE_READ32(off) (*(signed int *)((char *)D_8015C608_15D208 + (off)))
