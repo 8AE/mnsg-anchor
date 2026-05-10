@@ -48,6 +48,9 @@ extern unsigned char *D_8015C5C8_15D1C8;
 #define RACE_MAX_CATEGORIES 64
 #define RACE_MAX_LOCATIONS 96
 #define RACE_TEXT_LEN 96
+#define RACE_CONFIG_CODE_LEN 96
+#define RACE_CONFIG_VERSION 1
+#define RACE_CONFIG_DATA_MAX (1 + 2 + 1 + 2 + ((RACE_MAX_FLAGS + 7) / 8) + 4)
 #define SAVE_SPAWN_ROOM 0x204
 #define SAVE_PLAYER_ROT 0x208
 #define SAVE_SPAWN_X 0x20A
@@ -176,10 +179,12 @@ static RecompuiContext s_result_ctx = RECOMPUI_NULL_CONTEXT;
 static RecompuiResource s_setup_view = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_goal_view = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_location_view = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_import_input = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_category_views[RACE_MAX_CATEGORIES];
 static RecompuiResource s_goal_category_views[RACE_MAX_CATEGORIES];
 static RecompuiResource s_goal_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_location_lbl = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_live_config_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_result_title_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_result_team_lbl = RECOMPUI_NULL_RESOURCE;
@@ -192,6 +197,7 @@ static RecompuiResource s_goal_category_count_lbls[RACE_MAX_CATEGORIES];
 static char s_goal_btn_text[RACE_MAX_FLAGS][RACE_TEXT_LEN];
 static char s_start_btn_text[RACE_MAX_FLAGS][RACE_TEXT_LEN];
 static char s_location_btn_text[RACE_MAX_LOCATIONS][RACE_TEXT_LEN];
+static char s_config_code[RACE_CONFIG_CODE_LEN];
 static char s_category_count_text[RACE_MAX_CATEGORIES][32];
 static char s_goal_category_count_text[RACE_MAX_CATEGORIES][32];
 static char s_result_team_text[128];
@@ -209,6 +215,9 @@ static int s_pending_open = 0;
 static int s_pending_back = 0;
 static int s_pending_choose_goal = 0;
 static int s_pending_choose_location = 0;
+static int s_pending_paste_config = 0;
+static int s_pending_import_config = 0;
+static int s_pending_export_config = 0;
 static int s_pending_goal_done = 0;
 static int s_pending_location_done = 0;
 static int s_pending_category_idx = -1;
@@ -232,6 +241,15 @@ static int s_race_character_enforce_frames = 0;
 static int s_race_pending_count = 0;
 static const char *s_race_pending_keys[RACE_MAX_FLAGS];
 static int s_race_pending_values[RACE_MAX_FLAGS];
+
+static void update_category_count(int cat_idx);
+static void update_goal_category_count(int cat_idx);
+static void update_start_button(int idx);
+static void update_location_buttons(int old_idx, int new_idx);
+static void update_goal_buttons(int old_idx, int new_idx);
+static void update_location_label(void);
+static void update_goal_label(void);
+static void refresh_live_config_code(void);
 
 static void write_save_s16(int offset, short value)
 {
@@ -539,6 +557,263 @@ static int parse_json_string_after(const char *json, const char *key, char *out,
     return i > 0;
 }
 
+static unsigned int race_config_hash(const unsigned char *data, int len)
+{
+    unsigned int hash = 2166136261u;
+    int i;
+
+    for (i = 0; i < len; i++)
+    {
+        hash ^= (unsigned int)data[i];
+        hash *= 16777619u;
+    }
+
+    return hash;
+}
+
+static int base64url_value(char c)
+{
+    if (c >= 'A' && c <= 'Z')
+        return c - 'A';
+    if (c >= 'a' && c <= 'z')
+        return c - 'a' + 26;
+    if (c >= '0' && c <= '9')
+        return c - '0' + 52;
+    if (c == '-')
+        return 62;
+    if (c == '_')
+        return 63;
+    return -1;
+}
+
+static void base64url_encode(const unsigned char *data, int len, char *out, int out_len)
+{
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    int i = 0;
+    int pos = 0;
+
+    while (i < len && pos < out_len - 1)
+    {
+        unsigned int value = ((unsigned int)data[i]) << 16;
+        int remaining = len - i;
+        if (remaining > 1)
+            value |= ((unsigned int)data[i + 1]) << 8;
+        if (remaining > 2)
+            value |= (unsigned int)data[i + 2];
+
+        out[pos++] = alphabet[(value >> 18) & 63];
+        if (pos < out_len - 1)
+            out[pos++] = alphabet[(value >> 12) & 63];
+        if (pos < out_len - 1 && remaining > 1)
+            out[pos++] = alphabet[(value >> 6) & 63];
+        if (pos < out_len - 1 && remaining > 2)
+            out[pos++] = alphabet[value & 63];
+
+        i += 3;
+    }
+
+    out[pos] = '\0';
+}
+
+static int base64url_decode(const char *text, unsigned char *out, int out_len)
+{
+    int vals[4];
+    int val_count = 0;
+    int pos = 0;
+
+    while (text && *text)
+    {
+        int v;
+
+        if (*text == ' ' || *text == '\t' || *text == '\n' || *text == '\r')
+        {
+            text++;
+            continue;
+        }
+
+        v = base64url_value(*text++);
+        if (v < 0)
+            return -1;
+
+        vals[val_count++] = v;
+        if (val_count == 4)
+        {
+            if (pos + 3 > out_len)
+                return -1;
+            out[pos++] = (unsigned char)((vals[0] << 2) | (vals[1] >> 4));
+            out[pos++] = (unsigned char)((vals[1] << 4) | (vals[2] >> 2));
+            out[pos++] = (unsigned char)((vals[2] << 6) | vals[3]);
+            val_count = 0;
+        }
+    }
+
+    if (val_count == 1)
+        return -1;
+    if (val_count == 2)
+    {
+        if (pos + 1 > out_len)
+            return -1;
+        out[pos++] = (unsigned char)((vals[0] << 2) | (vals[1] >> 4));
+    }
+    else if (val_count == 3)
+    {
+        if (pos + 2 > out_len)
+            return -1;
+        out[pos++] = (unsigned char)((vals[0] << 2) | (vals[1] >> 4));
+        out[pos++] = (unsigned char)((vals[1] << 4) | (vals[2] >> 2));
+    }
+
+    return pos;
+}
+
+static const char *race_code_payload_start(const char *code)
+{
+    if (!code)
+        return 0;
+    while (*code == ' ' || *code == '\t' || *code == '\n' || *code == '\r')
+        code++;
+    if (code[0] != 'M' || code[1] != 'R' || code[2] != '1' || code[3] != '.')
+        return 0;
+    return code + 4;
+}
+
+static void build_race_config_code(char *out, int out_len)
+{
+    unsigned char data[RACE_CONFIG_DATA_MAX];
+    char encoded[RACE_CONFIG_CODE_LEN];
+    int flag_bytes = (s_flag_count + 7) / 8;
+    int pos = 0;
+    int i;
+    int text_pos = 0;
+    unsigned int hash;
+
+    if (!out || out_len <= 0)
+        return;
+
+    data[pos++] = RACE_CONFIG_VERSION;
+    data[pos++] = (unsigned char)((s_goal_idx >> 8) & 0xFF);
+    data[pos++] = (unsigned char)(s_goal_idx & 0xFF);
+    data[pos++] = (unsigned char)(s_location_idx & 0xFF);
+    data[pos++] = (unsigned char)((s_flag_count >> 8) & 0xFF);
+    data[pos++] = (unsigned char)(s_flag_count & 0xFF);
+
+    for (i = 0; i < flag_bytes; i++)
+        data[pos++] = 0;
+    for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
+    {
+        if (s_start_selected[i])
+            data[6 + (i / 8)] |= (unsigned char)(1 << (i & 7));
+    }
+
+    hash = race_config_hash(data, pos);
+    data[pos++] = (unsigned char)((hash >> 24) & 0xFF);
+    data[pos++] = (unsigned char)((hash >> 16) & 0xFF);
+    data[pos++] = (unsigned char)((hash >> 8) & 0xFF);
+    data[pos++] = (unsigned char)(hash & 0xFF);
+
+    copy_text(out, "MR1.", out_len);
+    text_pos = 4;
+    base64url_encode(data, pos, encoded, (int)sizeof(encoded));
+    append_text_limited(out, &text_pos, out_len, encoded);
+    out[text_pos] = '\0';
+}
+
+static int apply_race_config_code(const char *code)
+{
+    unsigned char data[RACE_CONFIG_DATA_MAX];
+    unsigned char selected[RACE_MAX_FLAGS];
+    const char *payload = race_code_payload_start(code);
+    int len;
+    int goal;
+    int loc;
+    int flag_count;
+    int flag_bytes;
+    int expected_len;
+    int old_goal = s_goal_idx;
+    int old_location = s_location_idx;
+    int i;
+    unsigned int stored_hash;
+    unsigned int actual_hash;
+
+    if (!payload)
+        return 0;
+
+    len = base64url_decode(payload, data, (int)sizeof(data));
+    if (len < 10)
+        return 0;
+
+    if (data[0] != RACE_CONFIG_VERSION)
+        return 0;
+
+    goal = ((int)data[1] << 8) | (int)data[2];
+    loc = (int)data[3];
+    flag_count = ((int)data[4] << 8) | (int)data[5];
+    if (flag_count != s_flag_count || flag_count < 0 || flag_count > RACE_MAX_FLAGS)
+        return 0;
+
+    flag_bytes = (flag_count + 7) / 8;
+    expected_len = 1 + 2 + 1 + 2 + flag_bytes + 4;
+    if (len != expected_len)
+        return 0;
+
+    stored_hash = ((unsigned int)data[len - 4] << 24) |
+                  ((unsigned int)data[len - 3] << 16) |
+                  ((unsigned int)data[len - 2] << 8) |
+                  (unsigned int)data[len - 1];
+    actual_hash = race_config_hash(data, len - 4);
+    if (stored_hash != actual_hash)
+        return 0;
+
+    if (goal < 0 || goal >= s_flag_count || goal >= RACE_MAX_FLAGS ||
+        !anchor_flag_catalog_get(goal) || !anchor_flag_catalog_get(goal)->key)
+        return 0;
+    if (loc < 0 || loc >= s_start_location_count)
+        return 0;
+
+    for (i = 0; i < RACE_MAX_FLAGS; i++)
+        selected[i] = 0;
+    for (i = 0; i < flag_count; i++)
+    {
+        const AnchorFlagEntry *entry = anchor_flag_catalog_get(i);
+        if ((data[6 + (i / 8)] & (1 << (i & 7))) && entry && entry->key)
+            selected[i] = 1;
+    }
+
+    s_goal_idx = goal;
+    s_location_idx = loc;
+    for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
+        s_start_selected[i] = selected[i];
+
+    if (s_ui_built)
+    {
+        for (i = 0; i < s_category_count; i++)
+        {
+            update_category_count(i);
+            update_goal_category_count(i);
+        }
+        for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
+            update_start_button(i);
+        update_goal_buttons(old_goal, s_goal_idx);
+        update_location_buttons(old_location, s_location_idx);
+        update_goal_label();
+        update_location_label();
+    }
+
+    return 1;
+}
+
+static void refresh_live_config_code(void)
+{
+    if (s_live_config_lbl == RECOMPUI_NULL_RESOURCE)
+        return;
+
+    build_race_config_code(s_config_code, (int)sizeof(s_config_code));
+    recompui_open_context(s_ctx);
+    recompui_set_text(s_live_config_lbl, s_config_code);
+    recompui_close_context(s_ctx);
+}
+
 static void race_result_ui_init(void)
 {
     if (s_result_ctx != RECOMPUI_NULL_CONTEXT)
@@ -774,6 +1049,7 @@ static void update_location_label(void)
     if (s_location_lbl != RECOMPUI_NULL_RESOURCE)
         recompui_set_text(s_location_lbl, text);
     recompui_close_context(s_ctx);
+    refresh_live_config_code();
 }
 
 static void update_goal_label(void)
@@ -786,6 +1062,7 @@ static void update_goal_label(void)
     else
         recompui_set_text(s_goal_lbl, "No end condition selected");
     recompui_close_context(s_ctx);
+    refresh_live_config_code();
 }
 
 static void update_start_button(int idx)
@@ -804,6 +1081,7 @@ static void update_start_button(int idx)
     recompui_close_context(s_ctx);
 
     update_category_count(category_for_flag(idx));
+    refresh_live_config_code();
 }
 
 static void update_location_buttons(int old_idx, int new_idx)
@@ -825,6 +1103,7 @@ static void update_location_buttons(int old_idx, int new_idx)
     }
 
     recompui_close_context(s_ctx);
+    refresh_live_config_code();
 }
 
 static void update_goal_buttons(int old_idx, int new_idx)
@@ -854,6 +1133,7 @@ static void update_goal_buttons(int old_idx, int new_idx)
     }
 
     recompui_close_context(s_ctx);
+    refresh_live_config_code();
 }
 
 static void on_back_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
@@ -878,6 +1158,30 @@ static void on_choose_location_clicked(RecompuiResource res, const RecompuiEvent
     (void)ud;
     if (ev->type == UI_EVENT_CLICK)
         s_pending_choose_location = 1;
+}
+
+static void on_import_config_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_import_config = 1;
+}
+
+static void on_paste_config_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_paste_config = 1;
+}
+
+static void on_export_config_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_export_config = 1;
 }
 
 static void on_goal_done_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
@@ -1233,6 +1537,131 @@ static void build_goal_category_detail_view(RecompuiResource parent, int cat_idx
     }
 }
 
+static void build_race_config_share_card(RecompuiResource parent)
+{
+    RecompuiResource share_card = recompui_create_element(s_ctx, parent);
+    recompui_set_display(share_card, DISPLAY_FLEX);
+    recompui_set_flex_direction(share_card, FLEX_DIRECTION_COLUMN);
+    recompui_set_gap(share_card, 14.0f, UNIT_DP);
+    recompui_set_padding_left(share_card, 18.0f, UNIT_DP);
+    recompui_set_padding_right(share_card, 18.0f, UNIT_DP);
+    recompui_set_padding_top(share_card, 14.0f, UNIT_DP);
+    recompui_set_padding_bottom(share_card, 16.0f, UNIT_DP);
+    recompui_set_min_height(share_card, 224.0f, UNIT_DP);
+    recompui_set_flex_shrink(share_card, 0.0f);
+    recompui_set_background_color(share_card, &R_CARD_ALT);
+    recompui_set_border_radius(share_card, 6.0f, UNIT_DP);
+    recompui_set_border_width(share_card, 1.0f, UNIT_DP);
+    recompui_set_border_color(share_card, &R_BORDER);
+
+    RecompuiResource share_header = recompui_create_element(s_ctx, share_card);
+    recompui_set_display(share_header, DISPLAY_FLEX);
+    recompui_set_flex_direction(share_header, FLEX_DIRECTION_ROW);
+    recompui_set_align_items(share_header, ALIGN_ITEMS_CENTER);
+    recompui_set_justify_content(share_header, JUSTIFY_CONTENT_SPACE_BETWEEN);
+
+    RecompuiResource share_title = recompui_create_label(s_ctx, share_header, "Race Config Code", LABELSTYLE_SMALL);
+    recompui_set_color(share_title, &R_DIM);
+    recompui_set_font_weight(share_title, 700);
+    recompui_set_font_size(share_title, 15.0f, UNIT_DP);
+
+    RecompuiResource share_badge = recompui_create_label(s_ctx, share_header, "LIVE", LABELSTYLE_ANNOTATION);
+    recompui_set_color(share_badge, &R_GREEN);
+    recompui_set_font_weight(share_badge, 700);
+    recompui_set_font_size(share_badge, 12.0f, UNIT_DP);
+
+    RecompuiResource code_box = recompui_create_element(s_ctx, share_card);
+    recompui_set_display(code_box, DISPLAY_FLEX);
+    recompui_set_flex_direction(code_box, FLEX_DIRECTION_COLUMN);
+    recompui_set_padding_left(code_box, 14.0f, UNIT_DP);
+    recompui_set_padding_right(code_box, 14.0f, UNIT_DP);
+    recompui_set_padding_top(code_box, 10.0f, UNIT_DP);
+    recompui_set_padding_bottom(code_box, 10.0f, UNIT_DP);
+    recompui_set_min_height(code_box, 42.0f, UNIT_DP);
+    recompui_set_background_color(code_box, &R_CARD);
+    recompui_set_border_radius(code_box, 5.0f, UNIT_DP);
+    recompui_set_border_width(code_box, 1.0f, UNIT_DP);
+    recompui_set_border_color(code_box, &R_BORDER);
+
+    build_race_config_code(s_config_code, (int)sizeof(s_config_code));
+    s_live_config_lbl = recompui_create_label(s_ctx, code_box, s_config_code, LABELSTYLE_SMALL);
+    recompui_set_color(s_live_config_lbl, &R_WHITE);
+    recompui_set_font_weight(s_live_config_lbl, 700);
+    recompui_set_font_size(s_live_config_lbl, 13.0f, UNIT_DP);
+    recompui_set_line_height(s_live_config_lbl, 20.0f, UNIT_DP);
+
+    RecompuiResource share_row = recompui_create_element(s_ctx, share_card);
+    recompui_set_display(share_row, DISPLAY_FLEX);
+    recompui_set_flex_direction(share_row, FLEX_DIRECTION_COLUMN);
+    recompui_set_gap(share_row, 18.0f, UNIT_DP);
+
+    RecompuiResource input_box = recompui_create_element(s_ctx, share_row);
+    recompui_set_display(input_box, DISPLAY_FLEX);
+    recompui_set_flex_direction(input_box, FLEX_DIRECTION_COLUMN);
+    recompui_set_padding_top(input_box, 8.0f, UNIT_DP);
+    recompui_set_padding_bottom(input_box, 12.0f, UNIT_DP);
+    recompui_set_min_height(input_box, 68.0f, UNIT_DP);
+
+    s_import_input = recompui_create_textinput(s_ctx, input_box);
+    recompui_set_font_size(s_import_input, 14.0f, UNIT_DP);
+    recompui_set_flex_grow(s_import_input, 1.0f);
+    recompui_set_width(s_import_input, 100.0f, UNIT_PERCENT);
+    recompui_set_height(s_import_input, 52.0f, UNIT_DP);
+    recompui_set_tab_index(s_import_input, TAB_INDEX_AUTO);
+    recompui_set_input_text(s_import_input, "");
+
+    RecompuiResource action_row = recompui_create_element(s_ctx, share_row);
+    recompui_set_display(action_row, DISPLAY_FLEX);
+    recompui_set_flex_direction(action_row, FLEX_DIRECTION_ROW);
+    recompui_set_align_items(action_row, ALIGN_ITEMS_CENTER);
+    recompui_set_justify_content(action_row, JUSTIFY_CONTENT_FLEX_END);
+    recompui_set_gap(action_row, 10.0f, UNIT_DP);
+    recompui_set_min_height(action_row, 44.0f, UNIT_DP);
+    recompui_set_margin_top(action_row, 4.0f, UNIT_DP);
+
+    RecompuiResource import_btn = recompui_create_button(s_ctx, action_row, "Import", BUTTONSTYLE_SECONDARY);
+    recompui_set_cursor(import_btn, CURSOR_POINTER);
+    recompui_set_font_size(import_btn, 13.0f, UNIT_DP);
+    recompui_set_font_weight(import_btn, 700);
+    recompui_set_height(import_btn, 38.0f, UNIT_DP);
+    recompui_set_width(import_btn, 104.0f, UNIT_DP);
+    recompui_set_flex_shrink(import_btn, 0.0f);
+    recompui_set_padding_top(import_btn, 4.0f, UNIT_DP);
+    recompui_set_padding_bottom(import_btn, 4.0f, UNIT_DP);
+    recompui_set_padding_left(import_btn, 12.0f, UNIT_DP);
+    recompui_set_padding_right(import_btn, 12.0f, UNIT_DP);
+    recompui_set_tab_index(import_btn, TAB_INDEX_AUTO);
+    recompui_register_callback(import_btn, on_import_config_clicked, 0);
+
+    RecompuiResource paste_btn = recompui_create_button(s_ctx, action_row, "Paste", BUTTONSTYLE_SECONDARY);
+    recompui_set_cursor(paste_btn, CURSOR_POINTER);
+    recompui_set_font_size(paste_btn, 13.0f, UNIT_DP);
+    recompui_set_font_weight(paste_btn, 700);
+    recompui_set_height(paste_btn, 38.0f, UNIT_DP);
+    recompui_set_width(paste_btn, 104.0f, UNIT_DP);
+    recompui_set_flex_shrink(paste_btn, 0.0f);
+    recompui_set_padding_top(paste_btn, 4.0f, UNIT_DP);
+    recompui_set_padding_bottom(paste_btn, 4.0f, UNIT_DP);
+    recompui_set_padding_left(paste_btn, 12.0f, UNIT_DP);
+    recompui_set_padding_right(paste_btn, 12.0f, UNIT_DP);
+    recompui_set_tab_index(paste_btn, TAB_INDEX_AUTO);
+    recompui_register_callback(paste_btn, on_paste_config_clicked, 0);
+
+    RecompuiResource export_btn = recompui_create_button(s_ctx, action_row, "Copy Code", BUTTONSTYLE_PRIMARY);
+    recompui_set_cursor(export_btn, CURSOR_POINTER);
+    recompui_set_font_size(export_btn, 13.0f, UNIT_DP);
+    recompui_set_font_weight(export_btn, 700);
+    recompui_set_height(export_btn, 38.0f, UNIT_DP);
+    recompui_set_width(export_btn, 142.0f, UNIT_DP);
+    recompui_set_flex_shrink(export_btn, 0.0f);
+    recompui_set_padding_top(export_btn, 4.0f, UNIT_DP);
+    recompui_set_padding_bottom(export_btn, 4.0f, UNIT_DP);
+    recompui_set_padding_left(export_btn, 12.0f, UNIT_DP);
+    recompui_set_padding_right(export_btn, 12.0f, UNIT_DP);
+    recompui_set_tab_index(export_btn, TAB_INDEX_AUTO);
+    recompui_register_callback(export_btn, on_export_config_clicked, 0);
+}
+
 static void build_setup_view(RecompuiResource parent)
 {
     s_setup_view = recompui_create_element(s_ctx, parent);
@@ -1244,6 +1673,8 @@ static void build_setup_view(RecompuiResource parent)
     recompui_set_padding_top(s_setup_view, 12.0f, UNIT_DP);
     recompui_set_padding_bottom(s_setup_view, 12.0f, UNIT_DP);
     recompui_set_flex_grow(s_setup_view, 1.0f);
+
+    build_race_config_share_card(s_setup_view);
 
     RecompuiResource goal_card = recompui_create_element(s_ctx, s_setup_view);
     recompui_set_display(goal_card, DISPLAY_FLEX);
@@ -1901,6 +2332,61 @@ void anchor_startup_race_frame_hook(void)
     {
         s_pending_choose_location = 0;
         set_screen(4);
+    }
+
+    if (s_pending_export_config)
+    {
+        s_pending_export_config = 0;
+        build_race_config_code(s_config_code, (int)sizeof(s_config_code));
+        if (anchor_set_clipboard_text(s_config_code))
+            set_status("Race config code copied to clipboard.", 1);
+        else
+            set_status("Could not access clipboard. The live code is shown above.", 0);
+    }
+
+    if (s_pending_paste_config)
+    {
+        char *code;
+
+        s_pending_paste_config = 0;
+        code = anchor_get_clipboard_text();
+        recompui_open_context(s_ctx);
+        if (s_import_input != RECOMPUI_NULL_RESOURCE)
+            recompui_set_input_text(s_import_input, code ? code : "");
+        recompui_close_context(s_ctx);
+
+        if (code && code[0])
+        {
+            if (apply_race_config_code(code))
+                set_status("Race config pasted and imported.", 1);
+            else
+                set_status("Clipboard does not contain a valid race config code.", 0);
+        }
+        else
+        {
+            set_status("Clipboard is empty or unavailable.", 0);
+        }
+
+        if (code)
+            recomp_free(code);
+    }
+
+    if (s_pending_import_config)
+    {
+        char *code;
+
+        s_pending_import_config = 0;
+        recompui_open_context(s_ctx);
+        code = s_import_input != RECOMPUI_NULL_RESOURCE ? recompui_get_input_text(s_import_input) : 0;
+        recompui_close_context(s_ctx);
+
+        if (apply_race_config_code(code))
+            set_status("Race config imported.", 1);
+        else
+            set_status("Invalid race config code.", 0);
+
+        if (code)
+            recomp_free(code);
     }
 
     if (s_pending_goal_done)

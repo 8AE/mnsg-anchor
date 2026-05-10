@@ -408,6 +408,19 @@ extern "C"
     */
    char *anchor_get_race_finish_payload_json(void);
 
+   /**
+    * @brief Copy text to the host clipboard when the platform supports it.
+    */
+   int anchor_set_clipboard_text(const char *text);
+
+   /**
+    * @brief Return host clipboard text, or an empty string if unavailable.
+    *
+    * The returned string is allocated in recompiled memory and must be freed
+    * by the caller with recomp_free().
+    */
+   char *anchor_get_clipboard_text(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -521,3 +521,26 @@ char *anchor_get_race_finish_payload_json(void)
     REPY_FN_CLEANUP;
     return result;
 }
+
+int anchor_set_clipboard_text(const char *text)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_STR("text", (text && text[0]) ? text : "");
+    REPY_FN_EXEC_CACHE(anchor_set_clipboard_text_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.set_clipboard_text(text)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+char *anchor_get_clipboard_text(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_get_clipboard_text_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.get_clipboard_text()\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}

@@ -70,6 +70,9 @@ import socket
 import threading
 import queue
 import json
+import os
+import platform
+import subprocess
 import time
 import logging
 
@@ -1172,6 +1175,96 @@ def get_race_finish_payload_json() -> str:
         "team": _team_id or "default",
         "players": ", ".join(names),
     }, separators=(",", ":"))
+
+
+def set_clipboard_text(text: str) -> bool:
+    """
+    Copy text to the host clipboard for UI export buttons.
+    """
+    value = str(text or "")
+    try:
+        import tkinter
+
+        root = tkinter.Tk()
+        root.withdraw()
+        root.clipboard_clear()
+        root.clipboard_append(value)
+        root.update()
+        root.destroy()
+        return True
+    except Exception:
+        pass
+
+    try:
+        import pyperclip
+
+        pyperclip.copy(value)
+        return True
+    except Exception:
+        pass
+
+    try:
+        system = platform.system()
+        if system == "Darwin":
+            subprocess.run(["pbcopy"], input=value.encode("utf-8"), check=True)
+            return True
+        if system == "Windows":
+            subprocess.run(["clip"], input=value.encode("utf-16le"), check=True)
+            return True
+        if os.environ.get("WAYLAND_DISPLAY"):
+            subprocess.run(["wl-copy"], input=value.encode("utf-8"), check=True)
+            return True
+        if os.environ.get("DISPLAY"):
+            subprocess.run(["xclip", "-selection", "clipboard"], input=value.encode("utf-8"), check=True)
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def get_clipboard_text() -> str:
+    """
+    Return text from the host clipboard when available.
+    """
+    try:
+        import tkinter
+
+        root = tkinter.Tk()
+        root.withdraw()
+        value = root.clipboard_get()
+        root.destroy()
+        return str(value or "")
+    except Exception:
+        pass
+
+    try:
+        import pyperclip
+
+        return str(pyperclip.paste() or "")
+    except Exception:
+        pass
+
+    try:
+        system = platform.system()
+        if system == "Darwin":
+            return subprocess.check_output(["pbpaste"]).decode("utf-8", "ignore")
+        if system == "Windows":
+            cmd = [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "Get-Clipboard -Raw",
+            ]
+            return subprocess.check_output(cmd).decode("utf-8", "ignore")
+        if os.environ.get("WAYLAND_DISPLAY"):
+            return subprocess.check_output(["wl-paste", "-n"]).decode("utf-8", "ignore")
+        if os.environ.get("DISPLAY"):
+            return subprocess.check_output(["xclip", "-selection", "clipboard", "-o"]).decode("utf-8", "ignore")
+    except Exception:
+        pass
+
+    return ""
 
 
 def _decode_png_rgba(png: bytes) -> bytes:
