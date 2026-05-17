@@ -96,7 +96,7 @@ static const AnchorFlagEntry s_entries[] = {
     {"ki_superps", "Super Pass (Item)", 0},
     {"ki_achilles", "Achilles Heel", 0},
     {"ki_traindoor", "Key (Gold, Silver or Diamond)", 0},
-    {"ki_cucumber", "Pickle", 0},
+    {"ki_cucumber", "Cucumber", 0},
     {"ki_map_jpn", "Map of Japan", 0},
 
     /* ── Warp Points ─────────────────────────────────────────────────── */
@@ -124,20 +124,20 @@ static const AnchorFlagEntry s_entries[] = {
 
     /* ── Boss Defeats ────────────────────────────────────────────────── */
     {0, "Boss Defeats", 0},
-    {"fl_dharmanyo", "Game Started", 0},
-    {"fl_thaisamba", "Started Fishing Quest Red Fish", 0},
+    {"fl_dharmanyo", "Dharmanyo Defeated", 0},
+    {"fl_thaisamba", "Thaisamba Defeated", 0},
     {"fl_tsurami", "Tsurami Defeated", 0},
-    {"fl_benkei", "Started Fishing Quest Yellow Fish", 0},
+    {"fl_benkei", "Benkei Defeated", 0},
     {"fl_congo", "Congo Defeated Reward Spawn", 0},
 
     /* ── Character & Ability Flags ───────────────────────────────────── */
     {0, "Character & Ability Flags", 0},
     {"fl_sasuke_rc", "Sasuke Recruited", 0},
-    {"fl_mini_ebi", "Finished Fishing Quest and Got Achilles Heel", 0},
-    {"fl_yae_rc", "Talk with Imp in Zazen Town", 0},
-    {"fl_s_impact", "Talked to Ushiwaka at Golden Temple", 0},
-    {"fl_mermaid", "Mermaid Magic (Flag)", 0},
-    {"fl_superjmp", "Jetpack (Flag)", 0},
+    {"fl_mini_ebi", "Mini Ebismaru Obtained", 0},
+    {"fl_yae_rc", "Yae Recurited", 0},
+    {"fl_s_impact", "Suddent Impact", 0},
+    {"fl_mermaid", "Mermaid Magic", 0},
+    {"fl_superjmp", "Jetpack", 0},
     {"fl_mi_snow", "Miracle Snow (Flag)", 0},
 
     /* ── Quest Flags ─────────────────────────────────────────────────── */
@@ -148,17 +148,17 @@ static const AnchorFlagEntry s_entries[] = {
     {"fl_chain", "Chain Pipe (Flag)", 0},
     {"fl_fire_ryo", "Medal of Flames (Flag)", 0},
     {"fl_crane_on", "Crane Power On", 0},
-    {"fl_map_jpn", "Talked To Pipe Makers Brother in Festival Village (Main Quest)", 0},
-    {"fl_bat_sas", "Witch Cutscene Complete", 0},
+    {"fl_map_jpn", "Map of Japan (Flag)", 0},
+    {"fl_bat_sas", "Sasuke Battery(Flag)", 0},
 
     /* ── Dungeon Keys: Oedo Castle ───────────────────────────────────── */
     {0, "Keys: Oedo Castle", 0},
-    {"ky_s_oc_tile", "Oedo Castle Falling Platforms Silver Key", 0},
-    {"ky_s_oc_1f", "Oedo Castle Silver Key Room Near Congos Hand", 0},
-    {"ky_g_oc_1f", "OC: Gold (1F)", 0},
+    {"ky_s_oc_tile", "OC: Falling Platforms Silver Key", 0},
+    {"ky_s_oc_1f", "OC: Silver Key Room Near Congos Hand", 0},
+    {"ky_g_oc_1f", "OC: Gold Key(1F)", 0},
     {"ky_s_oc_cp", "OC: Silver (Chain Pipe)", 0},
-    {"ky_s_oc_crsh", "Oedo Castle Floor Panel Room Silver Key", 0},
-    {"ky_s_oc_2f", "Oedo Castle First Fight Silver Key", 0},
+    {"ky_s_oc_crsh", "OC: Floor Panel Room Silver Key", 0},
+    {"ky_s_oc_2f", "OC: First Fight Silver Key", 0},
 
     /* ── Dungeon Keys: Ghost Toys Castle ─────────────────────────────── */
     {0, "Keys: Ghost Toys Castle", 0},
@@ -173,27 +173,27 @@ static const AnchorFlagEntry s_entries[] = {
 
     /* ── Dungeon Keys: Festival Temple Castle ────────────────────────── */
     {0, "Keys: Festival Temple", 0},
-    {"ky_g_ft_hot", "FTC: Gold (Hot)", 0},
-    {"ky_s_ft_ring", "Dhuramanu Beaten", 0},
+    {"ky_g_ft_hot", "FTC: Gold Key", 0},
+    {"ky_s_ft_ring", "FTC: Silver Key", 0},
 
     /* ── Dungeon Keys: Gourmet Submarine ─────────────────────────────── */
     {0, "Keys: Gourmet Submarine", 0},
     {"ky_s_gs_baz", "GS: Silver (2F Bazooka)", 0},
-    {"ky_g_gs_jet", "Fighting Dhuramanu?", 0},
-    {"ky_s_gs_lava", "Fighting Dhuramanu?", 0},
-    {"ky_s_gs_uw", "GS: Silver (2F Underwater)", 0},
-    {"ky_s_gs_swd", "Ghost Toys Left Torch", 0},
-    {"ky_d_gs_inv", "Japan Shoreline Underwater Switch Activated", 0},
-    {"ky_s_gs_sus", "GS: Silver (3F Sushi)", 0},
+    {"ky_g_gs_jet", "GS: Gold Key (2F Jetpack)", 0},
+    {"ky_s_gs_lava", "GS: Silver Key (2F Lava)", 0},
+    {"ky_s_gs_uw", "GS: Silver Key (2F Underwater)", 0},
+    {"ky_s_gs_swd", "GS: Silver Key (3F Sword)", 0},
+    {"ky_d_gs_inv", "GS: Diamond Key (3F Invisible)", 0},
+    {"ky_s_gs_sus", "GS: Silver Key (3F Sushi)", 0},
 
     /* ── Dungeon Keys: Musical Castle ────────────────────────────────── */
     {0, "Keys: Musical Castle", 0},
-    {"ky_g_mc_fan", "Gorgeous Muiscal Castle Spinning Block Platforming Diamond Key", 0},
-    {"ky_s_mc_tall", "Gorgeous Muiscal Castle Raising Platform Diamond Key", 0},
-    {"ky_g_mc_hj", "Gorgeous Muiscal Castle Conveyor Belt Room Switch Hit", 0},
+    {"ky_g_mc_fan", "Gorgeous Musical Castle Spinning Block Platforming Diamond Key", 0},
+    {"ky_s_mc_tall", "Gorgeous Musical Castle Raising Platform Diamond Key", 0},
+    {"ky_g_mc_hj", "Gorgeous Musical Castle Conveyor Belt Room Switch Hit", 0},
     {"ky_g_mc_mini", "MC: Gold (1F Mini)", 0},
-    {"ky_d_mc_cube", "Gorgeous Muiscal Castle Fan Room Gold Key", 0},
-    {"ky_d_mc2", "Gorgeous Muiscal Castle First Climb Silver Key", 0},
+    {"ky_d_mc_cube", "Gorgeous Musical Castle Fan Room Gold Key", 0},
+    {"ky_d_mc2", "Gorgeous Musical Castle First Climb Silver Key", 0},
 
     /* ── Fish Counts ─────────────────────────────────────────────────── */
     {0, "Fish Counts", 0},
@@ -203,8 +203,8 @@ static const AnchorFlagEntry s_entries[] = {
 
     /* ── Fishing Quest Flags ─────────────────────────────────────────── */
     {0, "Fishing Quest Flags", 0},
-    {"fl_fish_r_on", "Learn that miracle item is in Zazen town", 0},
-    {"fl_fish_y_on", "Get (dead) Sasuke", 0},
+    {"fl_fish_r_on", "Looking for Red Fish", 0},
+    {"fl_fish_y_on", "Looking for Yello Fish", 0},
     {"fl_fish_b_on", "Looking for Blue Fish", 0},
     {"fl_fish_r_mx", "Red Fish: Max Caught", 0},
     {"fl_fish_y_mx", "Yellow Fish: Max Caught", 0},
@@ -219,39 +219,39 @@ static const AnchorFlagEntry s_entries[] = {
     /* ── World / Story Events ────────────────────────────────────────── */
     {0, "World Events", 0},
     {"fl_koryuta", "Freed Koryuta the Dragon", 0},
-    {"fl_outerspace", "Ghost Toys Dancin Cutscene Seen 1", 0},
-    {"fl_to_space", "Festival Temple Boss Cutscene Kitty Focused", 0},
+    {"fl_outerspace", "Went to Outer Space", 0},
+    {"fl_to_space", "Going to Outer Space", 0},
     {"fl_baron_iga", "Met Baron in Iga", 0},
-    {"fl_mokubei", "Receive Map of Japan", 0},
-    {"fl_wiseman", "Get Battery in Inaba Dune", 0},
-    {"fl_witch_np", "Get Battery in tree and Sasuke Joins!", 0},
-    {"fl_kyushu", "Get Cucumber", 0},
+    {"fl_mokubei", "Mokubei Can Upgrade Weapons", 0},
+    {"fl_wiseman", "Met Ghost of Wise Man", 0},
+    {"fl_witch_np", "Spoke to Witch (But Didn't Pay)", 0},
+    {"fl_kyushu", "Kyushu Disappeared", 0},
     {"fl_dragon_fp", "Riding Dragon from Folkypoke", 0},
     {"fl_sas_res", "Resurrect Sasuke (Plasma tip)", 0},
 
     /* ── Benkei / Ushiwaka Quest Chain ───────────────────────────────── */
     {0, "Benkei / Ushiwaka", 0},
-    {"fl_met_benkei", "Started Fishing Quest Blue Fish", 0},
+    {"fl_met_benkei", "Meet Benkei", 0},
     {"fl_ushi_ben", "Ushiwaka: Can Talk Benkei", 0},
-    {"fl_ushi_id", "Get the fourth miracle item (Traded Cucumber)", 0},
-    {"fl_ushi_gt", "Got Mini Ebisumaru", 0},
+    {"fl_ushi_id", "Asked Ushiwaka Who Benkei Is ", 0},
+    {"fl_ushi_gt", "Ushiwaka Went to Golden Temple", 0},
 
     /* ── Kihachi Food Quest ───────────────────────────────────────────── */
     {0, "Kihachi Food Quest", 0},
-    {"fl_kihachi_b", "Talked to Priests Son about Cucumber", 0},
-    {"fl_kihachi_q", "Looking for Kihachi Food", 0},
+    {"fl_kihachi_b", "Heard about Kihachi from Benkei", 0},
+    {"fl_kihachi_q", "Looking for Kihachi's Favorite Food", 0},
     {"fl_kihachi_f", "Learned Kihachi's Food", 0},
-    {"fl_kihachi_h1", "Fail the Ebisumaru mini-game at least once", 0},
-    {"fl_kihachi_h2", "Sasuke got \"Flying\" power", 0},
+    {"fl_kihachi_h1", "Kihachi Will Give Favorite Food Hint", 0},
+    {"fl_kihachi_h2", "Kihachi Gave Favorite Food Hint", 0},
 
     /* ── Folkypoke / Priest Quest Chain ──────────────────────────────── */
     {0, "Folkypoke Chain", 0},
-    {"fl_priest_son", "Benkei Refers us to the Kappa", 0},
-    {"fl_folkypoke", "Talked to Benkei for the first time", 0},
-    {"fl_inaba_bat", "Got Key to Training", 0},
-    {"fl_dragon_p", "Talked to Dragon Robot First Time", 0},
-    {"fl_tourist_g", "Received Tourist Gratitude", 0},
-    {"fl_dancin", "Gorgeous Muiscal Castle Watched Stage Play", 0},
+    {"fl_priest_son", "Spoke to Priest's Son", 0},
+    {"fl_folkypoke", "Arrived at Folkypoke Tourist Center", 0},
+    {"fl_inaba_bat", "Heard about Inaba Desert Battery", 0},
+    {"fl_dragon_p", "Heard about Dragon Problem", 0},
+    {"fl_tourist_g", "Received Gratitude from Tourist Center", 0},
+    {"fl_dancin", "Spoke to Dancin Alnite", 0},
 
     /* ── Tenements Cousins Quest ─────────────────────────────────────── */
     {0, "Tenements Cousins", 0},
@@ -262,35 +262,35 @@ static const AnchorFlagEntry s_entries[] = {
 
     /* ── Zazen Old Woman Quest ───────────────────────────────────────── */
     {0, "Zazen Old Woman", 0},
-    {"fl_zazen_bef", "Silver Fortune Doll Might actually be quarter info", 0},
-    {"fl_zazen_aft", "Fishing Quest Blue Fish Collected", 0},
-    {"fl_zazen_ba", "Festival Temple Boss Cutscene Complete", 0},
+    {"fl_zazen_bef", "Met Old Woman in Zazen Before Dharmanyo", 0},
+    {"fl_zazen_aft", "Met Old Woman in Zazen After Dharmanyo", 0},
+    {"fl_zazen_ba", "Met Old Woman in Zazen Before And Afte", 0},
     {"fl_zazen_rwd", "Zazen Woman Reward", 0},
 
     /* ── NPC Meeting Cutscenes ───────────────────────────────────────── */
     {0, "NPC Meetings", 0},
-    {"cs_oldman_oe", "Weapon upgrade number 2", 0},
-    {"cs_omitsu", "Get Mermaid power", 0},
-    {"cs_omitsu_f", "Acquired Chain Pipe", 0},
-    {"cs_zazen_dw", "Talked To Pipe Maker to get Upgraded Weapons", 0},
-    {"cs_kompira", "Acquired Medal of Justice", 0},
+    {"cs_oldman_oe", "Old Man in South Oedo", 0},
+    {"cs_omitsu", "Spoke to Omitsu about UFO", 0},
+    {"cs_omitsu_f", "Omitsu Fan", 0},
+    {"cs_zazen_dw", "Heard about Zazen Dwarf", 0},
+    {"cs_kompira", "Spoke to Kompira Priest", 0},
     {"cs_tourist_c", "Tourist Center Cutscene", 0},
     {"cs_baron_wm", "Baron / Wise Man Meeting", 0},
 
     /* ── Post-Boss Cutscenes ─────────────────────────────────────────── */
     {0, "Post-Boss Cutscenes", 0},
-    {"cs_dhrm_1", "Went to Outer Space at Ugo Circle", 0},
+    {"cs_dhrm_1", "After Dharmanyo #1", 0},
     {"cs_dhrm_2", "After Dharmanyo #2", 0},
-    {"cs_dhrm_3", "Beat Benkei", 0},
+    {"cs_dhrm_3", "After Dharmanyo #3", 0},
     {"cs_dhrm_4", "After Dharmanyo #4", 0},
-    {"cs_tsurami", "Started Cutscene at Ugo Circle", 0},
+    {"cs_tsurami", "After Tsurami", 0},
 
     /* ── Gorgeous Stage / Sogen ──────────────────────────────────────── */
     {0, "Gorgeous Stage", 0},
-    {"cs_gorge_1", "Gorgeous Stage #1", 0},
-    {"cs_gorge_2", "Baron Cutscene Outside Wise Mans House Complete", 0},
-    {"cs_sogen_l", "Sogen Girl: Lily", 0},
-    {"cs_sogen_d", "Goemon Minigame Over", 0},
+    {"cs_gorge_1", "Gorgeous Stage Cutscene #1", 0},
+    {"cs_gorge_2", "Gorgeous Stage Cutscene #2", 0},
+    {"cs_sogen_l", "Sogen Girl Imitated Lily", 0},
+    {"cs_sogen_d", "Sogen Girl Imitated Dancin", 0},
 
     /* ── Witch Cutscene Chain ────────────────────────────────────────── */
     {0, "Witch Cutscenes", 0},
@@ -299,7 +299,7 @@ static const AnchorFlagEntry s_entries[] = {
     {"cs_witch_3", "Witch Cutscene #3", 0},
     {"cs_witch_4", "Witch Cutscene #4", 0},
     {"cs_witch_5", "Witch Cutscene #5", 0},
-    {"cs_witch_6", "Fishing Quest Fish Red", 0},
+    {"cs_witch_6", "Witch Cutscene #6", 0},
 
     /* ── Weapon Upgrades ─────────────────────────────────────────────── */ {0, "Weapon Upgrades", 0},
     {"wpn_goemon", "Goemon Weapons (Silver)", 1},
