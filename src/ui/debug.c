@@ -15,6 +15,10 @@
  *   - Click it to open or close the debug panel.
  *   - Click "✕" inside the panel to close it.
  *   - The panel captures input while open so game controls are suspended.
+ *   - The Transport form accepts a hex room id plus signed x/y/z coordinates.
+ *     Transport does not call the file-select callback setter; it writes the
+ *     destination fields the game already consumes and then enters the engine's
+ *     normal warp/load step.
  *
  * The panel is initialised lazily on the first game frame (RECOMP_HOOK_RETURN
  * on func_80002040_2C40) so it is safe to add this file to any build that
@@ -40,6 +44,68 @@ void item_sync_force_flag_val(const char *name, int val);
 extern void anchor_connect_ui_net_btn_callback(RecompuiResource res,
                                                const RecompuiEventData *ev, void *ud);
 
+/* Race-start/debug transport fields.
+ *
+ * Ghidra evidence:
+ * - func_8000B2A0_BEA0 copies the save-block spawn fields into the active
+ *   destination fields used by the next load.
+ * - func_80003728_4328 writes g_system->stepw, clears stepw_end, marks the
+ *   system as transitioning, and resets the step substate.
+ * - stepw 12 dispatches the normal warp/load state. Once the load gate is
+ *   ready it calls the same destination-field consumer used by real exits and
+ *   advances the engine into the following step.
+ *
+ * The first transport attempt called func_8003521C_35E1C, the scheduler
+ * callback setter used by file-select/race autoload. That function expects the
+ * active task pointer to be valid for that specific context and crashed when
+ * called from the live debug menu. This menu therefore records a destination
+ * and asks the engine state machine to perform the transition instead.
+ */
+extern unsigned char D_8015C608_15D208[];
+extern signed short D_8006B780_6C380[];
+extern unsigned char D_800BCCC0_BD8C0[];
+extern unsigned char *D_8015C5C8_15D1C8;
+extern void func_80003728_4328(unsigned char step);
+
+/* Save block offsets consumed by func_8000B2A0_BEA0. These are kept in the
+ * same x/y/z order exposed by the debug UI and by race start locations. */
+#define DEBUG_SAVE_SPAWN_ROOM 0x204
+#define DEBUG_SAVE_PLAYER_ROT 0x208
+#define DEBUG_SAVE_SPAWN_X 0x20A
+#define DEBUG_SAVE_SPAWN_Y 0x20C
+#define DEBUG_SAVE_SPAWN_Z 0x20E
+#define DEBUG_SAVE_CAM_ROT 0x210
+
+/* Active destination fields in the global game-system block. Writing these
+ * lets a live in-game warp use the requested coordinates immediately, without
+ * waiting for the save-spawn copy routine to run in file-select context. */
+#define DEBUG_SYS_DEST_STAGE 0x3AFE0
+#define DEBUG_SYS_ACTIVE_DEST_STAGE 0xADD2
+#define DEBUG_SYS_DEST_PLAYER_ROT 0xAFE2
+#define DEBUG_SYS_DEST_X 0xAFE4
+#define DEBUG_SYS_DEST_Y 0xAFE6
+#define DEBUG_SYS_DEST_Z 0xAFE8
+#define DEBUG_SYS_DEST_CAM_ROT 0xAFEA
+
+/* Engine step used by the game's own warp/load path. */
+#define DEBUG_STEP_WARP 12
+
+/* D_8006B780_6C380 is indexed as room * 5 and provides the default room
+ * position and rotations. The user-entered coordinates override the default
+ * position, while camera/player rotations still come from this table. */
+typedef struct
+{
+    short posX;
+    short posY;
+    short posZ;
+    short camRot;
+    short playerRot;
+} DebugStartingData;
+
+/* Pending status-label text update (also deferred to frame hook). */
+static const char *s_pending_status = 0;
+static char s_transport_status[96];
+
 static int debug_text_equals(const char *a, const char *b)
 {
     int i = 0;
@@ -55,6 +121,199 @@ static int debug_text_equals(const char *a, const char *b)
     }
 
     return a[i] == b[i];
+}
+
+static void debug_write_save_s16(int offset, short value)
+{
+    *(short *)&D_8015C608_15D208[offset] = value;
+}
+
+static void debug_write_system_s16(int offset, short value)
+{
+    *(short *)&D_800BCCC0_BD8C0[offset] = value;
+}
+
+static int debug_parse_int(const char *s, int *out)
+{
+    int sign = 1;
+    int value = 0;
+    int saw_digit = 0;
+
+    if (!s || !out)
+        return 0;
+
+    while (*s == ' ' || *s == '\t')
+        s++;
+
+    if (*s == '-')
+    {
+        sign = -1;
+        s++;
+    }
+
+    while (*s >= '0' && *s <= '9')
+    {
+        saw_digit = 1;
+        value = value * 10 + (*s++ - '0');
+    }
+
+    *out = value * sign;
+    return saw_digit;
+}
+
+static int debug_parse_hex_room(const char *s, unsigned short *out)
+{
+    unsigned int value = 0;
+    int saw_digit = 0;
+
+    if (!s || !out)
+        return 0;
+
+    while (*s == ' ' || *s == '\t')
+        s++;
+
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+        s += 2;
+
+    while (*s)
+    {
+        unsigned int digit;
+        if (*s >= '0' && *s <= '9')
+            digit = (unsigned int)(*s - '0');
+        else if (*s >= 'a' && *s <= 'f')
+            digit = (unsigned int)(*s - 'a' + 10);
+        else if (*s >= 'A' && *s <= 'F')
+            digit = (unsigned int)(*s - 'A' + 10);
+        else if (*s == ' ' || *s == '\t')
+            break;
+        else
+            return 0;
+
+        saw_digit = 1;
+        value = (value << 4) | digit;
+        if (value > 0xFFFFu)
+            return 0;
+        s++;
+    }
+
+    if (!saw_digit)
+        return 0;
+
+    *out = (unsigned short)value;
+    return 1;
+}
+
+static short debug_clamp_s16(int value)
+{
+    if (value < -32768)
+        return -32768;
+    if (value > 32767)
+        return 32767;
+    return (short)value;
+}
+
+static void debug_append_char(char *dst, int *pos, int max_len, char value)
+{
+    if (*pos < max_len - 1)
+        dst[(*pos)++] = value;
+}
+
+static void debug_append_text(char *dst, int *pos, int max_len, const char *text)
+{
+    while (*text && *pos < max_len - 1)
+        dst[(*pos)++] = *text++;
+}
+
+static void debug_append_int(char *dst, int *pos, int max_len, int value)
+{
+    char tmp[12];
+    int len = 0;
+    unsigned int v;
+
+    if (value < 0)
+    {
+        debug_append_char(dst, pos, max_len, '-');
+        v = (unsigned int)(-(value + 1)) + 1u;
+    }
+    else
+    {
+        v = (unsigned int)value;
+    }
+
+    if (v == 0)
+    {
+        debug_append_char(dst, pos, max_len, '0');
+        return;
+    }
+
+    while (v > 0 && len < (int)sizeof(tmp))
+    {
+        tmp[len++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+
+    while (len > 0)
+        debug_append_char(dst, pos, max_len, tmp[--len]);
+}
+
+static void debug_append_room_hex(char *dst, int *pos, int max_len, unsigned short room)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    debug_append_text(dst, pos, max_len, "0x");
+    debug_append_char(dst, pos, max_len, hex[(room >> 12) & 0xF]);
+    debug_append_char(dst, pos, max_len, hex[(room >> 8) & 0xF]);
+    debug_append_char(dst, pos, max_len, hex[(room >> 4) & 0xF]);
+    debug_append_char(dst, pos, max_len, hex[room & 0xF]);
+}
+
+static void debug_set_transport_status(unsigned short room, int x, int y, int z)
+{
+    int pos = 0;
+    debug_append_text(s_transport_status, &pos, (int)sizeof(s_transport_status), "Transported to ");
+    debug_append_room_hex(s_transport_status, &pos, (int)sizeof(s_transport_status), room);
+    debug_append_text(s_transport_status, &pos, (int)sizeof(s_transport_status), " [");
+    debug_append_int(s_transport_status, &pos, (int)sizeof(s_transport_status), x);
+    debug_append_text(s_transport_status, &pos, (int)sizeof(s_transport_status), ", ");
+    debug_append_int(s_transport_status, &pos, (int)sizeof(s_transport_status), y);
+    debug_append_text(s_transport_status, &pos, (int)sizeof(s_transport_status), ", ");
+    debug_append_int(s_transport_status, &pos, (int)sizeof(s_transport_status), z);
+    debug_append_char(s_transport_status, &pos, (int)sizeof(s_transport_status), ']');
+    s_transport_status[pos] = '\0';
+    s_pending_status = s_transport_status;
+}
+
+static void debug_apply_transport(unsigned short room, int x, int y, int z)
+{
+    DebugStartingData *debug_start = (DebugStartingData *)&D_8006B780_6C380[room * 5];
+
+    /* Keep the persistent save-spawn copy in sync with the live destination.
+     * This mirrors the race-start path and makes the requested location survive
+     * if a later engine step re-reads spawn data during the same transition. */
+    debug_write_save_s16(DEBUG_SAVE_SPAWN_ROOM, (short)room);
+    debug_write_save_s16(DEBUG_SAVE_SPAWN_X, debug_clamp_s16(x));
+    debug_write_save_s16(DEBUG_SAVE_SPAWN_Y, debug_clamp_s16(y));
+    debug_write_save_s16(DEBUG_SAVE_SPAWN_Z, debug_clamp_s16(z));
+    debug_write_save_s16(DEBUG_SAVE_CAM_ROT, debug_start->camRot);
+    debug_write_save_s16(DEBUG_SAVE_PLAYER_ROT, debug_start->playerRot);
+
+    /* The pointer-backed system field and the static system mirror are both
+     * updated because different decompiled paths reference different bases.
+     * Updating both matches the observed engine layout and avoids landing in
+     * the new room with stale coordinates or rotation. */
+    if (D_8015C5C8_15D1C8)
+        *(short *)(D_8015C5C8_15D1C8 + DEBUG_SYS_DEST_STAGE) = (short)room;
+
+    debug_write_system_s16(DEBUG_SYS_ACTIVE_DEST_STAGE, (short)room);
+    debug_write_system_s16(DEBUG_SYS_DEST_PLAYER_ROT, debug_start->playerRot);
+    debug_write_system_s16(DEBUG_SYS_DEST_X, debug_clamp_s16(x));
+    debug_write_system_s16(DEBUG_SYS_DEST_Y, debug_clamp_s16(y));
+    debug_write_system_s16(DEBUG_SYS_DEST_Z, debug_clamp_s16(z));
+    debug_write_system_s16(DEBUG_SYS_DEST_CAM_ROT, debug_start->camRot);
+
+    /* Hand off to the game's warp step. This is deliberately the last write:
+     * once stepw changes, the engine can consume the destination fields on a
+     * later frame. */
+    func_80003728_4328(DEBUG_STEP_WARP);
 }
 
 /* =========================================================================
@@ -427,6 +686,12 @@ static RecompuiContext s_modal_ctx = RECOMPUI_NULL_CONTEXT;
 /* Label updated after every Force click to show what was last forced. */
 static RecompuiResource s_status_label = RECOMPUI_NULL_RESOURCE;
 
+/* Transport form fields. */
+static RecompuiResource s_transport_room_input = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_transport_x_input = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_transport_y_input = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_transport_z_input = RECOMPUI_NULL_RESOURCE;
+
 static int s_initialized = 0;    /* guard for one-time lazy initialisation */
 static int s_toggle_visible = 0; /* 1 after the toggle button is shown    */
 static int s_modal_visible = 0;  /* tracks actual shown/hidden state      */
@@ -441,9 +706,7 @@ static RecompuiResource s_dbg_btn = RECOMPUI_NULL_RESOURCE;
  * those are only safe outside of a callback (i.e. from the frame hook).  */
 static int s_pending_open = 0;
 static int s_pending_close = 0;
-
-/* Pending status-label text update (also deferred to frame hook).        */
-static const char *s_pending_status = 0;
+static int s_pending_transport = 0;
 
 /* =========================================================================
    Callbacks  (flag-setters only – no context API calls here)
@@ -506,6 +769,17 @@ static void on_force_clicked(RecompuiResource res,
                   s_entries[idx].key, s_entries[idx].display);
 }
 
+/** Transport button: defer input reads and transition work to the frame hook. */
+static void on_transport_clicked(RecompuiResource res,
+                                 const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type != UI_EVENT_CLICK)
+        return;
+    s_pending_transport = 1;
+}
+
 /* =========================================================================
    UI construction (called once from the frame hook)
    ========================================================================= */
@@ -513,6 +787,30 @@ static void on_force_clicked(RecompuiResource res,
 #define ROW_H 68.0f     /* height of each flag row                      */
 #define HDR_BAR_H 64.0f /* header bar height                            */
 #define STATUS_H 48.0f  /* status bar height                            */
+
+static void make_transport_field(RecompuiContext ctx, RecompuiResource parent,
+                                 const char *label_text, const char *default_text,
+                                 RecompuiResource *out)
+{
+    RecompuiResource field = recompui_create_element(ctx, parent);
+    recompui_set_display(field, DISPLAY_FLEX);
+    recompui_set_flex_direction(field, FLEX_DIRECTION_COLUMN);
+    recompui_set_flex_grow(field, 1.0f);
+    recompui_set_min_width(field, 120.0f, UNIT_DP);
+    recompui_set_min_height(field, 72.0f, UNIT_DP);
+
+    RecompuiResource lbl = recompui_create_label(ctx, field, label_text, LABELSTYLE_ANNOTATION);
+    recompui_set_color(lbl, &C_DIM);
+    recompui_set_font_size(lbl, 15.0f, UNIT_DP);
+    recompui_set_margin_bottom(lbl, 8.0f, UNIT_DP);
+
+    *out = recompui_create_textinput(ctx, field);
+    recompui_set_font_size(*out, 16.0f, UNIT_DP);
+    recompui_set_height(*out, 48.0f, UNIT_DP);
+    recompui_set_min_height(*out, 48.0f, UNIT_DP);
+    recompui_set_tab_index(*out, TAB_INDEX_AUTO);
+    recompui_set_input_text(*out, default_text);
+}
 
 static void debug_init_ui(void)
 {
@@ -600,6 +898,7 @@ static void debug_init_ui(void)
         recompui_set_flex_direction(hdr, FLEX_DIRECTION_ROW);
         recompui_set_align_items(hdr, ALIGN_ITEMS_CENTER);
         recompui_set_justify_content(hdr, JUSTIFY_CONTENT_SPACE_BETWEEN);
+        recompui_set_min_height(hdr, 64.0f, UNIT_DP);
         recompui_set_padding_left(hdr, 20.0f, UNIT_DP);
         recompui_set_padding_right(hdr, 12.0f, UNIT_DP);
         recompui_set_padding_top(hdr, 14.0f, UNIT_DP);
@@ -627,21 +926,22 @@ static void debug_init_ui(void)
         recompui_set_tab_index(close_btn, TAB_INDEX_NONE);
         recompui_register_callback(close_btn, on_close_clicked, 0);
 
-        /* ── Status bar: shows the last forced flag name ──────────── */
+        /* ── Status bar: shows the last debug action ─────────────── */
         RecompuiResource status = recompui_create_element(s_modal_ctx, panel);
         recompui_set_display(status, DISPLAY_FLEX);
         recompui_set_flex_direction(status, FLEX_DIRECTION_ROW);
         recompui_set_align_items(status, ALIGN_ITEMS_CENTER);
-        recompui_set_padding_top(status, 10.0f, UNIT_DP);
-        recompui_set_padding_bottom(status, 10.0f, UNIT_DP);
-        recompui_set_padding_left(status, 16.0f, UNIT_DP);
-        recompui_set_padding_right(status, 16.0f, UNIT_DP);
+        recompui_set_min_height(status, 52.0f, UNIT_DP);
+        recompui_set_padding_top(status, 12.0f, UNIT_DP);
+        recompui_set_padding_bottom(status, 12.0f, UNIT_DP);
+        recompui_set_padding_left(status, 20.0f, UNIT_DP);
+        recompui_set_padding_right(status, 20.0f, UNIT_DP);
         recompui_set_background_color(status, &C_STATUS_BG);
         recompui_set_border_bottom_width(status, 1.0f, UNIT_DP);
         recompui_set_border_bottom_color(status, &C_BORDER);
 
         RecompuiResource pfx = recompui_create_label(
-            s_modal_ctx, status, "Last forced: ", LABELSTYLE_SMALL);
+            s_modal_ctx, status, "Last action: ", LABELSTYLE_SMALL);
         recompui_set_color(pfx, &C_DIM);
         recompui_set_font_size(pfx, 16.0f, UNIT_DP);
 
@@ -651,14 +951,62 @@ static void debug_init_ui(void)
         recompui_set_font_weight(s_status_label, 600);
         recompui_set_font_size(s_status_label, 16.0f, UNIT_DP);
 
+        /* ── Transport form ───────────────────────────────────────── */
+        RecompuiResource transport = recompui_create_element(s_modal_ctx, panel);
+        recompui_set_display(transport, DISPLAY_FLEX);
+        recompui_set_flex_direction(transport, FLEX_DIRECTION_COLUMN);
+        recompui_set_min_height(transport, 158.0f, UNIT_DP);
+        recompui_set_padding_top(transport, 18.0f, UNIT_DP);
+        recompui_set_padding_bottom(transport, 20.0f, UNIT_DP);
+        recompui_set_padding_left(transport, 20.0f, UNIT_DP);
+        recompui_set_padding_right(transport, 20.0f, UNIT_DP);
+        recompui_set_background_color(transport, &C_ROW_EVEN);
+        recompui_set_border_bottom_width(transport, 1.0f, UNIT_DP);
+        recompui_set_border_bottom_color(transport, &C_BORDER);
+        recompui_set_gap(transport, 14.0f, UNIT_DP);
+
+        RecompuiResource transport_title = recompui_create_label(
+            s_modal_ctx, transport, "Transport", LABELSTYLE_SMALL);
+        recompui_set_color(transport_title, &C_GREEN);
+        recompui_set_font_weight(transport_title, 700);
+        recompui_set_font_size(transport_title, 18.0f, UNIT_DP);
+
+        RecompuiResource transport_row = recompui_create_element(s_modal_ctx, transport);
+        recompui_set_display(transport_row, DISPLAY_FLEX);
+        recompui_set_flex_direction(transport_row, FLEX_DIRECTION_ROW);
+        recompui_set_align_items(transport_row, ALIGN_ITEMS_FLEX_END);
+        recompui_set_min_height(transport_row, 76.0f, UNIT_DP);
+        recompui_set_gap(transport_row, 14.0f, UNIT_DP);
+
+        make_transport_field(s_modal_ctx, transport_row, "Room Hex", "0x01D1", &s_transport_room_input);
+        make_transport_field(s_modal_ctx, transport_row, "X", "56", &s_transport_x_input);
+        make_transport_field(s_modal_ctx, transport_row, "Y", "-40", &s_transport_y_input);
+        make_transport_field(s_modal_ctx, transport_row, "Z", "51", &s_transport_z_input);
+
+        RecompuiResource transport_btn = recompui_create_button(
+            s_modal_ctx, transport_row, "Transport", BUTTONSTYLE_PRIMARY);
+        recompui_set_cursor(transport_btn, CURSOR_POINTER);
+        recompui_set_font_size(transport_btn, 14.0f, UNIT_DP);
+        recompui_set_width(transport_btn, 150.0f, UNIT_DP);
+        recompui_set_height(transport_btn, 48.0f, UNIT_DP);
+        recompui_set_min_height(transport_btn, 48.0f, UNIT_DP);
+        recompui_set_margin_left(transport_btn, 6.0f, UNIT_DP);
+        recompui_set_padding_left(transport_btn, 18.0f, UNIT_DP);
+        recompui_set_padding_right(transport_btn, 18.0f, UNIT_DP);
+        recompui_set_tab_index(transport_btn, TAB_INDEX_NONE);
+        recompui_register_callback(transport_btn, on_transport_clicked, 0);
+
         /* ── Scrollable flag list ──────────────────────────────────── */
         RecompuiResource scroll = recompui_create_element(s_modal_ctx, panel);
         recompui_set_flex_grow(scroll, 1.0f);
         recompui_set_overflow_y(scroll, OVERFLOW_SCROLL);
         recompui_set_display(scroll, DISPLAY_FLEX);
         recompui_set_flex_direction(scroll, FLEX_DIRECTION_COLUMN);
-        recompui_set_padding(scroll, 10.0f, UNIT_DP);
-        recompui_set_gap(scroll, 3.0f, UNIT_DP);
+        recompui_set_padding_top(scroll, 14.0f, UNIT_DP);
+        recompui_set_padding_bottom(scroll, 10.0f, UNIT_DP);
+        recompui_set_padding_left(scroll, 10.0f, UNIT_DP);
+        recompui_set_padding_right(scroll, 10.0f, UNIT_DP);
+        recompui_set_gap(scroll, 4.0f, UNIT_DP);
 
         /* Build flag rows.  Section headers are plain styled labels;
          * flag rows are flex rows with a text label and a Force button. */
@@ -812,6 +1160,60 @@ void debug_ui_frame_hook(void)
         recompui_open_context(s_toggle_ctx);
         recompui_set_display(s_net_btn, show_net ? DISPLAY_BLOCK : DISPLAY_NONE);
         recompui_close_context(s_toggle_ctx);
+    }
+
+    /* Process pending transport action from the modal button. */
+    if (s_pending_transport)
+    {
+        char *room_str;
+        char *x_str;
+        char *y_str;
+        char *z_str;
+        unsigned short room = 0;
+        int x = 0;
+        int y = 0;
+        int z = 0;
+        int ok;
+
+        s_pending_transport = 0;
+
+        recompui_open_context(s_modal_ctx);
+        room_str = s_transport_room_input != RECOMPUI_NULL_RESOURCE ? recompui_get_input_text(s_transport_room_input) : 0;
+        x_str = s_transport_x_input != RECOMPUI_NULL_RESOURCE ? recompui_get_input_text(s_transport_x_input) : 0;
+        y_str = s_transport_y_input != RECOMPUI_NULL_RESOURCE ? recompui_get_input_text(s_transport_y_input) : 0;
+        z_str = s_transport_z_input != RECOMPUI_NULL_RESOURCE ? recompui_get_input_text(s_transport_z_input) : 0;
+        recompui_close_context(s_modal_ctx);
+
+        ok = debug_parse_hex_room(room_str, &room) &&
+             debug_parse_int(x_str, &x) &&
+             debug_parse_int(y_str, &y) &&
+             debug_parse_int(z_str, &z);
+
+        if (room_str)
+            recomp_free(room_str);
+        if (x_str)
+            recomp_free(x_str);
+        if (y_str)
+            recomp_free(y_str);
+        if (z_str)
+            recomp_free(z_str);
+
+        if (ok)
+        {
+            debug_set_transport_status(room, x, y, z);
+            recomp_printf("[Debug] Transport: room=0x%04X xyz=(%d,%d,%d)\n",
+                          (unsigned int)room, x, y, z);
+            if (s_modal_visible)
+            {
+                recompui_hide_context(s_modal_ctx);
+                s_modal_visible = 0;
+            }
+            debug_apply_transport(room, x, y, z);
+        }
+        else
+        {
+            s_pending_status = "Invalid transport input";
+        }
     }
 
     /* Process pending open/close actions from callbacks. */
