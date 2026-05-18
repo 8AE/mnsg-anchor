@@ -64,6 +64,7 @@ All options are available in the mod settings menu inside the game:
 | Show Item Notifications | Enabled           | Show a toast when items or flags are received or found                         |
 | Damage Sync             | Enabled           | Sync damage taken and healing between teammates; either player can die from it |
 | Show Room ID (Hex)      | Disabled          | Display the raw hexadecimal room ID next to the area name in the player list   |
+| Show Player Positions   | Disabled          | Display each player's X, Y, Z world position next to their name                |
 
 ### Dependencies
 

@@ -141,3 +141,11 @@ description = "Display the raw hexadecimal room ID next to the area name in the 
 type = "Enum"
 options = ["Enabled", "Disabled"]
 default = "Disabled"
+
+[[manifest.config_options]]
+id = "anchor_show_player_positions"
+name = "Show Player Positions"
+description = "Display each player's last broadcast X, Y, Z world position next to their name in the player list."
+type = "Enum"
+options = ["Enabled", "Disabled"]
+default = "Disabled"

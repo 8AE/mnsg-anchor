@@ -81,14 +81,14 @@ typedef struct
 static const RaceStartLocation s_start_locations[] = {
     {0x1D1, 56, -40, 51, "Goemon's House"},
     {0x161, -97, 0, -190, "Oedo Town Housing"},
-    {0x15F, -103, 0, 5, "Oedo Town Shopping District"},
+    {0x15F, 86, 0, -349, "Oedo Town Shopping District"},
     {0x15E, -440, 0, -47, "Oedo Town Super Pass Bridge"},
-    {0x160, 62, 7, 45, "Oedo Town Shrine Area"},
+    {0x160, 423, 7, -251, "Oedo Town Shrine Area"},
     {0x162, -238, 8, 228, "Oedo Town Nihon Bashi Bridge"},
+    {0x163, 57, -14, 208, "Oedo Town Outside Kai Highway"},
     {0x164, -350, 7, 93, "Oedo Castle Main Gate"},
     {0x165, 101, 7, 109, "Stairs to Oedo Castle"},
     {0x166, -143, 147, 264, "Oedo Castle Entrance"},
-    {0x163, 34, -14, 6, "Oedo Town Road to Mt Fuji"},
     {0x167, 3, 0, 153, "Zazen Town Entrance"},
     {0x168, 0, 27, 90, "Zazen Town Bridge"},
     {0x169, 61, 8, 231, "Zazen Town Main Town"},
@@ -128,8 +128,8 @@ static const RaceStartLocation s_start_locations[] = {
     {0x1B5, 48, -50, 35, "Iyo Coffee Shop"},
     {0x141, 48, -50, 35, "Iyo Hills"},
     {0x1B1, 48, -50, 35, "Kai's Coffee Shop"},
-    {0x12C, 48, -50, 35, "Kai Highway"},
-    {0x12D, 264, 352, 87, "Mt Fuji (Bottom)"},
+    {0x12C, 770, 139, -1355, "Kai Highway"},      // Checked
+    {0x12D, -46, -439, 1299, "Mt Fuji (Bottom)"}, // checked
     {0x12E, 173, 90, 144, "Mt Fuji Crater"},
     {0x12F, 180, -131, 69, "Mt Fuji (Peak)"},
     {0x1D2, 56, -40, 51, "Mt Fuji Salesman Room"},
@@ -1030,10 +1030,10 @@ static void set_screen(int screen)
     {
         if (s_category_views[i] != RECOMPUI_NULL_RESOURCE)
             recompui_set_display(s_category_views[i],
-                                  (screen == 2 && i == s_active_category) ? DISPLAY_FLEX : DISPLAY_NONE);
+                                 (screen == 2 && i == s_active_category) ? DISPLAY_FLEX : DISPLAY_NONE);
         if (s_goal_category_views[i] != RECOMPUI_NULL_RESOURCE)
             recompui_set_display(s_goal_category_views[i],
-                                  (screen == 3 && i == s_active_goal_category) ? DISPLAY_FLEX : DISPLAY_NONE);
+                                 (screen == 3 && i == s_active_goal_category) ? DISPLAY_FLEX : DISPLAY_NONE);
     }
     recompui_close_context(s_ctx);
 }

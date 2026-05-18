@@ -89,6 +89,9 @@ extern void *D_801FC60C_5B851C;
 /** Width of the player-list panel in DP units. */
 #define PANEL_WIDTH 300.0f
 
+/** Maximum characters in a composed player-list label. */
+#define PLAYER_LABEL_BUF_LEN 192
+
 /* =========================================================================
    Colour constants
    ========================================================================= */
@@ -203,6 +206,85 @@ static void plist_load_textures(void)
         (void *)icon_sasuke_data, ICON_SASUKE_WIDTH, ICON_SASUKE_HEIGHT);
     s_char_textures[3] = recompui_create_texture_rgba32(
         (void *)icon_yae_data, ICON_YAE_WIDTH, ICON_YAE_HEIGHT);
+}
+
+static void append_char_limited(char *dst, int *pos, int max_len, char value)
+{
+    if (*pos < max_len - 1)
+        dst[(*pos)++] = value;
+}
+
+static void append_text_limited(char *dst, int *pos, int max_len, const char *text)
+{
+    while (*text && *pos < max_len - 1)
+        dst[(*pos)++] = *text++;
+}
+
+static void append_int_limited(char *dst, int *pos, int max_len, int value)
+{
+    char tmp[12];
+    int len = 0;
+    unsigned int v;
+
+    if (value < 0)
+    {
+        append_char_limited(dst, pos, max_len, '-');
+        v = (unsigned int)(-(value + 1)) + 1u;
+    }
+    else
+    {
+        v = (unsigned int)value;
+    }
+
+    if (v == 0)
+    {
+        append_char_limited(dst, pos, max_len, '0');
+        return;
+    }
+
+    while (v > 0 && len < (int)sizeof(tmp))
+    {
+        tmp[len++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+
+    while (len > 0)
+        append_char_limited(dst, pos, max_len, tmp[--len]);
+}
+
+static int parse_json_int_field(const char *p, char key0, char key1, int key_len, int default_value)
+{
+    while (*p && *p != '}')
+    {
+        int matched = 0;
+        if (key_len == 1)
+        {
+            matched = (*p == '"' && *(p + 1) == key0 && *(p + 2) == '"' && *(p + 3) == ':');
+        }
+        else
+        {
+            matched = (*p == '"' && *(p + 1) == key0 && *(p + 2) == key1 &&
+                       *(p + 3) == '"' && *(p + 4) == ':');
+        }
+
+        if (matched)
+        {
+            int sign = 1;
+            int value = 0;
+            p += key_len + 3; /* skip "key": */
+            if (*p == '-')
+            {
+                sign = -1;
+                p++;
+            }
+            while (*p >= '0' && *p <= '9')
+                value = value * 10 + (*p++ - '0');
+            return value * sign;
+        }
+        p++;
+    }
+
+    return default_value;
 }
 
 static void plist_ensure_init(void)
@@ -405,7 +487,7 @@ void anchor_ui_update(void)
     }
 
     /* Fetch structured player info from Python:
-     * [{"n":"Name - Location","c":0}, ...]
+     * [{"n":"Name - Location","c":0,"r":165,"t":"default","hp":1,"x":10,"y":20,"z":30}, ...]
      * where "c" is the character index (0=Goemon..3=Yae, -1=unknown). */
     char *info_json = anchor_get_player_info_json();
     if (!info_json)
@@ -418,6 +500,10 @@ void anchor_ui_update(void)
     static char row_team_buf[MAX_DISPLAY_PLAYERS][40]; /* team ID string, may be empty */
     static int row_char_idx[MAX_DISPLAY_PLAYERS];
     static int row_room_id[MAX_DISPLAY_PLAYERS]; /* raw 16-bit room ID, -1 = unknown */
+    static int row_has_pos[MAX_DISPLAY_PLAYERS];
+    static int row_pos_x[MAX_DISPLAY_PLAYERS];
+    static int row_pos_y[MAX_DISPLAY_PLAYERS];
+    static int row_pos_z[MAX_DISPLAY_PLAYERS];
     int row_count = 0;
     const char *p = info_json;
 
@@ -483,6 +569,11 @@ void anchor_ui_update(void)
             }
         }
 
+        row_has_pos[row_count] = parse_json_int_field(p, 'h', 'p', 2, 0);
+        row_pos_x[row_count] = parse_json_int_field(p, 'x', '\0', 1, 0);
+        row_pos_y[row_count] = parse_json_int_field(p, 'y', '\0', 1, 0);
+        row_pos_z[row_count] = parse_json_int_field(p, 'z', '\0', 1, 0);
+
         /* Locate the "t":" key (team ID string). */
         row_team_buf[row_count][0] = '\0';
         {
@@ -510,9 +601,10 @@ void anchor_ui_update(void)
 
     /* Read config options once per refresh. */
     int show_room_hex = (recomp_get_config_u32("anchor_show_room_hex") == 0);
+    int show_positions = (recomp_get_config_u32("anchor_show_player_positions") == 0);
 
     static const char s_hex_chars[] = "0123456789ABCDEF";
-    static char label_buf[148]; /* 128 name + 10 hex suffix + slack */
+    static char label_buf[PLAYER_LABEL_BUF_LEN];
 
     recompui_open_context(s_plist_ctx);
     for (int i = 0; i < row_count; i++)
@@ -552,29 +644,37 @@ void anchor_ui_update(void)
             (ci >= 0 && ci < 4) ? s_char_textures[ci] : s_blank_texture;
         recompui_set_imageview_texture(s_plist_rows[i].icon, tex);
 
-        /* Player label, optionally with hex room ID appended. */
-        if (show_room_hex && row_room_id[i] >= 0)
+        /* Player label, optionally with room and position details appended. */
         {
             int len = 0;
             const char *src = row_name_buf[i];
             while (*src && len < 127)
                 label_buf[len++] = *src++;
-            label_buf[len++] = ' ';
-            label_buf[len++] = '(';
-            label_buf[len++] = '0';
-            label_buf[len++] = 'x';
-            unsigned int rid = (unsigned int)row_room_id[i];
-            label_buf[len++] = s_hex_chars[(rid >> 12) & 0xF];
-            label_buf[len++] = s_hex_chars[(rid >> 8) & 0xF];
-            label_buf[len++] = s_hex_chars[(rid >> 4) & 0xF];
-            label_buf[len++] = s_hex_chars[rid & 0xF];
-            label_buf[len++] = ')';
+
+            if (show_room_hex && row_room_id[i] >= 0)
+            {
+                append_text_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, " (0x");
+                unsigned int rid = (unsigned int)row_room_id[i];
+                append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, s_hex_chars[(rid >> 12) & 0xF]);
+                append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, s_hex_chars[(rid >> 8) & 0xF]);
+                append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, s_hex_chars[(rid >> 4) & 0xF]);
+                append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, s_hex_chars[rid & 0xF]);
+                append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, ')');
+            }
+
+            if (show_positions && row_has_pos[i])
+            {
+                append_text_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, " [");
+                append_int_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, row_pos_x[i]);
+                append_text_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, ", ");
+                append_int_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, row_pos_y[i]);
+                append_text_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, ", ");
+                append_int_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, row_pos_z[i]);
+                append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, ']');
+            }
+
             label_buf[len] = '\0';
             recompui_set_text(s_plist_rows[i].label, label_buf);
-        }
-        else
-        {
-            recompui_set_text(s_plist_rows[i].label, row_name_buf[i]);
         }
     }
     /* Hide any slots beyond the current player count. */

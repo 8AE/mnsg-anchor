@@ -956,10 +956,14 @@ def get_player_info_json() -> str:
     Return a compact JSON array of per-player objects for all *online* players,
     sorted by client ID.
 
-    Each object has two keys:
+    Each object has these keys:
         ``n``  – display string: "Name - Location"
         ``c``  – character index (int): 0=Goemon, 1=Ebisumaru, 2=Sasuke, 3=Yae.
                  -1 if the character has not been broadcast yet.
+        ``r``  – raw room ID, or -1 if unknown.
+        ``t``  – team ID string.
+        ``hp`` – 1 if the player has sent position data, else 0.
+        ``x``/``y``/``z`` – last broadcast world position, 0 when hp is 0.
 
     Returns ``'[]'`` when not connected or no online players are present.
     """
@@ -976,7 +980,17 @@ def get_player_info_json() -> str:
             char_idx = _CHAR_TO_IDX.get(v.get("character", ""), -1)
             room_id  = v.get("roomId", -1)
             team_id  = v.get("teamId", "")
-            entries.append({"n": name_str, "c": char_idx, "r": room_id, "t": team_id})
+            has_pos = "posX" in v and "posY" in v and "posZ" in v
+            entries.append({
+                "n": name_str,
+                "c": char_idx,
+                "r": room_id,
+                "t": team_id,
+                "hp": 1 if has_pos else 0,
+                "x": int(v.get("posX", 0)) if has_pos else 0,
+                "y": int(v.get("posY", 0)) if has_pos else 0,
+                "z": int(v.get("posZ", 0)) if has_pos else 0,
+            })
     return json.dumps(entries, separators=(",", ":"))
 
 
