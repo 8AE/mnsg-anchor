@@ -44,6 +44,11 @@ void item_sync_force_flag_val(const char *name, int val);
 extern void anchor_connect_ui_net_btn_callback(RecompuiResource res,
                                                const RecompuiEventData *ev, void *ud);
 
+/* Race menu start-location catalog, shared so debug teleports use the same
+ * curated room/coordinate list as race setup. */
+extern int anchor_race_start_location_count(void);
+extern int anchor_race_get_start_location(int idx, unsigned short *room, int *x, int *y, int *z, const char **name);
+
 /* Race-start/debug transport fields.
  *
  * Ghidra evidence:
@@ -105,6 +110,16 @@ typedef struct
 /* Pending status-label text update (also deferred to frame hook). */
 static const char *s_pending_status = 0;
 static char s_transport_status[96];
+
+/* Transport form fields and selected shared race-location entry. These are
+ * declared before the transport helpers because helper code updates the UI
+ * label and input text directly while the modal context is open. */
+static RecompuiResource s_transport_room_input = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_transport_x_input = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_transport_y_input = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_transport_z_input = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_transport_location_label = RECOMPUI_NULL_RESOURCE;
+static int s_transport_location_idx = 0;
 
 static int debug_text_equals(const char *a, const char *b)
 {
@@ -266,6 +281,20 @@ static void debug_append_room_hex(char *dst, int *pos, int max_len, unsigned sho
     debug_append_char(dst, pos, max_len, hex[room & 0xF]);
 }
 
+static void debug_make_int_text(char *dst, int max_len, int value)
+{
+    int pos = 0;
+    debug_append_int(dst, &pos, max_len, value);
+    dst[pos] = '\0';
+}
+
+static void debug_make_room_text(char *dst, int max_len, unsigned short room)
+{
+    int pos = 0;
+    debug_append_room_hex(dst, &pos, max_len, room);
+    dst[pos] = '\0';
+}
+
 static void debug_set_transport_status(unsigned short room, int x, int y, int z)
 {
     int pos = 0;
@@ -314,6 +343,90 @@ static void debug_apply_transport(unsigned short room, int x, int y, int z)
      * once stepw changes, the engine can consume the destination fields on a
      * later frame. */
     func_80003728_4328(DEBUG_STEP_WARP);
+}
+
+static int debug_get_selected_location(unsigned short *room, int *x, int *y, int *z, const char **name)
+{
+    int count = anchor_race_start_location_count();
+
+    if (count <= 0)
+        return 0;
+
+    if (s_transport_location_idx < 0)
+        s_transport_location_idx = count - 1;
+    if (s_transport_location_idx >= count)
+        s_transport_location_idx = 0;
+
+    return anchor_race_get_start_location(s_transport_location_idx, room, x, y, z, name);
+}
+
+static void debug_format_selected_location(char *dst, int max_len)
+{
+    unsigned short room = 0;
+    int x = 0;
+    int y = 0;
+    int z = 0;
+    const char *name = 0;
+    int pos = 0;
+
+    if (!debug_get_selected_location(&room, &x, &y, &z, &name))
+    {
+        debug_append_text(dst, &pos, max_len, "No race start locations");
+        dst[pos] = '\0';
+        return;
+    }
+
+    debug_append_text(dst, &pos, max_len, name ? name : "Unknown");
+    debug_append_text(dst, &pos, max_len, "  ");
+    debug_append_room_hex(dst, &pos, max_len, room);
+    debug_append_text(dst, &pos, max_len, " [");
+    debug_append_int(dst, &pos, max_len, x);
+    debug_append_text(dst, &pos, max_len, ", ");
+    debug_append_int(dst, &pos, max_len, y);
+    debug_append_text(dst, &pos, max_len, ", ");
+    debug_append_int(dst, &pos, max_len, z);
+    debug_append_char(dst, &pos, max_len, ']');
+    dst[pos] = '\0';
+}
+
+static void debug_update_location_label(void)
+{
+    char text[160];
+
+    if (s_transport_location_label == RECOMPUI_NULL_RESOURCE)
+        return;
+
+    debug_format_selected_location(text, (int)sizeof(text));
+    recompui_set_text(s_transport_location_label, text);
+}
+
+static int debug_fill_transport_fields_from_location(void)
+{
+    unsigned short room = 0;
+    int x = 0;
+    int y = 0;
+    int z = 0;
+    const char *name = 0;
+    char room_text[8];
+    char x_text[12];
+    char y_text[12];
+    char z_text[12];
+
+    if (!debug_get_selected_location(&room, &x, &y, &z, &name))
+        return 0;
+
+    (void)name;
+    debug_make_room_text(room_text, (int)sizeof(room_text), room);
+    debug_make_int_text(x_text, (int)sizeof(x_text), x);
+    debug_make_int_text(y_text, (int)sizeof(y_text), y);
+    debug_make_int_text(z_text, (int)sizeof(z_text), z);
+
+    recompui_set_input_text(s_transport_room_input, room_text);
+    recompui_set_input_text(s_transport_x_input, x_text);
+    recompui_set_input_text(s_transport_y_input, y_text);
+    recompui_set_input_text(s_transport_z_input, z_text);
+
+    return 1;
 }
 
 /* =========================================================================
@@ -686,12 +799,6 @@ static RecompuiContext s_modal_ctx = RECOMPUI_NULL_CONTEXT;
 /* Label updated after every Force click to show what was last forced. */
 static RecompuiResource s_status_label = RECOMPUI_NULL_RESOURCE;
 
-/* Transport form fields. */
-static RecompuiResource s_transport_room_input = RECOMPUI_NULL_RESOURCE;
-static RecompuiResource s_transport_x_input = RECOMPUI_NULL_RESOURCE;
-static RecompuiResource s_transport_y_input = RECOMPUI_NULL_RESOURCE;
-static RecompuiResource s_transport_z_input = RECOMPUI_NULL_RESOURCE;
-
 static int s_initialized = 0;    /* guard for one-time lazy initialisation */
 static int s_toggle_visible = 0; /* 1 after the toggle button is shown    */
 static int s_modal_visible = 0;  /* tracks actual shown/hidden state      */
@@ -707,6 +814,9 @@ static RecompuiResource s_dbg_btn = RECOMPUI_NULL_RESOURCE;
 static int s_pending_open = 0;
 static int s_pending_close = 0;
 static int s_pending_transport = 0;
+static int s_pending_location_delta = 0;
+static int s_pending_location_fill = 0;
+static int s_pending_location_transport = 0;
 
 /* =========================================================================
    Callbacks  (flag-setters only – no context API calls here)
@@ -780,6 +890,46 @@ static void on_transport_clicked(RecompuiResource res,
     s_pending_transport = 1;
 }
 
+static void on_transport_location_prev_clicked(RecompuiResource res,
+                                               const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type != UI_EVENT_CLICK)
+        return;
+    s_pending_location_delta -= 1;
+}
+
+static void on_transport_location_next_clicked(RecompuiResource res,
+                                               const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type != UI_EVENT_CLICK)
+        return;
+    s_pending_location_delta += 1;
+}
+
+static void on_transport_location_fill_clicked(RecompuiResource res,
+                                               const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type != UI_EVENT_CLICK)
+        return;
+    s_pending_location_fill = 1;
+}
+
+static void on_transport_location_go_clicked(RecompuiResource res,
+                                             const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type != UI_EVENT_CLICK)
+        return;
+    s_pending_location_transport = 1;
+}
+
 /* =========================================================================
    UI construction (called once from the frame hook)
    ========================================================================= */
@@ -797,7 +947,7 @@ static void make_transport_field(RecompuiContext ctx, RecompuiResource parent,
     recompui_set_flex_direction(field, FLEX_DIRECTION_COLUMN);
     recompui_set_flex_grow(field, 1.0f);
     recompui_set_min_width(field, 120.0f, UNIT_DP);
-    recompui_set_min_height(field, 72.0f, UNIT_DP);
+    recompui_set_min_height(field, 64.0f, UNIT_DP);
 
     RecompuiResource lbl = recompui_create_label(ctx, field, label_text, LABELSTYLE_ANNOTATION);
     recompui_set_color(lbl, &C_DIM);
@@ -806,8 +956,8 @@ static void make_transport_field(RecompuiContext ctx, RecompuiResource parent,
 
     *out = recompui_create_textinput(ctx, field);
     recompui_set_font_size(*out, 16.0f, UNIT_DP);
-    recompui_set_height(*out, 48.0f, UNIT_DP);
-    recompui_set_min_height(*out, 48.0f, UNIT_DP);
+    recompui_set_height(*out, 42.0f, UNIT_DP);
+    recompui_set_min_height(*out, 42.0f, UNIT_DP);
     recompui_set_tab_index(*out, TAB_INDEX_AUTO);
     recompui_set_input_text(*out, default_text);
 }
@@ -955,15 +1105,15 @@ static void debug_init_ui(void)
         RecompuiResource transport = recompui_create_element(s_modal_ctx, panel);
         recompui_set_display(transport, DISPLAY_FLEX);
         recompui_set_flex_direction(transport, FLEX_DIRECTION_COLUMN);
-        recompui_set_min_height(transport, 158.0f, UNIT_DP);
+        recompui_set_min_height(transport, 228.0f, UNIT_DP);
         recompui_set_padding_top(transport, 18.0f, UNIT_DP);
-        recompui_set_padding_bottom(transport, 20.0f, UNIT_DP);
+        recompui_set_padding_bottom(transport, 18.0f, UNIT_DP);
         recompui_set_padding_left(transport, 20.0f, UNIT_DP);
         recompui_set_padding_right(transport, 20.0f, UNIT_DP);
         recompui_set_background_color(transport, &C_ROW_EVEN);
         recompui_set_border_bottom_width(transport, 1.0f, UNIT_DP);
         recompui_set_border_bottom_color(transport, &C_BORDER);
-        recompui_set_gap(transport, 14.0f, UNIT_DP);
+        recompui_set_gap(transport, 12.0f, UNIT_DP);
 
         RecompuiResource transport_title = recompui_create_label(
             s_modal_ctx, transport, "Transport", LABELSTYLE_SMALL);
@@ -975,7 +1125,7 @@ static void debug_init_ui(void)
         recompui_set_display(transport_row, DISPLAY_FLEX);
         recompui_set_flex_direction(transport_row, FLEX_DIRECTION_ROW);
         recompui_set_align_items(transport_row, ALIGN_ITEMS_FLEX_END);
-        recompui_set_min_height(transport_row, 76.0f, UNIT_DP);
+        recompui_set_min_height(transport_row, 68.0f, UNIT_DP);
         recompui_set_gap(transport_row, 14.0f, UNIT_DP);
 
         make_transport_field(s_modal_ctx, transport_row, "Room Hex", "0x01D1", &s_transport_room_input);
@@ -988,13 +1138,68 @@ static void debug_init_ui(void)
         recompui_set_cursor(transport_btn, CURSOR_POINTER);
         recompui_set_font_size(transport_btn, 14.0f, UNIT_DP);
         recompui_set_width(transport_btn, 150.0f, UNIT_DP);
-        recompui_set_height(transport_btn, 48.0f, UNIT_DP);
-        recompui_set_min_height(transport_btn, 48.0f, UNIT_DP);
+        recompui_set_height(transport_btn, 42.0f, UNIT_DP);
+        recompui_set_min_height(transport_btn, 42.0f, UNIT_DP);
         recompui_set_margin_left(transport_btn, 6.0f, UNIT_DP);
         recompui_set_padding_left(transport_btn, 18.0f, UNIT_DP);
         recompui_set_padding_right(transport_btn, 18.0f, UNIT_DP);
         recompui_set_tab_index(transport_btn, TAB_INDEX_NONE);
         recompui_register_callback(transport_btn, on_transport_clicked, 0);
+
+        RecompuiResource location_row = recompui_create_element(s_modal_ctx, transport);
+        recompui_set_display(location_row, DISPLAY_FLEX);
+        recompui_set_flex_direction(location_row, FLEX_DIRECTION_ROW);
+        recompui_set_align_items(location_row, ALIGN_ITEMS_CENTER);
+        recompui_set_min_height(location_row, 44.0f, UNIT_DP);
+        recompui_set_margin_top(location_row, 4.0f, UNIT_DP);
+        recompui_set_gap(location_row, 8.0f, UNIT_DP);
+
+        RecompuiResource prev_btn = recompui_create_button(
+            s_modal_ctx, location_row, "Prev", BUTTONSTYLE_SECONDARY);
+        recompui_set_cursor(prev_btn, CURSOR_POINTER);
+        recompui_set_font_size(prev_btn, 13.0f, UNIT_DP);
+        recompui_set_width(prev_btn, 72.0f, UNIT_DP);
+        recompui_set_height(prev_btn, 36.0f, UNIT_DP);
+        recompui_set_min_height(prev_btn, 36.0f, UNIT_DP);
+        recompui_set_tab_index(prev_btn, TAB_INDEX_NONE);
+        recompui_register_callback(prev_btn, on_transport_location_prev_clicked, 0);
+
+        s_transport_location_label = recompui_create_label(
+            s_modal_ctx, location_row, "", LABELSTYLE_SMALL);
+        recompui_set_color(s_transport_location_label, &C_WHITE);
+        recompui_set_flex_grow(s_transport_location_label, 1.0f);
+        recompui_set_font_size(s_transport_location_label, 15.0f, UNIT_DP);
+        debug_update_location_label();
+
+        RecompuiResource next_btn = recompui_create_button(
+            s_modal_ctx, location_row, "Next", BUTTONSTYLE_SECONDARY);
+        recompui_set_cursor(next_btn, CURSOR_POINTER);
+        recompui_set_font_size(next_btn, 13.0f, UNIT_DP);
+        recompui_set_width(next_btn, 72.0f, UNIT_DP);
+        recompui_set_height(next_btn, 36.0f, UNIT_DP);
+        recompui_set_min_height(next_btn, 36.0f, UNIT_DP);
+        recompui_set_tab_index(next_btn, TAB_INDEX_NONE);
+        recompui_register_callback(next_btn, on_transport_location_next_clicked, 0);
+
+        RecompuiResource fill_btn = recompui_create_button(
+            s_modal_ctx, location_row, "Use", BUTTONSTYLE_SECONDARY);
+        recompui_set_cursor(fill_btn, CURSOR_POINTER);
+        recompui_set_font_size(fill_btn, 13.0f, UNIT_DP);
+        recompui_set_width(fill_btn, 66.0f, UNIT_DP);
+        recompui_set_height(fill_btn, 36.0f, UNIT_DP);
+        recompui_set_min_height(fill_btn, 36.0f, UNIT_DP);
+        recompui_set_tab_index(fill_btn, TAB_INDEX_NONE);
+        recompui_register_callback(fill_btn, on_transport_location_fill_clicked, 0);
+
+        RecompuiResource go_btn = recompui_create_button(
+            s_modal_ctx, location_row, "Go", BUTTONSTYLE_PRIMARY);
+        recompui_set_cursor(go_btn, CURSOR_POINTER);
+        recompui_set_font_size(go_btn, 13.0f, UNIT_DP);
+        recompui_set_width(go_btn, 66.0f, UNIT_DP);
+        recompui_set_height(go_btn, 36.0f, UNIT_DP);
+        recompui_set_min_height(go_btn, 36.0f, UNIT_DP);
+        recompui_set_tab_index(go_btn, TAB_INDEX_NONE);
+        recompui_register_callback(go_btn, on_transport_location_go_clicked, 0);
 
         /* ── Scrollable flag list ──────────────────────────────────── */
         RecompuiResource scroll = recompui_create_element(s_modal_ctx, panel);
@@ -1160,6 +1365,58 @@ void debug_ui_frame_hook(void)
         recompui_open_context(s_toggle_ctx);
         recompui_set_display(s_net_btn, show_net ? DISPLAY_BLOCK : DISPLAY_NONE);
         recompui_close_context(s_toggle_ctx);
+    }
+
+    /* Process pending location-selector actions from the transport section. */
+    if (s_pending_location_delta || s_pending_location_fill || s_pending_location_transport)
+    {
+        int count = anchor_race_start_location_count();
+
+        if (count > 0)
+        {
+            unsigned short room = 0;
+            int x = 0;
+            int y = 0;
+            int z = 0;
+            const char *name = 0;
+
+            if (s_pending_location_delta)
+            {
+                s_transport_location_idx += s_pending_location_delta;
+                while (s_transport_location_idx < 0)
+                    s_transport_location_idx += count;
+                while (s_transport_location_idx >= count)
+                    s_transport_location_idx -= count;
+            }
+
+            recompui_open_context(s_modal_ctx);
+            debug_update_location_label();
+            if (s_pending_location_fill)
+                debug_fill_transport_fields_from_location();
+            recompui_close_context(s_modal_ctx);
+
+            if (s_pending_location_transport &&
+                debug_get_selected_location(&room, &x, &y, &z, &name))
+            {
+                debug_set_transport_status(room, x, y, z);
+                recomp_printf("[Debug] Transport location: %s room=0x%04X xyz=(%d,%d,%d)\n",
+                              name ? name : "Unknown", (unsigned int)room, x, y, z);
+                if (s_modal_visible)
+                {
+                    recompui_hide_context(s_modal_ctx);
+                    s_modal_visible = 0;
+                }
+                debug_apply_transport(room, x, y, z);
+            }
+        }
+        else
+        {
+            s_pending_status = "No transport locations";
+        }
+
+        s_pending_location_delta = 0;
+        s_pending_location_fill = 0;
+        s_pending_location_transport = 0;
     }
 
     /* Process pending transport action from the modal button. */

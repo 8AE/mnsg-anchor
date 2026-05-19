@@ -98,13 +98,13 @@ static const RaceStartLocation s_start_locations[] = {
     {0x16F, -226, 7, 0, "Zazen Town Mt Nyoigatake Sidewalk"},
     {0x170, -224, 140, -1, "Zazen Town Mt Nyoigatake Fire Shrine"},
     {0x172, -62, 6, -91, "Zazen Town Duck Creek Upstream"},
-    {0x173, -143, -48, -136, "Zazen Town Duck Creek Ushiwaka"},
+    {0x173, -40, 6, -133, "Zazen Town Duck Creek Ushiwaka"},
     {0x171, 102, 7, 0, "Zazen Town Benkei Bridge"},
     {0x16B, -269, -49, -118, "Zazen Town Duck Creek Jump Area"},
     {0x16E, 282, 7, 57, "Zazen Town Bizen Bridge"},
     {0x130, -10, 56, -976, "Musashi Beach"},
     {0x131, -377, -48, -430, "Musashi Tunnel"},
-    {0x14F, -377, -48, -430, "Tunnel to Northeast 1"},
+    {0x14F, -577, -80, 37, "Tunnel to Northeast 1"},
     {0x150, -577, -106, 400, "Tunnel to Northeast 2"},
     {0x132, -2975, -293, -311, "Iga"},
     {0x151, 328, -150, 302, "Mutsu Crossroads"},
@@ -115,7 +115,6 @@ static const RaceStartLocation s_start_locations[] = {
     {0x17B, 224, 0, 0, "Festival Village Stage"},
     {0x17C, -176, 70, 87, "Festival Village Rear"},
     {0x14B, 441, -299, 758, "Mt Fear"},
-    {0x14B, 56, -40, 51, "Witches House"},
     {0x14D, -242, 200, -816, "Shoreline"},
     {0x14C, 0, -46, -576, "Ugo Stone Circle"},
     {0x178, 74, 98, 179, "Folkypoke Village Entrance"},
@@ -126,21 +125,20 @@ static const RaceStartLocation s_start_locations[] = {
     {0x13A, 491, -33, -39, "Tosa Fields"},
     {0x13B, -29, 0, 723, "Tosa Bridge"},
     {0x1B5, 48, -50, 35, "Iyo Coffee Shop"},
-    {0x141, 48, -50, 35, "Iyo Hills"},
+    {0x141, -451, 16, 185, "Iyo Hills"},
     {0x1B1, 48, -50, 35, "Kai's Coffee Shop"},
-    {0x12C, 770, 139, -1355, "Kai Highway"},      // Checked
-    {0x12D, -46, -439, 1299, "Mt Fuji (Bottom)"}, // checked
+    {0x12C, 770, 139, -1355, "Kai Highway"},
+    {0x12D, -46, -439, 1299, "Mt Fuji (Bottom)"},
     {0x12E, 173, 90, 144, "Mt Fuji Crater"},
     {0x12F, 180, -131, 69, "Mt Fuji (Peak)"},
     {0x1D2, 56, -40, 51, "Mt Fuji Salesman Room"},
     {0x133, -167, 351, -1226, "Yamato Shrine Exterior"},
-    {0x136, -167, 351, -1226, "Yamato Bamboo Forest"},
+    {0x136, 609, -87, -183, "Yamato Bamboo Forest"},
     {0x137, -595, -96, 108, "Turtle Stone"},
     {0x134, 51, -330, 202, "Yamato Shrine Interior"},
     {0x1B3, 48, -50, 35, "Kii's Coffee Shop"},
-    {0x138, -595, -96, 108, "Kii Awaji Island"},
+    {0x138, 1021, 68, 6, "Kii Awaji Island"},
     {0x1B9, 142, -70, 77, "Oedo Tourist Center - Awaji Island Branch"},
-    {0x139, 142, -70, 77, "Husband and Wife Rocks"},
     {0x13C, 9, -86, 282, "Kompira Mountain First Block"},
     {0x13D, 13, -155, 400, "Kompira Mountain Second Block"},
     {0x1B4, 48, -50, 35, "Kompiras Coffee Shop"},
@@ -154,13 +152,40 @@ static const RaceStartLocation s_start_locations[] = {
     {0x147, -881, -24, -361, "Shuhodo"},
     {0x153, -443, 33, -236, "Gateway Viewpoint"},
     {0x1B6, 48, -50, 35, "Izumo Coffee Shop"},
-    {0x148, -443, 33, -236, "Izumo"},
+    {0x148, -1386, 0, 467, "Izumo"},
     {0x149, -27, -62, -467, "Lake with a Large Tree"},
-    {0x14A, -27, 62, -467, "Inaba"},
+    {0x14A, 618, -170, -1039, "Inaba Dune"},
 };
 
 static const int s_start_location_count =
     (int)(sizeof(s_start_locations) / sizeof(s_start_locations[0]));
+
+int anchor_race_start_location_count(void)
+{
+    return s_start_location_count;
+}
+
+int anchor_race_get_start_location(int idx, unsigned short *room, int *x, int *y, int *z, const char **name)
+{
+    const RaceStartLocation *loc;
+
+    if (idx < 0 || idx >= s_start_location_count)
+        return 0;
+
+    loc = &s_start_locations[idx];
+    if (room)
+        *room = loc->room;
+    if (x)
+        *x = loc->x;
+    if (y)
+        *y = loc->y;
+    if (z)
+        *z = loc->z;
+    if (name)
+        *name = loc->name;
+
+    return 1;
+}
 
 static const RecompuiColor R_BG = {8, 8, 12, 230};
 static const RecompuiColor R_PANEL = {14, 14, 22, 255};
