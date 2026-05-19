@@ -39,6 +39,8 @@
 void anchor_race_on_flag_synced(const char *flag_name, int flag_value);
 void anchor_race_on_remote_flag_synced(const char *flag_name, int flag_value);
 void anchor_race_on_finish_packet(const char *packet_json);
+int anchor_race_is_active(void);
+void anchor_race_on_forced_disconnect(void);
 
 /* =========================================================================
    Game save-data symbol (datasyms VRAM 0x8015C608)
@@ -1330,6 +1332,8 @@ void item_sync_update(void)
     {
         /* Disconnected: cancel any in-progress push.                     */
         recomp_printf("[ItemSync] Disconnected – clearing push state.\n");
+        if (anchor_race_is_active())
+            anchor_race_on_forced_disconnect();
         s_push_cursor = PUSH_IDLE;
         s_push_cooldown = 0;
         s_save_was_valid = 0;

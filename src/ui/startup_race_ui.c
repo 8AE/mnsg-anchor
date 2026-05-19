@@ -1113,6 +1113,24 @@ static void show_race_result(int victory, const char *team, const char *players)
     }
 }
 
+void anchor_race_on_forced_disconnect(void)
+{
+    race_result_ui_init();
+
+    recompui_open_context(s_result_ctx);
+    recompui_set_text(s_result_title_lbl, "Race Disconnected");
+    recompui_set_color(s_result_title_lbl, &R_RED);
+    recompui_set_text(s_result_team_lbl, "The server connection was lost.");
+    recompui_set_text(s_result_players_lbl, "Quit out of the application before starting another race.");
+    recompui_close_context(s_result_ctx);
+
+    if (!s_result_visible)
+    {
+        recompui_show_context(s_result_ctx);
+        s_result_visible = 1;
+    }
+}
+
 static void update_category_count(int cat_idx)
 {
     int selected = 0;

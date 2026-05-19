@@ -48,6 +48,7 @@ extern void anchor_connect_ui_net_btn_callback(RecompuiResource res,
  * curated room/coordinate list as race setup. */
 extern int anchor_race_start_location_count(void);
 extern int anchor_race_get_start_location(int idx, unsigned short *room, int *x, int *y, int *z, const char **name);
+extern int anchor_race_is_active(void);
 
 /* Race-start/debug transport fields.
  *
@@ -1361,6 +1362,7 @@ void debug_ui_frame_hook(void)
     if (s_net_btn != RECOMPUI_NULL_RESOURCE)
     {
         int show_net = anchor_startup_menu_is_complete() &&
+                       !anchor_race_is_active() &&
                        (recomp_get_config_u32("anchor_show_net_button") == 0);
         recompui_open_context(s_toggle_ctx);
         recompui_set_display(s_net_btn, show_net ? DISPLAY_BLOCK : DISPLAY_NONE);
