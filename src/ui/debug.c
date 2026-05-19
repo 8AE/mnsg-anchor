@@ -451,8 +451,8 @@ static const AnchorFlagEntry s_entries[] = {
     {"eq_firecrk", "Sasuke Bomb", 0},
     {"eq_flute", "Yae Flute (Item)", 0},
     {"eq_camera", "Windup Camera", 0},
-    {"eq_kunai", "Ebisumaru Camera", 0},
-    {"eq_bazooka", "Sasuke Ice Kunai", 0},
+    {"eq_kunai", "Sasuke Ice Kunai", 0},
+    {"eq_bazooka", "Yae Bazooka", 0},
     {"eq_fire_ryo", "Fire Ryo", 0},
 
     /* ── Abilities ───────────────────────────────────────────────────── */
