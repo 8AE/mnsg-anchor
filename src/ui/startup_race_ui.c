@@ -11,38 +11,98 @@ int item_sync_save_is_loaded(void);
 int item_sync_write_local_flag_val(const char *name, int val);
 void anchor_set_current_character_if_needed(void);
 
-/* Save-data base. Race startup writes selected characters, room, rotation, and
- * spawn coordinates here before the game's spawn-read routine consumes them. */
+/* D_8015C608_15D208:
+ * Primary save-data block. func_8000B640_C240 clears/seeds this block for a
+ * fresh file, func_8000B5D0_C1D0 mirrors it into backup/runtime save memory,
+ * and func_8000B2A0_BEA0 later reads spawn fields from it. Race startup writes
+ * selected characters, room, rotation, and spawn coordinates here before those
+ * original game routines consume the values. */
 extern unsigned char D_8015C608_15D208[];
 
-/* Room-indexed starting-position table. Each room entry is five signed shorts:
- * posX, posY, posZ, camera rotation, and player rotation. */
+/* D_8006B780_6C380:
+ * Room-indexed starting-position table used by the game's debug/start paths.
+ * Each room entry is five signed shorts: posX, posY, posZ, camera rotation,
+ * and player rotation. The race UI uses this to fill the rotation fields for a
+ * selected start location while preserving the user's configured xyz values. */
 extern signed short D_8006B780_6C380[];
 
-/* Initialize a fresh save block. Decompilation clears D_8015C608 for 0x304
- * bytes, seeds default health/items/character flags, sets Goemon's house as
- * the default room, and mirrors the block to D_8015C910. */
+/* func_8000B640_C240:
+ * Fresh-save initializer. Ghidra shows it clearing D_8015C608 for 0x304 bytes,
+ * seeding default health/items/character flags, setting Goemon's house as the
+ * default room, and mirroring the block to D_8015C910. Direct race launch calls
+ * this first so all race writes start from a valid new-save layout. */
 extern void func_8000B640_C240(void);
 
-/* Mark a save as started/loaded. The game clears a system field, copies
- * D_8015C66C.. into D_8015C5D8, mirrors D_8015C608 into D_8015C910, and sets
- * D_8015C5D8 to 1. */
+/* func_8000B5D0_C1D0:
+ * Marks the initialized save as started/loaded. The game clears a system field,
+ * copies D_8015C66C.. into D_8015C5D8, mirrors D_8015C608 into D_8015C910, and
+ * sets D_8015C5D8 to 1. Race flags are safe to apply after this point because
+ * item_sync_save_is_loaded() can observe live save memory. */
 extern void func_8000B5D0_C1D0(void);
 
-/* Replace the current game-step callback stored at the active scheduler task's
- * +0x0c slot. Race autoload uses it to jump out of file select and into the
- * normal gameplay/load path. */
+/* func_8000607C_6C7C:
+ * Engine destination writer. It fills g_system destination_stage, destination
+ * player xyz, camera rotation, player rotation, and two related load fields.
+ * Direct race launch calls it in addition to writing save spawn fields so the
+ * scene loader and save reader agree on the target location. */
+extern void func_8000607C_6C7C(unsigned short room, short x, short y, short z,
+                               short camera_rot, short player_rot,
+                               short field90, int field91);
+
+/* func_80003478_4078:
+ * Gameplay-control/UI state initializer. It advances g_system + 0x3ADDE,
+ * clears g_system + 0x3ADDF, and resets the substate at 0x3ADE0/0x3ADE1.
+ * Direct race launch runs it after the render reset so normal gameplay UI state
+ * is re-entered instead of staying in the menu/startup state. */
+extern void func_80003478_4078(void);
+
+/* func_80004240_4E40:
+ * Clears the 16 small text/UI slots beginning at g_system + 0x3B168. The game
+ * calls this during start/transition setup before rebuilding on-screen UI. */
+extern void func_80004240_4E40(void);
+
+/* func_8000B364_BF64:
+ * Stage/scene-load setup. It copies destination_stage into the active stage
+ * fields, computes the region/substage with func_8000B3E4, starts scene-load
+ * bookkeeping, and resets some transition counters. */
+extern void func_8000B364_BF64(void);
+
+/* func_8000383C_443C:
+ * Render/texture buffer reset. It calls the broader render init path and clears
+ * the graphics/texture buffer used by the next scene. This fixed the overbright
+ * texture/contrast issue introduced by jumping directly into warp step 12. */
+extern void func_8000383C_443C(void);
+
+/* func_8003521C_35E1C:
+ * Scheduler callback setter. It stores a function pointer in the active task's
+ * +0x0c callback slot. The old file-select autoload path used this handoff
+ * after creating the no-diary save; direct race launch preserves it so the
+ * normal gameplay callback path is installed without showing file select. */
 extern void func_8003521C_35E1C(void *func_ptr);
 
-/* Gameplay/load step callback installed after race autoload. Ghidra does not
- * split a function at this exact address, but the surrounding function is the
- * player physics/load-state routine used by the original file-select flow. */
+/* func_801CD890_660740:
+ * Gameplay/load callback installed by func_8003521C_35E1C. Ghidra's function
+ * boundaries around this overlay are imperfect, but this symbol is the callback
+ * pointer used by the original file-select flow. */
 extern void func_801CD890_660740(void);
 
-/* Global game-system pointer. The race autoload path writes +0x3b040 to -1,
- * matching the original file-select code's "no pending file-select entity"
- * sentinel before switching callbacks. */
+/* D_8015C5C8_15D1C8:
+ * Runtime pointer to g_system. Most decompiled game code uses this pointer, so
+ * direct race launch writes transition fields through it when available. */
 extern unsigned char *D_8015C5C8_15D1C8;
+
+/* D_800BCCC0_BD8C0:
+ * Static g_system storage. Some paths and symbols refer to the static block
+ * directly, so race transport mirrors destination and diary-state writes here
+ * as well as through D_8015C5C8_15D1C8. */
+extern unsigned char D_800BCCC0_BD8C0[];
+
+/* func_80003728_4328:
+ * Engine step switcher. Ghidra shows this writes g_system->stepw, clears
+ * stepw_end, marks the system as transitioning, and resets the step substate.
+ * Direct race launch uses step 12 after recreating the missing no-diary setup
+ * state; using step 7 from the recomp UI path falls into the title/demo flow. */
+extern void func_80003728_4328(unsigned char step);
 
 #define RACE_MAX_FLAGS 320
 #define RACE_MAX_CATEGORIES 64
@@ -57,6 +117,16 @@ extern unsigned char *D_8015C5C8_15D1C8;
 #define SAVE_SPAWN_Z 0x20C
 #define SAVE_SPAWN_Y 0x20E
 #define SAVE_CAM_ROT 0x210
+#define RACE_SYS_DEST_STAGE 0x3AFE0
+#define RACE_SYS_ACTIVE_DEST_STAGE 0xADD2
+#define RACE_SYS_DEST_PLAYER_ROT 0xAFE2
+#define RACE_SYS_DEST_X 0xAFE4
+#define RACE_SYS_DEST_Y 0xAFE6
+#define RACE_SYS_DEST_Z 0xAFE8
+#define RACE_SYS_DEST_CAM_ROT 0xAFEA
+#define RACE_SYS_ADVENTURE_DIARY_SLOT 0x3B040
+#define RACE_SYS_LOAD_FROM_START 0x3AE16
+#define RACE_STEP_WARP 12
 #define SAVE_CHARACTER_BASE 0x94
 #define RACE_CHARACTER_ENFORCE_FRAMES 180
 
@@ -261,7 +331,6 @@ static int s_race_started = 0;
 static int s_race_finished = 0;
 static int s_result_visible = 0;
 static int s_race_apply_pending = 0;
-static int s_race_autoload_pending = 0;
 static int s_race_character_enforce_frames = 0;
 static int s_race_pending_count = 0;
 static const char *s_race_pending_keys[RACE_MAX_FLAGS];
@@ -275,6 +344,7 @@ static void update_goal_buttons(int old_idx, int new_idx);
 static void update_location_label(void);
 static void update_goal_label(void);
 static void refresh_live_config_code(void);
+static void apply_pending_race_flags(void);
 
 static void write_save_s16(int offset, short value)
 {
@@ -284,6 +354,16 @@ static void write_save_s16(int offset, short value)
 static void write_save_s32(int offset, int value)
 {
     *(int *)&D_8015C608_15D208[offset] = value;
+}
+
+static void write_system_s16(int offset, short value)
+{
+    *(short *)&D_800BCCC0_BD8C0[offset] = value;
+}
+
+static void write_system_s32(int offset, int value)
+{
+    *(int *)&D_800BCCC0_BD8C0[offset] = value;
 }
 
 static int race_key_equals(const char *a, const char *b)
@@ -372,6 +452,83 @@ static void apply_race_start_location(void)
     write_save_s16(SAVE_SPAWN_Y, loc->z);
     write_save_s16(SAVE_CAM_ROT, debug_start->camRot);
     write_save_s16(SAVE_PLAYER_ROT, debug_start->playerRot);
+
+    func_8000607C_6C7C(loc->room, loc->x, loc->y, loc->z,
+                       debug_start->camRot, debug_start->playerRot, 0, 0);
+
+    if (D_8015C5C8_15D1C8)
+        *(short *)(D_8015C5C8_15D1C8 + RACE_SYS_DEST_STAGE) = (short)loc->room;
+
+    write_system_s16(RACE_SYS_ACTIVE_DEST_STAGE, (short)loc->room);
+    write_system_s16(RACE_SYS_DEST_PLAYER_ROT, debug_start->playerRot);
+    write_system_s16(RACE_SYS_DEST_X, loc->x);
+    write_system_s16(RACE_SYS_DEST_Y, loc->y);
+    write_system_s16(RACE_SYS_DEST_Z, loc->z);
+    write_system_s16(RACE_SYS_DEST_CAM_ROT, debug_start->camRot);
+}
+
+static void setup_race_scene_load(void)
+{
+    /*
+     * Mirrors the tail of the game's No Adventure Diary start function after
+     * it has initialized save data and destination fields. The previous direct
+     * launcher jumped straight to the generic warp step, which skipped render
+     * and scene setup normally performed by this path.
+     *
+     * The original step-7 path sets g_system + 0x3AE16 while it is still in the
+     * start sequence and clears it later before normal gameplay. Direct race
+     * start uses warp step 12, so leave that field clear; otherwise gameplay UI
+     * processing that depends on normal gameplay state stays disabled.
+     */
+    if (D_8015C5C8_15D1C8)
+        *(short *)(D_8015C5C8_15D1C8 + RACE_SYS_LOAD_FROM_START) = 0;
+
+    func_80004240_4E40();
+    func_8000B364_BF64();
+    func_8000383C_443C();
+    func_80003478_4078();
+
+    if (D_8015C5C8_15D1C8)
+        *(short *)(D_8015C5C8_15D1C8 + RACE_SYS_LOAD_FROM_START) = 0;
+}
+
+static void launch_race_save_directly(void)
+{
+    /*
+     * Start a fresh save without entering the game's file-select screen. This
+     * replaces the old func_801CE1F0 file-select hook path:
+     *
+     * 1. func_8000B640 initializes the save block.
+     * 2. Race character/location writes seed that new save before it is marked
+     *    loaded.
+     * 3. func_8000B5D0 mirrors save/control state into the runtime save state.
+     * 4. g_system + 0x3B040 is forced to -1, matching the old file-select
+     *    autoload path and keeping the race in No Adventure Diary mode instead
+     *    of binding it to save slot one.
+     * 5. Race flags are applied through item_sync now that save memory is live.
+     * 6. The same scene/render setup used by the game's No Adventure Diary path
+     *    is run before entering the normal warp/load step. Step 7 is only safe
+     *    from inside the game's own start callback; from the recomp UI path it
+     *    falls back into the title/demo sequence.
+     * 7. The gameplay callback is installed explicitly, matching the old
+     *    file-select autoload path and restoring in-game HUD/pause/minimap
+     *    processing after the direct scene handoff.
+     */
+    func_8000B640_C240();
+    apply_race_character_selection(0);
+    apply_race_start_location();
+    func_8000B5D0_C1D0();
+    if (D_8015C5C8_15D1C8)
+        *(int *)(D_8015C5C8_15D1C8 + RACE_SYS_ADVENTURE_DIARY_SLOT) = -1;
+    write_system_s32(RACE_SYS_ADVENTURE_DIARY_SLOT, -1);
+    apply_race_character_selection(0);
+    apply_race_start_location();
+    apply_pending_race_flags();
+    anchor_set_current_character_if_needed();
+    setup_race_scene_load();
+    func_80003728_4328(RACE_STEP_WARP);
+    func_8003521C_35E1C(func_801CD890_660740);
+    recomp_printf("[Race] Started race save directly from lobby.\n");
 }
 
 static void apply_pending_race_flags(void)
@@ -2175,7 +2332,6 @@ static void finish_race_with_payload(const char *payload_json, int local_finish)
     s_race_finished = 1;
     s_race_started = 0;
     s_race_apply_pending = 0;
-    s_race_autoload_pending = 0;
     s_race_character_enforce_frames = 0;
 
     if (local_finish)
@@ -2272,16 +2428,7 @@ int anchor_race_start_from_lobby(void)
         s_race_pending_count++;
     }
 
-    /*
-     * TODO: Race protocol.
-     * This is where the selected end condition and starting flags should be
-     * published to Anchor once the race packet format exists. For now this
-     * queues the configured starting flags/location and auto-loads the
-     * first file. The save writes happen when the game has initialized
-     * save memory.
-     */
     s_race_apply_pending = 1;
-    s_race_autoload_pending = 1;
     s_race_character_enforce_frames = RACE_CHARACTER_ENFORCE_FRAMES;
     s_race_started = 1;
     s_race_finished = 0;
@@ -2292,6 +2439,7 @@ int anchor_race_start_from_lobby(void)
         recompui_hide_context(s_ctx);
         s_visible = 0;
     }
+    launch_race_save_directly();
     return 1;
 }
 
@@ -2303,12 +2451,28 @@ void anchor_startup_race_open(void)
 RECOMP_CALLBACK("*", recomp_on_init)
 void anchor_startup_race_on_init(void)
 {
+    /* Recomp UI init callback. Build the race setup resources as early as the
+     * recomp runtime allows so the startup/lobby flow can open the race menu
+     * without waiting for a game-frame hook. */
     race_ui_init();
 }
 
 RECOMP_HOOK_RETURN("func_80002040_2C40")
 void anchor_startup_race_frame_hook(void)
 {
+    /*
+     * Main per-frame hook. func_80002040 is the game's step dispatcher, called
+     * once per game frame from game_thread_entrypoint. This hook keeps all race
+     * UI work on the game thread:
+     *
+     * - lazily initializes Recomp UI if recomp_on_init ran too early,
+     * - hides the setup context after the startup menu has handed control to
+     *   gameplay,
+     * - applies pending race flags once save memory is live,
+     * - enforces selected starting characters for a short window while the game
+     *   is still rebuilding player/save state,
+     * - drains button/input pending flags produced by Recomp UI event handlers.
+     */
     if (!s_initialized)
     {
         s_initialized = 1;
@@ -2510,42 +2674,41 @@ void anchor_startup_race_frame_hook(void)
 RECOMP_HOOK_RETURN("func_8000B640_C240")
 void anchor_race_save_start_hook(void)
 {
+    /*
+     * Fresh-save return hook. func_8000B640 has just cleared and seeded
+     * D_8015C608. Applying flags here is harmless but usually deferred because
+     * item_sync_save_is_loaded() will not report live save memory until
+     * func_8000B5D0 mirrors the save/control state.
+     */
     apply_pending_race_flags();
 }
 
 RECOMP_HOOK_RETURN("func_8000B5D0_C1D0")
 void anchor_race_file_started_hook(void)
 {
+    /*
+     * Save-start return hook. This is the first reliable point where save
+     * memory is considered loaded by item_sync. It covers both direct race
+     * launch and any original game path that starts a file while a race setup is
+     * pending.
+     */
     apply_pending_race_flags();
 }
 
 RECOMP_HOOK("func_8000B2A0_BEA0")
 void anchor_race_spawn_read_hook(void)
 {
+    /*
+     * Spawn-read pre-hook. The original function copies spawn room/position and
+     * rotation from D_8015C608 into g_system destination fields. Race startup
+     * rewrites those save fields immediately before the copy so later original
+     * game logic consumes the selected race start location.
+     */
     if (s_race_apply_pending && item_sync_save_is_loaded())
     {
         apply_race_character_selection(0);
         apply_race_start_location();
     }
-}
-
-RECOMP_HOOK("func_801CE1F0_6610A0")
-void anchor_race_file_select_autoload(void *entity, int param2)
-{
-    (void)entity;
-    (void)param2;
-
-    if (!s_race_autoload_pending)
-        return;
-
-    s_race_autoload_pending = 0;
-    func_8000B640_C240();
-    func_8000B5D0_C1D0();
-    if (D_8015C5C8_15D1C8)
-        *(int *)(D_8015C5C8_15D1C8 + 0x3B040) = -1;
-    func_8003521C_35E1C(func_801CD890_660740);
-    apply_pending_race_flags();
-    recomp_printf("[Race] Auto-loaded race file from file select.\n");
 }
 
 int anchor_race_is_active(void)

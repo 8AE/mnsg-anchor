@@ -63,7 +63,7 @@ Applies a live character change to the player object. Decompiled behavior:
 The mod calls this after choosing the next enabled character so the in-memory
 player object, runtime save mirror, and animation/state callback all agree.
 
-## Race Startup And Autoload
+## Race Startup And Direct Launch
 
 ### `func_8000B640_C240`
 
@@ -72,8 +72,8 @@ bytes, setting default health/item/character values, setting the default spawn
 room to Goemon's house (`0x1d1`), writing default spawn coordinates, then
 copying the block to `D_8015C910`.
 
-The race autoload path calls this first so later race setup writes land on a
-known clean save layout.
+The direct race-start path calls this first so later race setup writes land on
+a known clean save layout without showing the game's file-select menu.
 
 ### `func_8000B5D0_C1D0`
 
@@ -81,8 +81,63 @@ Marks the freshly initialized save as started/loaded. It clears a global system
 field, copies the short runtime save/control block into `D_8015C5D8`, mirrors
 `D_8015C608` into `D_8015C910`, and sets `D_8015C5D8` to `1`.
 
-The mod hooks this function's return and also calls it during file-select
-autoload so pending race flags can be applied as soon as save memory is live.
+The mod hooks this function's return and also calls it during direct race start
+so pending race flags can be applied as soon as save memory is live.
+
+### `g_system + 0x3B040`
+
+Adventure Diary slot marker used by the file-select path. The old race autoload
+hook wrote `-1` here immediately after `func_8000B5D0_C1D0`; preserving that
+write is what keeps a direct race start in No Adventure Diary mode. If the
+direct launcher only initializes and starts the save block, the game binds the
+session to save slot one instead.
+
+### `func_8000607C_6C7C`
+
+Writes the engine destination fields: room, player x/y/z, camera rotation,
+player rotation, and two related load fields. Direct race start uses this
+instead of only touching the save spawn fields so the scene transition sees the
+same destination state as the original No Adventure Diary flow.
+
+### `func_8000B364_BF64` and `func_8000383C_443C`
+
+Scene and graphics setup used by the game's No Adventure Diary start path after
+the save block has been initialized. `func_8000B364_BF64` syncs the active stage
+from the destination stage and kicks scene-load state, while
+`func_8000383C_443C` resets render state and refreshes the graphics/texture
+buffer for the next scene. The direct race launcher runs these before entering
+warp step `12`; skipping them left the renderer in the menu/loading
+configuration and could make loaded areas appear overbright. Step `7` is part
+of the game's own start callback context, but using it from the recomp UI path
+can fall back into the title/demo sequence.
+
+### `func_80003478_4078`
+
+Gameplay-control/UI state initializer. Ghidra shows it incrementing
+`g_system + 0x3ADDE`, clearing `g_system + 0x3ADDF`, and resetting the substate
+at `g_system + 0x3ADE0/0x3ADE1`. Direct race start calls this after
+`func_8000383C_443C` because that render reset clears UI/task slots; without
+this follow-up, gameplay can load but the in-game HUD, pause menu, and minimap
+controls remain disabled.
+
+### `g_system + 0x3AE16`
+
+Load-source/gameplay-state field used by the start and transition paths.
+`func_80005EDC_6ADC`, the original No Adventure Diary start function, sets this
+to `1` before entering step `7`; the normal step path later clears it before
+gameplay. Direct race start uses warp step `12` instead, so it explicitly keeps
+this field at `0`. Leaving it set to `1` allows the scene to load but prevents
+normal gameplay UI processing from running, which matches the missing HUD,
+pause, and minimap behavior.
+
+### `func_8003521C_35E1C` and `func_801CD890_660740`
+
+Gameplay callback handoff used by the old race file-select autoload path.
+`func_8003521C_35E1C` stores a callback pointer in the active scheduler task's
+`+0x0c` slot; the race launcher installs `func_801CD890_660740` after the
+direct scene setup and warp-step request. Without this handoff the scene can
+load and player movement can work, but the normal in-game callback path that
+drives HUD, pause, minimap, and related gameplay UI does not run.
 
 ### `func_8000B2A0_BEA0`
 
@@ -105,31 +160,27 @@ five signed shorts:
 These values populate race start choices and are copied into the save spawn
 fields when a race starts.
 
-### `func_8003521C_35E1C`
+### `func_80003728_4328`
 
-Scheduler callback setter. The decompiled body is a single store:
+Engine step switcher. Ghidra shows it writing `g_system->stepw`, clearing
+`stepw_end`, marking the system as transitioning, and resetting the step
+substate:
 
 ```c
-*(undefined4 *)(DAT_8016dab4 + 0xc) = param_1;
+PTR_g_system_8015c5c8->stepw = param_1;
+PTR_g_system_8015c5c8->stepw_end = 0;
+PTR_g_system_8015c5c8->field15_0x3adca = 2;
+FUN_80003628(0);
 ```
 
-The race autoload hook installs `func_801CD890_660740` through this setter after
-creating/starting the save, which moves the game out of file select and into
-the normal gameplay load flow.
-
-### `func_801CD890_660740`
-
-Callback target used by the original file-select path. Ghidra's function
-boundaries currently do not start exactly at `0x801CD890`; the address falls
-inside a larger player/load-state routine beginning at `0x801CD310`. The mod
-keeps the known symbol name because this is the callback pointer used by the
-runtime flow.
+The debug transport menu and direct race start use step `12`, the normal
+warp/load state, after writing the desired destination room and coordinates.
 
 ### `D_8015C5C8_15D1C8`
 
-Global game-system pointer. Race autoload writes `*(D_8015C5C8 + 0x3B040) = -1`
-before switching callbacks. That matches the file-select flow's sentinel for
-clearing the active/pending file-select entity.
+Global game-system pointer. Direct race start writes the selected destination
+stage through this pointer and also updates the static game-system destination
+fields before entering the warp/load step.
 
 ## Remote Marker Effect Tasks
 
