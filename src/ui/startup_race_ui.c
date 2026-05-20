@@ -115,7 +115,8 @@ extern void func_80003728_4328(unsigned char step);
 #define RACE_CHALLENGE_DAMAGE_SYNC 1
 #define RACE_CHALLENGE_NO_HIT 2
 #define RACE_CHALLENGE_ONE_LIFE 4
-#define RACE_CHALLENGE_DOUBLE_ENEMIES 8
+#define RACE_CHALLENGE_ENEMY_MULT_SHIFT 3
+#define RACE_CHALLENGE_ENEMY_MULT_MASK 0x18
 #define SAVE_SPAWN_ROOM 0x204
 #define SAVE_PLAYER_ROT 0x208
 #define SAVE_SPAWN_X 0x20A
@@ -289,7 +290,7 @@ static RecompuiResource s_damage_sync_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_damage_sync_detail_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_no_hit_detail_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_one_life_detail_lbl = RECOMPUI_NULL_RESOURCE;
-static RecompuiResource s_double_enemies_detail_lbl = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_enemy_multiplier_detail_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_live_config_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_result_title_lbl = RECOMPUI_NULL_RESOURCE;
@@ -332,7 +333,7 @@ static int s_pending_challenges_done = 0;
 static int s_pending_toggle_damage_sync = 0;
 static int s_pending_toggle_no_hit = 0;
 static int s_pending_toggle_one_life = 0;
-static int s_pending_toggle_double_enemies = 0;
+static int s_pending_cycle_enemy_multiplier = 0;
 static int s_pending_category_idx = -1;
 static int s_pending_goal_category_idx = -1;
 static int s_pending_goal_idx = -1;
@@ -343,7 +344,7 @@ static int s_location_idx = 0;
 static int s_damage_sync_enabled = 0;
 static int s_no_hit_enabled = 0;
 static int s_one_life_enabled = 0;
-static int s_double_enemies_enabled = 0;
+static int s_enemy_multiplier = 1;
 static int s_flag_count = 0;
 static int s_category_count = 0;
 static int s_active_category = -1;
@@ -785,8 +786,7 @@ static int race_challenge_bits(void)
         bits |= RACE_CHALLENGE_NO_HIT;
     if (s_one_life_enabled)
         bits |= RACE_CHALLENGE_ONE_LIFE;
-    if (s_double_enemies_enabled)
-        bits |= RACE_CHALLENGE_DOUBLE_ENEMIES;
+    bits |= (s_enemy_multiplier - 1) << RACE_CHALLENGE_ENEMY_MULT_SHIFT;
     return bits;
 }
 
@@ -795,7 +795,7 @@ static void apply_race_challenge_runtime(void)
     anchor_runtime_set_damage_sync_enabled(s_damage_sync_enabled);
     anchor_runtime_set_no_hit_enabled(s_no_hit_enabled);
     anchor_runtime_set_one_life_enabled(s_one_life_enabled);
-    anchor_runtime_set_double_enemies_enabled(s_double_enemies_enabled);
+    anchor_runtime_set_enemy_multiplier(s_enemy_multiplier);
 }
 
 static int base64url_value(char c)
@@ -1025,7 +1025,10 @@ static int apply_race_config_code(const char *code)
     s_damage_sync_enabled = (challenge_bits & RACE_CHALLENGE_DAMAGE_SYNC) ? 1 : 0;
     s_no_hit_enabled = (challenge_bits & RACE_CHALLENGE_NO_HIT) ? 1 : 0;
     s_one_life_enabled = (challenge_bits & RACE_CHALLENGE_ONE_LIFE) ? 1 : 0;
-    s_double_enemies_enabled = (challenge_bits & RACE_CHALLENGE_DOUBLE_ENEMIES) ? 1 : 0;
+    s_enemy_multiplier =
+        ((challenge_bits & RACE_CHALLENGE_ENEMY_MULT_MASK) >> RACE_CHALLENGE_ENEMY_MULT_SHIFT) + 1;
+    if (s_enemy_multiplier < 1 || s_enemy_multiplier > 3)
+        s_enemy_multiplier = 1;
     apply_race_challenge_runtime();
     for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
         s_start_selected[i] = selected[i];
@@ -1335,8 +1338,9 @@ static void update_damage_sync_label(void)
     int enabled_count = (s_damage_sync_enabled ? 1 : 0) +
                         (s_no_hit_enabled ? 1 : 0) +
                         (s_one_life_enabled ? 1 : 0) +
-                        (s_double_enemies_enabled ? 1 : 0);
+                        (s_enemy_multiplier > 1 ? 1 : 0);
     int pos = 0;
+    char enemy_mult_text[4];
 
     copy_text(s_challenges_summary, "Challenges: ", (int)sizeof(s_challenges_summary));
     pos = 12;
@@ -1372,10 +1376,13 @@ static void update_damage_sync_label(void)
         recompui_set_text(s_one_life_detail_lbl, s_one_life_enabled ? "Enabled" : "Disabled");
         recompui_set_color(s_one_life_detail_lbl, s_one_life_enabled ? &R_GREEN : &R_DIM);
     }
-    if (s_double_enemies_detail_lbl != RECOMPUI_NULL_RESOURCE)
+    enemy_mult_text[0] = (char)('0' + s_enemy_multiplier);
+    enemy_mult_text[1] = 'x';
+    enemy_mult_text[2] = '\0';
+    if (s_enemy_multiplier_detail_lbl != RECOMPUI_NULL_RESOURCE)
     {
-        recompui_set_text(s_double_enemies_detail_lbl, s_double_enemies_enabled ? "Enabled" : "Disabled");
-        recompui_set_color(s_double_enemies_detail_lbl, s_double_enemies_enabled ? &R_GREEN : &R_DIM);
+        recompui_set_text(s_enemy_multiplier_detail_lbl, enemy_mult_text);
+        recompui_set_color(s_enemy_multiplier_detail_lbl, s_enemy_multiplier > 1 ? &R_GREEN : &R_DIM);
     }
     recompui_close_context(s_ctx);
 
@@ -1558,12 +1565,12 @@ static void on_one_life_clicked(RecompuiResource res, const RecompuiEventData *e
         s_pending_toggle_one_life = 1;
 }
 
-static void on_double_enemies_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
+static void on_enemy_multiplier_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
 {
     (void)res;
     (void)ud;
     if (ev->type == UI_EVENT_CLICK)
-        s_pending_toggle_double_enemies = 1;
+        s_pending_cycle_enemy_multiplier = 1;
 }
 
 static void on_category_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
@@ -2194,6 +2201,7 @@ static void build_setup_view(RecompuiResource parent)
 static void build_challenge_toggle_card(RecompuiResource parent,
                                         const char *title_text,
                                         const char *hint_text,
+                                        const char *button_text,
                                         int enabled,
                                         RecompuiResource *detail_out,
                                         void (*callback)(RecompuiResource, const RecompuiEventData *, void *))
@@ -2234,7 +2242,7 @@ static void build_challenge_toggle_card(RecompuiResource parent,
     recompui_set_font_size(*detail_out, 14.0f, UNIT_DP);
     recompui_set_font_weight(*detail_out, 700);
 
-    RecompuiResource button = recompui_create_button(s_ctx, card, "Toggle", BUTTONSTYLE_SECONDARY);
+    RecompuiResource button = recompui_create_button(s_ctx, card, button_text, BUTTONSTYLE_SECONDARY);
     recompui_set_cursor(button, CURSOR_POINTER);
     recompui_set_font_size(button, 13.0f, UNIT_DP);
     recompui_set_height(button, 36.0f, UNIT_DP);
@@ -2289,27 +2297,31 @@ static void build_challenges_view(RecompuiResource parent)
     build_challenge_toggle_card(s_challenges_view,
                                 "Team Damage Sync",
                                 "Sync player damage as part of the race challenge.",
+                                "Toggle",
                                 s_damage_sync_enabled,
                                 &s_damage_sync_detail_lbl,
                                 on_damage_sync_clicked);
     build_challenge_toggle_card(s_challenges_view,
                                 "No Hit",
                                 "Any damage immediately drops the active player's health to zero.",
+                                "Toggle",
                                 s_no_hit_enabled,
                                 &s_no_hit_detail_lbl,
                                 on_no_hit_clicked);
     build_challenge_toggle_card(s_challenges_view,
                                 "1 Life",
                                 "Keep the player at one internal life so the next death is game over.",
+                                "Toggle",
                                 s_one_life_enabled,
                                 &s_one_life_detail_lbl,
                                 on_one_life_clicked);
     build_challenge_toggle_card(s_challenges_view,
-                                "Double Enemies",
-                                "Spawn a second copy of each enemy actor when a room loads.",
-                                s_double_enemies_enabled,
-                                &s_double_enemies_detail_lbl,
-                                on_double_enemies_clicked);
+                                "Enemy Multiplier",
+                                "Experimental. Choose how many copies of each enemy actor spawn when a room loads; the game could crash.",
+                                "Cycle",
+                                s_enemy_multiplier > 1,
+                                &s_enemy_multiplier_detail_lbl,
+                                on_enemy_multiplier_clicked);
 }
 
 static void build_goal_view(RecompuiResource parent)
@@ -2476,7 +2488,7 @@ static void race_ui_init(void)
     s_damage_sync_enabled = 0;
     s_no_hit_enabled = 0;
     s_one_life_enabled = 0;
-    s_double_enemies_enabled = 0;
+    s_enemy_multiplier = 1;
     apply_race_challenge_runtime();
 
     s_ctx = recompui_create_context();
@@ -2597,8 +2609,8 @@ const char *anchor_race_get_config_json(void)
     append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_no_hit_enabled ? 1 : 0);
     append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"ol\":");
     append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_one_life_enabled ? 1 : 0);
-    append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"de\":");
-    append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_double_enemies_enabled ? 1 : 0);
+    append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"em\":");
+    append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_enemy_multiplier);
     append_char_limited(s_config_json, &pos, (int)sizeof(s_config_json), '}');
     append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"flags\":[");
 
@@ -2645,7 +2657,9 @@ void anchor_race_apply_config_json(const char *json)
     s_damage_sync_enabled = parse_json_int_after(json, "\"dmg\"", s_damage_sync_enabled) ? 1 : 0;
     s_no_hit_enabled = parse_json_int_after(json, "\"nh\"", s_no_hit_enabled) ? 1 : 0;
     s_one_life_enabled = parse_json_int_after(json, "\"ol\"", s_one_life_enabled) ? 1 : 0;
-    s_double_enemies_enabled = parse_json_int_after(json, "\"de\"", s_double_enemies_enabled) ? 1 : 0;
+    s_enemy_multiplier = parse_json_int_after(json, "\"em\"", s_enemy_multiplier);
+    if (s_enemy_multiplier < 1 || s_enemy_multiplier > 3)
+        s_enemy_multiplier = parse_json_int_after(json, "\"de\"", 0) ? 2 : 1;
     apply_race_challenge_runtime();
 
     for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
@@ -3052,12 +3066,19 @@ void anchor_startup_race_frame_hook(void)
         set_status(s_one_life_enabled ? "1 life enabled." : "1 life disabled.", 1);
     }
 
-    if (s_pending_toggle_double_enemies)
+    if (s_pending_cycle_enemy_multiplier)
     {
-        s_pending_toggle_double_enemies = 0;
-        s_double_enemies_enabled = !s_double_enemies_enabled;
+        s_pending_cycle_enemy_multiplier = 0;
+        s_enemy_multiplier++;
+        if (s_enemy_multiplier > 3)
+            s_enemy_multiplier = 1;
         update_damage_sync_label();
-        set_status(s_double_enemies_enabled ? "Double enemies enabled." : "Double enemies disabled.", 1);
+        if (s_enemy_multiplier == 1)
+            set_status("Enemy multiplier set to 1x.", 1);
+        else if (s_enemy_multiplier == 2)
+            set_status("Enemy multiplier set to 2x.", 1);
+        else
+            set_status("Enemy multiplier set to 3x.", 1);
     }
 
     if (s_pending_back)

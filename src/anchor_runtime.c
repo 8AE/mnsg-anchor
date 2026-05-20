@@ -5,7 +5,7 @@ static int s_initialized = 0;
 static int s_damage_sync_enabled = 0;
 static int s_no_hit_enabled = 0;
 static int s_one_life_enabled = 0;
-static int s_double_enemies_enabled = 0;
+static int s_enemy_multiplier = 1;
 static int s_startup_complete = 0;
 
 void anchor_runtime_init_defaults(void)
@@ -17,7 +17,7 @@ void anchor_runtime_init_defaults(void)
     s_damage_sync_enabled = (recomp_get_config_u32("anchor_damage_sync") == 0);
     s_no_hit_enabled = 0;
     s_one_life_enabled = 0;
-    s_double_enemies_enabled = 0;
+    s_enemy_multiplier = 1;
 }
 
 void anchor_runtime_set_damage_sync_enabled(int enabled)
@@ -56,16 +56,20 @@ int anchor_runtime_one_life_enabled(void)
     return s_one_life_enabled;
 }
 
-void anchor_runtime_set_double_enemies_enabled(int enabled)
+void anchor_runtime_set_enemy_multiplier(int multiplier)
 {
     anchor_runtime_init_defaults();
-    s_double_enemies_enabled = enabled ? 1 : 0;
+    if (multiplier < 1)
+        multiplier = 1;
+    if (multiplier > 3)
+        multiplier = 3;
+    s_enemy_multiplier = multiplier;
 }
 
-int anchor_runtime_double_enemies_enabled(void)
+int anchor_runtime_enemy_multiplier(void)
 {
     anchor_runtime_init_defaults();
-    return s_double_enemies_enabled;
+    return s_enemy_multiplier;
 }
 
 void anchor_startup_menu_finish(void)

@@ -72,7 +72,6 @@ static int is_enemy_actor_id(unsigned short actor_id)
     switch (actor_id)
     {
     case 0x0CB: /* Ghost Robot Tsurami */
-    case 0x0CA: /* Congo's Hand */
     case 0x0FA: /* Robot Bee */
     case 0x0FB:
     case 0x0FC:
@@ -153,7 +152,7 @@ static short offset_coord(short value, short offset)
 }
 
 RECOMP_HOOK("func_80218A54_5D3F24")
-void anchor_race_double_enemy_spawn_hook(int actor, RaceEnemyActorInstance *instance)
+void anchor_race_enemy_multiplier_spawn_hook(int actor, RaceEnemyActorInstance *instance)
 {
     RaceEnemyActorInstance duplicate_instance;
     RaceEnemyActorDefinition *definition;
@@ -162,10 +161,13 @@ void anchor_race_double_enemy_spawn_hook(int actor, RaceEnemyActorInstance *inst
     short model_id;
     int *owner;
     int duplicate;
+    int multiplier;
+    int duplicate_index;
     float scale;
 
+    multiplier = anchor_runtime_enemy_multiplier();
     if (s_duplicate_enemy_guard || !anchor_race_is_active() ||
-        !anchor_runtime_double_enemies_enabled() || !instance)
+        multiplier <= 1 || !instance)
         return;
 
     definition = D_8015CDE0;
@@ -178,23 +180,29 @@ void anchor_race_double_enemy_spawn_hook(int actor, RaceEnemyActorInstance *inst
 
     raise_enemy_actor_caps();
     actor_type = D_802297D6_5E4CA6[actor_id + 0x80D];
-    owner = func_80219CA0_5D5170(0, actor_type);
-    if (!owner)
-        return;
-
     model_id = *(short *)&D_802297D6_5E4CA6[actor_id * 2];
     scale = D_80239AFC_5F4FCC;
-    duplicate = func_8003555C_3615C(owner, D_802287BC_5E3C8C[actor_id], 0, 0xC006D920,
-                                    0, 0, 0, 0, 0, 0,
-                                    scale, scale, scale, 0, 0, model_id);
-    if (!duplicate)
-        return;
 
-    duplicate_instance = *instance;
-    duplicate_instance.position.x = offset_coord(instance->position.x, DUPLICATE_POSITION_OFFSET);
-    duplicate_instance.position.z = offset_coord(instance->position.z, DUPLICATE_POSITION_OFFSET);
+    for (duplicate_index = 1; duplicate_index < multiplier; duplicate_index++)
+    {
+        owner = func_80219CA0_5D5170(0, actor_type);
+        if (!owner)
+            return;
 
-    s_duplicate_enemy_guard = 1;
-    func_80218A54_5D3F24(duplicate, &duplicate_instance);
-    s_duplicate_enemy_guard = 0;
+        duplicate = func_8003555C_3615C(owner, D_802287BC_5E3C8C[actor_id], 0, 0xC006D920,
+                                        0, 0, 0, 0, 0, 0,
+                                        scale, scale, scale, 0, 0, model_id);
+        if (!duplicate)
+            return;
+
+        duplicate_instance = *instance;
+        duplicate_instance.position.x =
+            offset_coord(instance->position.x, (short)(DUPLICATE_POSITION_OFFSET * duplicate_index));
+        duplicate_instance.position.z =
+            offset_coord(instance->position.z, (short)(DUPLICATE_POSITION_OFFSET * duplicate_index));
+
+        s_duplicate_enemy_guard = 1;
+        func_80218A54_5D3F24(duplicate, &duplicate_instance);
+        s_duplicate_enemy_guard = 0;
+    }
 }
