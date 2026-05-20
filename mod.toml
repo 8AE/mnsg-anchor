@@ -128,8 +128,8 @@ default = "Enabled"
 
 [[manifest.config_options]]
 id = "anchor_damage_sync"
-name = "Damage Sync (default)"
-description = "Default state for the Multiplayer startup page. The live setting is changed from that page before connecting."
+name = "Team Damage Sync (default)"
+description = "Default state for Race Setup > Challenges. The host race config controls the live race setting."
 type = "Enum"
 options = ["Enabled", "Disabled"]
 default = "Disabled"

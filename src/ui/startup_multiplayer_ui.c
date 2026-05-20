@@ -20,7 +20,6 @@ static RecompuiContext s_ctx = RECOMPUI_NULL_CONTEXT;
 static int s_ui_built = 0;
 static int s_initialized = 0;
 static int s_visible = 0;
-static int s_damage_enabled = 0;
 
 static RecompuiResource s_in_host = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_in_port = RECOMPUI_NULL_RESOURCE;
@@ -28,16 +27,13 @@ static RecompuiResource s_in_room = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_in_name = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_in_team = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_title_lbl = RECOMPUI_NULL_RESOURCE;
-static RecompuiResource s_damage_state_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
 
-static void update_damage_label(void);
 static void set_status_text(const char *text, int ok);
 static void try_connect_from_ui(void);
 static int s_pending_open = 0;
 static int s_pending_back = 0;
 static int s_pending_connect = 0;
-static int s_pending_toggle_damage = 0;
 static int s_launches_race = 0;
 
 static void int_to_str(int value, char *out)
@@ -113,27 +109,6 @@ static void on_connect_clicked(RecompuiResource res,
         s_pending_connect = 1;
 }
 
-static void on_damage_clicked(RecompuiResource res,
-                              const RecompuiEventData *ev, void *ud)
-{
-    (void)res;
-    (void)ud;
-    if (ev->type == UI_EVENT_CLICK)
-        s_pending_toggle_damage = 1;
-}
-
-static void update_damage_label(void)
-{
-    if (s_damage_state_lbl == RECOMPUI_NULL_RESOURCE)
-        return;
-
-    recompui_open_context(s_ctx);
-    recompui_set_text(s_damage_state_lbl,
-                      s_damage_enabled ? "Damage Sync: Enabled" : "Damage Sync: Disabled");
-    recompui_set_color(s_damage_state_lbl, s_damage_enabled ? &MP_GREEN : &MP_DIM);
-    recompui_close_context(s_ctx);
-}
-
 static void set_status_text(const char *text, int ok)
 {
     if (s_status_lbl == RECOMPUI_NULL_RESOURCE)
@@ -172,7 +147,6 @@ static void try_connect_from_ui(void)
 
     if (ok)
     {
-        anchor_runtime_set_damage_sync_enabled(s_damage_enabled);
         if (s_visible)
         {
             recompui_hide_context(s_ctx);
@@ -217,8 +191,6 @@ static void multiplayer_ui_init(void)
 
     static char port_str[8];
     int_to_str(cfg_port, port_str);
-    s_damage_enabled = anchor_runtime_damage_sync_enabled();
-
     s_ctx = recompui_create_context();
     recompui_set_context_captures_input(s_ctx, 1);
     recompui_set_context_captures_mouse(s_ctx, 1);
@@ -330,29 +302,6 @@ static void multiplayer_ui_init(void)
         make_field(s_ctx, team_col, "Team ID",
                    (cfg_team && cfg_team[0]) ? cfg_team : "default", &s_in_team);
 
-        RecompuiResource damage_row = recompui_create_element(s_ctx, body);
-        recompui_set_display(damage_row, DISPLAY_FLEX);
-        recompui_set_flex_direction(damage_row, FLEX_DIRECTION_ROW);
-        recompui_set_align_items(damage_row, ALIGN_ITEMS_CENTER);
-        recompui_set_justify_content(damage_row, JUSTIFY_CONTENT_SPACE_BETWEEN);
-        recompui_set_padding(damage_row, 12.0f, UNIT_DP);
-        recompui_set_background_color(damage_row, &MP_STATUS);
-        recompui_set_border_radius(damage_row, 5.0f, UNIT_DP);
-
-        s_damage_state_lbl = recompui_create_label(
-            s_ctx, damage_row,
-            s_damage_enabled ? "Damage Sync: Enabled" : "Damage Sync: Disabled",
-            LABELSTYLE_SMALL);
-        recompui_set_color(s_damage_state_lbl, s_damage_enabled ? &MP_GREEN : &MP_DIM);
-        recompui_set_font_size(s_damage_state_lbl, 16.0f, UNIT_DP);
-
-        RecompuiResource damage_btn = recompui_create_button(
-            s_ctx, damage_row, "Toggle", BUTTONSTYLE_SECONDARY);
-        recompui_set_cursor(damage_btn, CURSOR_POINTER);
-        recompui_set_font_size(damage_btn, 15.0f, UNIT_DP);
-        recompui_set_tab_index(damage_btn, TAB_INDEX_AUTO);
-        recompui_register_callback(damage_btn, on_damage_clicked, 0);
-
         RecompuiResource status_row = recompui_create_element(s_ctx, body);
         recompui_set_padding(status_row, 12.0f, UNIT_DP);
         recompui_set_min_height(status_row, 44.0f, UNIT_DP);
@@ -431,13 +380,6 @@ void anchor_startup_multiplayer_frame_hook(void)
             recompui_show_context(s_ctx);
             s_visible = 1;
         }
-    }
-
-    if (s_pending_toggle_damage)
-    {
-        s_pending_toggle_damage = 0;
-        s_damage_enabled = !s_damage_enabled;
-        update_damage_label();
     }
 
     if (s_pending_back)
