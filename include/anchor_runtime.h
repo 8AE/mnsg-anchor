@@ -8,6 +8,8 @@ void anchor_runtime_set_no_hit_enabled(int enabled);
 int anchor_runtime_no_hit_enabled(void);
 void anchor_runtime_set_one_life_enabled(int enabled);
 int anchor_runtime_one_life_enabled(void);
+void anchor_runtime_set_double_enemies_enabled(int enabled);
+int anchor_runtime_double_enemies_enabled(void);
 
 void anchor_startup_menu_finish(void);
 int anchor_startup_menu_is_complete(void);
