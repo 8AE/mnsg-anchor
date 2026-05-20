@@ -47,6 +47,7 @@ extern RaceEnemyActorDefinition *D_8015CDE0;
 #define ACTOR_CAP_KIND_10 (*(volatile int *)0x8015CCE4)
 #define ACTOR_CAP_KIND_6 (*(volatile int *)0x8015CCE8)
 #define ACTOR_CAP_KIND_12 (*(volatile int *)0x8015CCEC)
+#define DUPLICATE_POSITION_OFFSET 35
 
 static int s_duplicate_enemy_guard = 0;
 
@@ -140,9 +141,21 @@ static int is_enemy_actor_id(unsigned short actor_id)
     }
 }
 
+static short offset_coord(short value, short offset)
+{
+    int result = (int)value + (int)offset;
+
+    if (result > 32767)
+        return 32767;
+    if (result < -32768)
+        return -32768;
+    return (short)result;
+}
+
 RECOMP_HOOK("func_80218A54_5D3F24")
 void anchor_race_double_enemy_spawn_hook(int actor, RaceEnemyActorInstance *instance)
 {
+    RaceEnemyActorInstance duplicate_instance;
     RaceEnemyActorDefinition *definition;
     unsigned short actor_id;
     unsigned char actor_type;
@@ -177,7 +190,11 @@ void anchor_race_double_enemy_spawn_hook(int actor, RaceEnemyActorInstance *inst
     if (!duplicate)
         return;
 
+    duplicate_instance = *instance;
+    duplicate_instance.position.x = offset_coord(instance->position.x, DUPLICATE_POSITION_OFFSET);
+    duplicate_instance.position.z = offset_coord(instance->position.z, DUPLICATE_POSITION_OFFSET);
+
     s_duplicate_enemy_guard = 1;
-    func_80218A54_5D3F24(duplicate, instance);
+    func_80218A54_5D3F24(duplicate, &duplicate_instance);
     s_duplicate_enemy_guard = 0;
 }
