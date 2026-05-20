@@ -112,6 +112,9 @@ extern void func_80003728_4328(unsigned char step);
 #define RACE_CONFIG_VERSION 2
 #define RACE_CONFIG_MIN_VERSION 1
 #define RACE_CONFIG_DATA_MAX (1 + 2 + 1 + 1 + 2 + ((RACE_MAX_FLAGS + 7) / 8) + 4)
+#define RACE_CHALLENGE_DAMAGE_SYNC 1
+#define RACE_CHALLENGE_NO_HIT 2
+#define RACE_CHALLENGE_ONE_LIFE 4
 #define SAVE_SPAWN_ROOM 0x204
 #define SAVE_PLAYER_ROT 0x208
 #define SAVE_SPAWN_X 0x20A
@@ -283,6 +286,8 @@ static RecompuiResource s_goal_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_location_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_damage_sync_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_damage_sync_detail_lbl = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_no_hit_detail_lbl = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_one_life_detail_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_live_config_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_result_title_lbl = RECOMPUI_NULL_RESOURCE;
@@ -302,6 +307,7 @@ static char s_goal_category_count_text[RACE_MAX_CATEGORIES][32];
 static char s_result_team_text[128];
 static char s_result_players_text[512];
 static char s_config_json[8192];
+static char s_challenges_summary[64];
 static unsigned char s_start_selected[RACE_MAX_FLAGS];
 static const char *s_category_names[RACE_MAX_CATEGORIES];
 static int s_category_start[RACE_MAX_CATEGORIES];
@@ -322,6 +328,8 @@ static int s_pending_goal_done = 0;
 static int s_pending_location_done = 0;
 static int s_pending_challenges_done = 0;
 static int s_pending_toggle_damage_sync = 0;
+static int s_pending_toggle_no_hit = 0;
+static int s_pending_toggle_one_life = 0;
 static int s_pending_category_idx = -1;
 static int s_pending_goal_category_idx = -1;
 static int s_pending_goal_idx = -1;
@@ -330,6 +338,8 @@ static int s_pending_toggle_idx = -1;
 static int s_goal_idx = -1;
 static int s_location_idx = 0;
 static int s_damage_sync_enabled = 0;
+static int s_no_hit_enabled = 0;
+static int s_one_life_enabled = 0;
 static int s_flag_count = 0;
 static int s_category_count = 0;
 static int s_active_category = -1;
@@ -762,6 +772,25 @@ static unsigned int race_config_hash(const unsigned char *data, int len)
     return hash;
 }
 
+static int race_challenge_bits(void)
+{
+    int bits = 0;
+    if (s_damage_sync_enabled)
+        bits |= RACE_CHALLENGE_DAMAGE_SYNC;
+    if (s_no_hit_enabled)
+        bits |= RACE_CHALLENGE_NO_HIT;
+    if (s_one_life_enabled)
+        bits |= RACE_CHALLENGE_ONE_LIFE;
+    return bits;
+}
+
+static void apply_race_challenge_runtime(void)
+{
+    anchor_runtime_set_damage_sync_enabled(s_damage_sync_enabled);
+    anchor_runtime_set_no_hit_enabled(s_no_hit_enabled);
+    anchor_runtime_set_one_life_enabled(s_one_life_enabled);
+}
+
 static int base64url_value(char c)
 {
     if (c >= 'A' && c <= 'Z')
@@ -886,7 +915,7 @@ static void build_race_config_code(char *out, int out_len)
     data[pos++] = (unsigned char)((s_goal_idx >> 8) & 0xFF);
     data[pos++] = (unsigned char)(s_goal_idx & 0xFF);
     data[pos++] = (unsigned char)(s_location_idx & 0xFF);
-    data[pos++] = (unsigned char)(s_damage_sync_enabled ? 1 : 0);
+    data[pos++] = (unsigned char)race_challenge_bits();
     data[pos++] = (unsigned char)((s_flag_count >> 8) & 0xFF);
     data[pos++] = (unsigned char)(s_flag_count & 0xFF);
 
@@ -923,7 +952,7 @@ static int apply_race_config_code(const char *code)
     int flag_bytes;
     int expected_len;
     int flag_offset;
-    int damage_sync = s_damage_sync_enabled;
+    int challenge_bits = race_challenge_bits();
     int old_goal = s_goal_idx;
     int old_location = s_location_idx;
     int i;
@@ -944,7 +973,7 @@ static int apply_race_config_code(const char *code)
     loc = (int)data[3];
     if (data[0] >= 2)
     {
-        damage_sync = data[4] ? 1 : 0;
+        challenge_bits = data[4];
         flag_count = ((int)data[5] << 8) | (int)data[6];
         flag_offset = 7;
     }
@@ -986,8 +1015,10 @@ static int apply_race_config_code(const char *code)
 
     s_goal_idx = goal;
     s_location_idx = loc;
-    s_damage_sync_enabled = damage_sync;
-    anchor_runtime_set_damage_sync_enabled(s_damage_sync_enabled);
+    s_damage_sync_enabled = (challenge_bits & RACE_CHALLENGE_DAMAGE_SYNC) ? 1 : 0;
+    s_no_hit_enabled = (challenge_bits & RACE_CHALLENGE_NO_HIT) ? 1 : 0;
+    s_one_life_enabled = (challenge_bits & RACE_CHALLENGE_ONE_LIFE) ? 1 : 0;
+    apply_race_challenge_runtime();
     for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
         s_start_selected[i] = selected[i];
 
@@ -1293,21 +1324,48 @@ static void update_goal_label(void)
 
 static void update_damage_sync_label(void)
 {
+    int enabled_count = (s_damage_sync_enabled ? 1 : 0) +
+                        (s_no_hit_enabled ? 1 : 0) +
+                        (s_one_life_enabled ? 1 : 0);
+    int pos = 0;
+
+    copy_text(s_challenges_summary, "Challenges: ", (int)sizeof(s_challenges_summary));
+    pos = 12;
+    if (enabled_count == 0)
+    {
+        append_text_limited(s_challenges_summary, &pos, (int)sizeof(s_challenges_summary), "None Enabled");
+    }
+    else
+    {
+        append_uint(s_challenges_summary, &pos, (int)sizeof(s_challenges_summary), enabled_count);
+        append_text_limited(s_challenges_summary, &pos, (int)sizeof(s_challenges_summary), " Enabled");
+    }
+    s_challenges_summary[pos] = '\0';
+
     recompui_open_context(s_ctx);
     if (s_damage_sync_lbl != RECOMPUI_NULL_RESOURCE)
     {
-        recompui_set_text(s_damage_sync_lbl,
-                          s_damage_sync_enabled ? "Team Damage Sync: Enabled" : "Team Damage Sync: Disabled");
-        recompui_set_color(s_damage_sync_lbl, s_damage_sync_enabled ? &R_GREEN : &R_DIM);
+        recompui_set_text(s_damage_sync_lbl, s_challenges_summary);
+        recompui_set_color(s_damage_sync_lbl, enabled_count > 0 ? &R_GREEN : &R_DIM);
     }
     if (s_damage_sync_detail_lbl != RECOMPUI_NULL_RESOURCE)
     {
         recompui_set_text(s_damage_sync_detail_lbl, s_damage_sync_enabled ? "Enabled" : "Disabled");
         recompui_set_color(s_damage_sync_detail_lbl, s_damage_sync_enabled ? &R_GREEN : &R_DIM);
     }
+    if (s_no_hit_detail_lbl != RECOMPUI_NULL_RESOURCE)
+    {
+        recompui_set_text(s_no_hit_detail_lbl, s_no_hit_enabled ? "Enabled" : "Disabled");
+        recompui_set_color(s_no_hit_detail_lbl, s_no_hit_enabled ? &R_GREEN : &R_DIM);
+    }
+    if (s_one_life_detail_lbl != RECOMPUI_NULL_RESOURCE)
+    {
+        recompui_set_text(s_one_life_detail_lbl, s_one_life_enabled ? "Enabled" : "Disabled");
+        recompui_set_color(s_one_life_detail_lbl, s_one_life_enabled ? &R_GREEN : &R_DIM);
+    }
     recompui_close_context(s_ctx);
 
-    anchor_runtime_set_damage_sync_enabled(s_damage_sync_enabled);
+    apply_race_challenge_runtime();
     refresh_live_config_code();
 }
 
@@ -1468,6 +1526,22 @@ static void on_damage_sync_clicked(RecompuiResource res, const RecompuiEventData
     (void)ud;
     if (ev->type == UI_EVENT_CLICK)
         s_pending_toggle_damage_sync = 1;
+}
+
+static void on_no_hit_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_toggle_no_hit = 1;
+}
+
+static void on_one_life_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_toggle_one_life = 1;
 }
 
 static void on_category_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
@@ -2057,10 +2131,8 @@ static void build_setup_view(RecompuiResource parent)
     recompui_set_font_size(challenges_title, 14.0f, UNIT_DP);
 
     s_damage_sync_lbl = recompui_create_label(
-        s_ctx, challenges_text,
-        s_damage_sync_enabled ? "Team Damage Sync: Enabled" : "Team Damage Sync: Disabled",
-        LABELSTYLE_NORMAL);
-    recompui_set_color(s_damage_sync_lbl, s_damage_sync_enabled ? &R_GREEN : &R_DIM);
+        s_ctx, challenges_text, "Challenges: None Enabled", LABELSTYLE_NORMAL);
+    recompui_set_color(s_damage_sync_lbl, &R_DIM);
     recompui_set_font_size(s_damage_sync_lbl, 18.0f, UNIT_DP);
 
     RecompuiResource choose_challenges_btn = recompui_create_button(
@@ -2095,6 +2167,60 @@ static void build_setup_view(RecompuiResource parent)
     recompui_set_padding_bottom(list, 10.0f, UNIT_DP);
 
     build_category_picker(list);
+}
+
+static void build_challenge_toggle_card(RecompuiResource parent,
+                                        const char *title_text,
+                                        const char *hint_text,
+                                        int enabled,
+                                        RecompuiResource *detail_out,
+                                        void (*callback)(RecompuiResource, const RecompuiEventData *, void *))
+{
+    RecompuiResource card = recompui_create_element(s_ctx, parent);
+    recompui_set_display(card, DISPLAY_FLEX);
+    recompui_set_flex_direction(card, FLEX_DIRECTION_ROW);
+    recompui_set_align_items(card, ALIGN_ITEMS_CENTER);
+    recompui_set_justify_content(card, JUSTIFY_CONTENT_SPACE_BETWEEN);
+    recompui_set_gap(card, 12.0f, UNIT_DP);
+    recompui_set_padding_left(card, 16.0f, UNIT_DP);
+    recompui_set_padding_right(card, 12.0f, UNIT_DP);
+    recompui_set_padding_top(card, 12.0f, UNIT_DP);
+    recompui_set_padding_bottom(card, 12.0f, UNIT_DP);
+    recompui_set_min_height(card, 74.0f, UNIT_DP);
+    recompui_set_background_color(card, &R_CARD_ALT);
+    recompui_set_border_radius(card, 6.0f, UNIT_DP);
+    recompui_set_border_width(card, 1.0f, UNIT_DP);
+    recompui_set_border_color(card, &R_BORDER);
+
+    RecompuiResource text = recompui_create_element(s_ctx, card);
+    recompui_set_display(text, DISPLAY_FLEX);
+    recompui_set_flex_direction(text, FLEX_DIRECTION_COLUMN);
+    recompui_set_gap(text, 4.0f, UNIT_DP);
+    recompui_set_flex_grow(text, 1.0f);
+
+    RecompuiResource title = recompui_create_label(s_ctx, text, title_text, LABELSTYLE_NORMAL);
+    recompui_set_color(title, &R_WHITE);
+    recompui_set_font_size(title, 18.0f, UNIT_DP);
+    recompui_set_font_weight(title, 700);
+
+    RecompuiResource hint = recompui_create_label(s_ctx, text, hint_text, LABELSTYLE_SMALL);
+    recompui_set_color(hint, &R_DIM);
+    recompui_set_font_size(hint, 14.0f, UNIT_DP);
+
+    *detail_out = recompui_create_label(s_ctx, text, enabled ? "Enabled" : "Disabled", LABELSTYLE_SMALL);
+    recompui_set_color(*detail_out, enabled ? &R_GREEN : &R_DIM);
+    recompui_set_font_size(*detail_out, 14.0f, UNIT_DP);
+    recompui_set_font_weight(*detail_out, 700);
+
+    RecompuiResource button = recompui_create_button(s_ctx, card, "Toggle", BUTTONSTYLE_SECONDARY);
+    recompui_set_cursor(button, CURSOR_POINTER);
+    recompui_set_font_size(button, 13.0f, UNIT_DP);
+    recompui_set_height(button, 36.0f, UNIT_DP);
+    recompui_set_width(button, 110.0f, UNIT_DP);
+    recompui_set_padding_top(button, 4.0f, UNIT_DP);
+    recompui_set_padding_bottom(button, 4.0f, UNIT_DP);
+    recompui_set_tab_index(button, TAB_INDEX_AUTO);
+    recompui_register_callback(button, callback, 0);
 }
 
 static void build_challenges_view(RecompuiResource parent)
@@ -2138,55 +2264,24 @@ static void build_challenges_view(RecompuiResource parent)
     recompui_set_color(hint, &R_DIM);
     recompui_set_font_size(hint, 14.0f, UNIT_DP);
 
-    RecompuiResource damage_card = recompui_create_element(s_ctx, s_challenges_view);
-    recompui_set_display(damage_card, DISPLAY_FLEX);
-    recompui_set_flex_direction(damage_card, FLEX_DIRECTION_ROW);
-    recompui_set_align_items(damage_card, ALIGN_ITEMS_CENTER);
-    recompui_set_justify_content(damage_card, JUSTIFY_CONTENT_SPACE_BETWEEN);
-    recompui_set_gap(damage_card, 12.0f, UNIT_DP);
-    recompui_set_padding_left(damage_card, 16.0f, UNIT_DP);
-    recompui_set_padding_right(damage_card, 12.0f, UNIT_DP);
-    recompui_set_padding_top(damage_card, 12.0f, UNIT_DP);
-    recompui_set_padding_bottom(damage_card, 12.0f, UNIT_DP);
-    recompui_set_min_height(damage_card, 74.0f, UNIT_DP);
-    recompui_set_background_color(damage_card, &R_CARD_ALT);
-    recompui_set_border_radius(damage_card, 6.0f, UNIT_DP);
-    recompui_set_border_width(damage_card, 1.0f, UNIT_DP);
-    recompui_set_border_color(damage_card, &R_BORDER);
-
-    RecompuiResource damage_text = recompui_create_element(s_ctx, damage_card);
-    recompui_set_display(damage_text, DISPLAY_FLEX);
-    recompui_set_flex_direction(damage_text, FLEX_DIRECTION_COLUMN);
-    recompui_set_gap(damage_text, 4.0f, UNIT_DP);
-    recompui_set_flex_grow(damage_text, 1.0f);
-
-    RecompuiResource damage_title = recompui_create_label(s_ctx, damage_text, "Team Damage Sync", LABELSTYLE_NORMAL);
-    recompui_set_color(damage_title, &R_WHITE);
-    recompui_set_font_size(damage_title, 18.0f, UNIT_DP);
-    recompui_set_font_weight(damage_title, 700);
-
-    RecompuiResource damage_hint = recompui_create_label(
-        s_ctx, damage_text,
-        "Sync player damage as part of the race challenge.",
-        LABELSTYLE_SMALL);
-    recompui_set_color(damage_hint, &R_DIM);
-    recompui_set_font_size(damage_hint, 14.0f, UNIT_DP);
-
-    s_damage_sync_detail_lbl = recompui_create_label(
-        s_ctx, damage_text, s_damage_sync_enabled ? "Enabled" : "Disabled", LABELSTYLE_SMALL);
-    recompui_set_color(s_damage_sync_detail_lbl, s_damage_sync_enabled ? &R_GREEN : &R_DIM);
-    recompui_set_font_size(s_damage_sync_detail_lbl, 14.0f, UNIT_DP);
-    recompui_set_font_weight(s_damage_sync_detail_lbl, 700);
-
-    RecompuiResource damage_btn = recompui_create_button(s_ctx, damage_card, "Toggle", BUTTONSTYLE_SECONDARY);
-    recompui_set_cursor(damage_btn, CURSOR_POINTER);
-    recompui_set_font_size(damage_btn, 13.0f, UNIT_DP);
-    recompui_set_height(damage_btn, 36.0f, UNIT_DP);
-    recompui_set_width(damage_btn, 110.0f, UNIT_DP);
-    recompui_set_padding_top(damage_btn, 4.0f, UNIT_DP);
-    recompui_set_padding_bottom(damage_btn, 4.0f, UNIT_DP);
-    recompui_set_tab_index(damage_btn, TAB_INDEX_AUTO);
-    recompui_register_callback(damage_btn, on_damage_sync_clicked, 0);
+    build_challenge_toggle_card(s_challenges_view,
+                                "Team Damage Sync",
+                                "Sync player damage as part of the race challenge.",
+                                s_damage_sync_enabled,
+                                &s_damage_sync_detail_lbl,
+                                on_damage_sync_clicked);
+    build_challenge_toggle_card(s_challenges_view,
+                                "No Hit",
+                                "Any damage immediately drops the active player's health to zero.",
+                                s_no_hit_enabled,
+                                &s_no_hit_detail_lbl,
+                                on_no_hit_clicked);
+    build_challenge_toggle_card(s_challenges_view,
+                                "1 Life",
+                                "Keep the player at one internal life so the next death is game over.",
+                                s_one_life_enabled,
+                                &s_one_life_detail_lbl,
+                                on_one_life_clicked);
 }
 
 static void build_goal_view(RecompuiResource parent)
@@ -2351,7 +2446,9 @@ static void race_ui_init(void)
     build_category_index();
     s_goal_idx = find_flag_index_by_key("fl_congo");
     s_damage_sync_enabled = 0;
-    anchor_runtime_set_damage_sync_enabled(0);
+    s_no_hit_enabled = 0;
+    s_one_life_enabled = 0;
+    apply_race_challenge_runtime();
 
     s_ctx = recompui_create_context();
     recompui_set_context_captures_input(s_ctx, 1);
@@ -2449,6 +2546,7 @@ static void race_ui_init(void)
     }
     update_goal_buttons(-1, s_goal_idx);
     update_goal_label();
+    update_damage_sync_label();
 }
 
 const char *anchor_race_get_config_json(void)
@@ -2466,6 +2564,10 @@ const char *anchor_race_get_config_json(void)
     append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_location_idx);
     append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"ch\":{\"dmg\":");
     append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_damage_sync_enabled ? 1 : 0);
+    append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"nh\":");
+    append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_no_hit_enabled ? 1 : 0);
+    append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"ol\":");
+    append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_one_life_enabled ? 1 : 0);
     append_char_limited(s_config_json, &pos, (int)sizeof(s_config_json), '}');
     append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"flags\":[");
 
@@ -2510,7 +2612,9 @@ void anchor_race_apply_config_json(const char *json)
         s_location_idx = 0;
 
     s_damage_sync_enabled = parse_json_int_after(json, "\"dmg\"", s_damage_sync_enabled) ? 1 : 0;
-    anchor_runtime_set_damage_sync_enabled(s_damage_sync_enabled);
+    s_no_hit_enabled = parse_json_int_after(json, "\"nh\"", s_no_hit_enabled) ? 1 : 0;
+    s_one_life_enabled = parse_json_int_after(json, "\"ol\"", s_one_life_enabled) ? 1 : 0;
+    apply_race_challenge_runtime();
 
     for (i = 0; i < s_flag_count && i < RACE_MAX_FLAGS; i++)
         s_start_selected[i] = 0;
@@ -2898,6 +3002,22 @@ void anchor_startup_race_frame_hook(void)
         s_damage_sync_enabled = !s_damage_sync_enabled;
         update_damage_sync_label();
         set_status(s_damage_sync_enabled ? "Team damage sync enabled." : "Team damage sync disabled.", 1);
+    }
+
+    if (s_pending_toggle_no_hit)
+    {
+        s_pending_toggle_no_hit = 0;
+        s_no_hit_enabled = !s_no_hit_enabled;
+        update_damage_sync_label();
+        set_status(s_no_hit_enabled ? "No hit enabled." : "No hit disabled.", 1);
+    }
+
+    if (s_pending_toggle_one_life)
+    {
+        s_pending_toggle_one_life = 0;
+        s_one_life_enabled = !s_one_life_enabled;
+        update_damage_sync_label();
+        set_status(s_one_life_enabled ? "1 life enabled." : "1 life disabled.", 1);
     }
 
     if (s_pending_back)

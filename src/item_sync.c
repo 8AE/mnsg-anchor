@@ -684,6 +684,19 @@ static int s_push_cooldown = 0;
 #define DS_HP_READ() (*(volatile unsigned char *)((char *)D_8015C608_15D208 + DS_HP_OFFSET))
 #define DS_HP_WRITE(v) (*(unsigned char *)((char *)D_8015C608_15D208 + DS_HP_OFFSET) = (unsigned char)(v))
 
+/* Remaining lives: runtime copy at D_8015C608 - 0x1c, save copy at +0x78.
+ * Ghidra shows FUN_8000b578 decrementing the runtime value and game-overing
+ * when the result is zero, so one-life mode keeps this at 1 while alive. */
+#define DS_LIVES_OFFSET (-0x1C)
+#define DS_SAVE_LIVES_OFFSET (0x78)
+#define DS_LIVES_READ() SAVE_READ32(DS_LIVES_OFFSET)
+#define DS_LIVES_WRITE(v)        \
+    do                           \
+    {                            \
+        SAVE_WRITE32(DS_LIVES_OFFSET, (v));      \
+        SAVE_WRITE32(DS_SAVE_LIVES_OFFSET, (v)); \
+    } while (0)
+
 /* Active character index.                                                   */
 #define DS_CHAR_IDX() (((*(volatile unsigned int *)0x8015C5DC)) & 0xFFu)
 
@@ -1105,9 +1118,12 @@ static void process_incoming_packets(void)
                 unsigned char cur_hp = DS_HP_READ();
                 if (cur_hp > 0)
                 {
-                    unsigned char new_hp = ((signed int)cur_hp - dmg <= 0)
-                                               ? 0u
-                                               : (unsigned char)(cur_hp - dmg);
+                    unsigned char new_hp =
+                        (anchor_race_is_active() && anchor_runtime_no_hit_enabled())
+                            ? 0u
+                            : (((signed int)cur_hp - dmg <= 0)
+                                   ? 0u
+                                   : (unsigned char)(cur_hp - dmg));
                     DS_HP_WRITE(new_hp);
                     /* Update prev so the monitor loop does not echo this back. */
                     s_ds_prev_hp = new_hp;
@@ -1396,8 +1412,15 @@ void item_sync_update(void)
     }
     else
     {
+        int race_challenges_active = anchor_race_is_active();
         unsigned char ds_cur_hp = DS_HP_READ();
         unsigned int ds_cur_char = DS_CHAR_IDX();
+
+        if (race_challenges_active && anchor_runtime_one_life_enabled() && ds_cur_hp > 0 &&
+            DS_LIVES_READ() != 1)
+        {
+            DS_LIVES_WRITE(1);
+        }
 
         if (!s_ds_initialized)
         {
@@ -1413,12 +1436,20 @@ void item_sync_update(void)
             s_ds_prev_hp = ds_cur_hp;
             s_ds_prev_char = ds_cur_char;
         }
-        else if (ds_cur_hp < s_ds_prev_hp && is_connected)
+        else if (ds_cur_hp < s_ds_prev_hp)
         {
             /* HP decreased this frame – the active character took damage.  */
             unsigned char damage = (unsigned char)(s_ds_prev_hp - ds_cur_hp);
 
-            if (anchor_runtime_damage_sync_enabled())
+            if (race_challenges_active && anchor_runtime_no_hit_enabled() && ds_cur_hp > 0)
+            {
+                DS_HP_WRITE(0);
+                ds_cur_hp = 0;
+                damage = s_ds_prev_hp;
+                recomp_printf("[RaceChallenge] No hit forced HP to zero.\n");
+            }
+
+            if (is_connected && anchor_runtime_damage_sync_enabled())
             {
                 /* Build JSON payload {"damage":N} without printf.          */
                 char ds_payload[20];
