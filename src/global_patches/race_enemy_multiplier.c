@@ -47,9 +47,10 @@ extern RaceEnemyActorDefinition *D_8015CDE0;
 #define ACTOR_CAP_KIND_10 (*(volatile int *)0x8015CCE4)
 #define ACTOR_CAP_KIND_6 (*(volatile int *)0x8015CCE8)
 #define ACTOR_CAP_KIND_12 (*(volatile int *)0x8015CCEC)
-#define DUPLICATE_POSITION_OFFSET 35
+#define DUPLICATE_RANDOM_RADIUS 50
 
 static int s_duplicate_enemy_guard = 0;
+static unsigned int s_duplicate_position_rng = 0xA341316Cu;
 
 static void raise_enemy_actor_caps(void)
 {
@@ -73,67 +74,67 @@ static int is_enemy_actor_id(unsigned short actor_id)
     {
     case 0x0CB: /* Ghost Robot Tsurami */
     case 0x0FA: /* Robot Bee */
-    case 0x0FB:
-    case 0x0FC:
-    case 0x0FD:
-    case 0x0FE:
-    case 0x0FF:
-    case 0x100:
-    case 0x102:
-    case 0x103:
-    case 0x104:
-    case 0x105:
-    case 0x106:
-    case 0x107:
-    case 0x108:
-    case 0x109:
-    case 0x10A:
-    case 0x10B:
-    case 0x10C:
-    case 0x110:
-    case 0x12C:
-    case 0x12D:
-    case 0x12E:
-    case 0x12F:
-    case 0x130:
-    case 0x131:
-    case 0x132:
-    case 0x133:
-    case 0x136:
-    case 0x13A:
-    case 0x13B:
-    case 0x13C:
-    case 0x13D:
-    case 0x13E:
-    case 0x13F:
-    case 0x140:
-    case 0x141:
-    case 0x144:
-    case 0x145:
-    case 0x147:
-    case 0x148:
-    case 0x149:
-    case 0x190:
-    case 0x191:
-    case 0x198:
-    case 0x19A:
-    case 0x19D:
-    case 0x1A6:
-    case 0x1A9:
-    case 0x1AA:
-    case 0x1B0:
-    case 0x1B6:
-    case 0x2F6:
-    case 0x323:
-    case 0x334:
-    case 0x354:
-    case 0x362:
-    case 0x365:
-    case 0x3CA:
-    case 0x3D1:
-    case 0x3DA:
-    case 0x3EF:
-    case 0x3FC:
+    case 0x0FB: /* Pink Robot FB */
+    case 0x0FC: /* Pink Robot FC */
+    case 0x0FD: /* Green Robot FD */
+    case 0x0FE: /* Green Robot FE */
+    case 0x0FF: /* Big Swatting Robot */
+    case 0x100: /* Blue Robot */
+    // case 0x102: /* Slinky Enemy (Mt. Fuji) */
+    case 0x103: /* Scarecrow Bot */
+    case 0x104: /* Can-can Legs */
+    case 0x105: /* Flatfish (Tosa Bridge) */
+    case 0x106: /* Helicopter Kite */
+    case 0x107: /* Bamboo Shooter */
+    case 0x108: /* Jet Robot */
+    case 0x109: /* Yellow Robot */
+    case 0x10A: /* Big Swatting Robot Red */
+    case 0x10B: /* Shrinking Robot */
+    case 0x10C: /* Sword Robot */
+    case 0x110: /* Pink Robot 110 (Festival Temple & Hagi) */
+    case 0x12C: /* Small Cannon */
+    case 0x12D: /* Flying Dragon Head */
+    case 0x12E: /* Seahorse */
+    case 0x12F: /* Spiny Sea Urchin */
+    case 0x130: /* Drum Robot */
+    case 0x131: /* Triangle Robot */
+    // case 0x132: /* Bouncing Darumanyo */
+    case 0x133: /* Paper Ghost */
+    case 0x136: /* Red Eye Fish */
+    case 0x13A: /* Tank */
+    case 0x13B: /* Spiny Sea Urchin (Kii-Awaji) */
+    case 0x13C: /* Giant Enemy Crab */
+    case 0x13D: /* Samurai */
+    case 0x13E: /* Rose Robot */
+    case 0x13F: /* Hammer Thrower */
+    case 0x140: /* Fire Stalker */
+    case 0x141: /* Ninja */
+    case 0x144: /* Burrowing Robot */
+    case 0x145: /* Kite */
+    case 0x147: /* Bomber Bird */
+    case 0x148: /* Water Snake */
+    // case 0x149: /* Dango Stick Wipers (Spawners) */
+    case 0x190: /* Flying Tile */
+    case 0x191: /* Unknown in vanilla export */
+    case 0x198: /* Spike Chain */
+    case 0x19A: /* Falling Barrel */
+    case 0x19D: /* Slicer (Musical Castle 1) */
+    case 0x1A6: /* Fox Mask */
+    case 0x1A9: /* Falling Bomb Block */
+    case 0x1AA: /* Jump Rope (Ghost Toys) */
+    case 0x1B0: /* Mind-Control Robot */
+    case 0x1B6: /* Robot Bee Spawner */
+    case 0x2F6: /* Chef (Deals contact damage) */
+    // case 0x323: /* Congo */
+    case 0x334: /* Sushi Spawner (Gourmet Sub) */
+    // case 0x354: /* Sliding Door Pink Robot Spawner */
+    case 0x362: /* Unknown in vanilla export */
+    case 0x365: /* Giant Spinning Top (Ghost Toys) */
+    case 0x3CA: /* Spike Floor (Ghost Toys) */
+    case 0x3D1: /* Floating Ingredients (Gourmet Sub) */
+    case 0x3DA: /* Boulder (Kompira Mountain) */
+    case 0x3EF: /* Spiny Urchin Spawner (Gourmet Sub) */
+    case 0x3FC: /* Floor Flamethrower */
         return 1;
     default:
         return 0;
@@ -151,6 +152,45 @@ static short offset_coord(short value, short offset)
     return (short)result;
 }
 
+static unsigned int next_duplicate_random(void)
+{
+    s_duplicate_position_rng =
+        s_duplicate_position_rng * 1664525u + 1013904223u;
+    return s_duplicate_position_rng;
+}
+
+static short random_axis_offset(void)
+{
+    return (short)((int)(next_duplicate_random() % (DUPLICATE_RANDOM_RADIUS * 2 + 1)) -
+                   DUPLICATE_RANDOM_RADIUS);
+}
+
+static void random_duplicate_offsets(short *x_offset, short *z_offset)
+{
+    int attempt;
+    int x;
+    int z;
+
+    for (attempt = 0; attempt < 8; attempt++)
+    {
+        x = random_axis_offset();
+        z = random_axis_offset();
+        if ((x != 0 || z != 0) &&
+            x * x + z * z <= DUPLICATE_RANDOM_RADIUS * DUPLICATE_RANDOM_RADIUS)
+        {
+            *x_offset = (short)x;
+            *z_offset = (short)z;
+            return;
+        }
+    }
+
+    *x_offset = (short)((int)(next_duplicate_random() % (DUPLICATE_RANDOM_RADIUS * 2 + 1)) -
+                        DUPLICATE_RANDOM_RADIUS);
+    *z_offset = 0;
+    if (*x_offset == 0)
+        *x_offset = DUPLICATE_RANDOM_RADIUS;
+}
+
 RECOMP_HOOK("func_80218A54_5D3F24")
 void anchor_race_enemy_multiplier_spawn_hook(int actor, RaceEnemyActorInstance *instance)
 {
@@ -163,6 +203,10 @@ void anchor_race_enemy_multiplier_spawn_hook(int actor, RaceEnemyActorInstance *
     int duplicate;
     int multiplier;
     int duplicate_index;
+    short base_x;
+    short base_z;
+    short x_offset;
+    short z_offset;
     float scale;
 
     multiplier = anchor_runtime_enemy_multiplier();
@@ -182,6 +226,8 @@ void anchor_race_enemy_multiplier_spawn_hook(int actor, RaceEnemyActorInstance *
     actor_type = D_802297D6_5E4CA6[actor_id + 0x80D];
     model_id = *(short *)&D_802297D6_5E4CA6[actor_id * 2];
     scale = D_80239AFC_5F4FCC;
+    base_x = instance->position.x;
+    base_z = instance->position.z;
 
     for (duplicate_index = 1; duplicate_index < multiplier; duplicate_index++)
     {
@@ -196,10 +242,13 @@ void anchor_race_enemy_multiplier_spawn_hook(int actor, RaceEnemyActorInstance *
             return;
 
         duplicate_instance = *instance;
+        random_duplicate_offsets(&x_offset, &z_offset);
         duplicate_instance.position.x =
-            offset_coord(instance->position.x, (short)(DUPLICATE_POSITION_OFFSET * duplicate_index));
+            offset_coord(base_x, x_offset);
         duplicate_instance.position.z =
-            offset_coord(instance->position.z, (short)(DUPLICATE_POSITION_OFFSET * duplicate_index));
+            offset_coord(base_z, z_offset);
+        base_x = duplicate_instance.position.x;
+        base_z = duplicate_instance.position.z;
 
         s_duplicate_enemy_guard = 1;
         func_80218A54_5D3F24(duplicate, &duplicate_instance);
