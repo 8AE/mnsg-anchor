@@ -8,12 +8,8 @@
  */
 
 #include "modding.h"
-#include "recompui.h"
 #include "anchor.h"
-#include "icon_goemon.h"
-#include "icon_ebisumaru.h"
-#include "icon_sasuke.h"
-#include "icon_yae.h"
+#include "anchor_nameplates.h"
 
 #define ANCHOR_REMOTE_MAX 25
 #define POSITION_SEND_FRAMES 4
@@ -21,15 +17,9 @@
 #define POSITION_MIN_DELTA_SQ 36
 #define LOBBY_REFRESH_FRAMES 3
 #define PARTICLE_COUNT 3
-#define NAMEPLATE_ICON_SIZE 22.0f
 #define REMOTE_SNAP_DISTANCE_SQ 250000.0f
 #define REMOTE_SMOOTHING_FACTOR 0.35f
 #define REMOTE_VELOCITY_LEAD_SECONDS 0.04f
-#define NAMEPLATE_NEAR_DEPTH 350.0f
-#define NAMEPLATE_FAR_DEPTH 3600.0f
-#define NAMEPLATE_HIDE_DEPTH 5200.0f
-#define NAMEPLATE_MIN_SCALE 0.60f
-#define NAMEPLATE_MAX_SCALE 1.15f
 
 typedef struct PlayerObject
 {
@@ -150,41 +140,9 @@ static int s_lobby_refresh_timer;
 static void *s_marker_tasks[ANCHOR_REMOTE_MAX];
 static void *s_marker_particles[ANCHOR_REMOTE_MAX];
 static void *s_marker_owner_task;
-static RecompuiContext s_nameplate_ctx = RECOMPUI_NULL_CONTEXT;
-static RecompuiResource s_nameplate_cards[ANCHOR_REMOTE_MAX];
-static RecompuiResource s_nameplate_icons[ANCHOR_REMOTE_MAX];
-static RecompuiResource s_nameplate_labels[ANCHOR_REMOTE_MAX];
-static int s_nameplate_initialized;
-static int s_nameplate_ctx_visible;
-static RecompuiTextureHandle s_nameplate_char_textures[4];
-static RecompuiTextureHandle s_nameplate_blank_texture;
-static int s_nameplate_textures_initialized;
 
 static const char *const s_char_names[4] = {
     "Goemon", "Ebisumaru", "Sasuke", "Yae"};
-
-static const RecompuiColor NAMEPLATE_TEXT = {255, 255, 255, 235};
-static const RecompuiColor NAMEPLATE_TEXT_OPPONENT = {255, 72, 72, 245};
-static const RecompuiColor NAMEPLATE_BG = {0, 0, 0, 150};
-
-static void nameplates_load_textures(void)
-{
-    static const unsigned char blank_px[4] = {0, 0, 0, 0};
-
-    if (s_nameplate_textures_initialized)
-        return;
-    s_nameplate_textures_initialized = 1;
-
-    s_nameplate_blank_texture = recompui_create_texture_rgba32((void *)blank_px, 1, 1);
-    s_nameplate_char_textures[0] = recompui_create_texture_rgba32(
-        (void *)icon_goemon_data, ICON_GOEMON_WIDTH, ICON_GOEMON_HEIGHT);
-    s_nameplate_char_textures[1] = recompui_create_texture_rgba32(
-        (void *)icon_ebisumaru_data, ICON_EBISUMARU_WIDTH, ICON_EBISUMARU_HEIGHT);
-    s_nameplate_char_textures[2] = recompui_create_texture_rgba32(
-        (void *)icon_sasuke_data, ICON_SASUKE_WIDTH, ICON_SASUKE_HEIGHT);
-    s_nameplate_char_textures[3] = recompui_create_texture_rgba32(
-        (void *)icon_yae_data, ICON_YAE_WIDTH, ICON_YAE_HEIGHT);
-}
 
 static const char *sfind(const char *hay, const char *needle)
 {
@@ -429,193 +387,6 @@ static void smooth_remote_player(const RemotePlayer *remote, RemotePlayer *out)
     out->x = (int)smooth->x;
     out->y = (int)smooth->y;
     out->z = (int)smooth->z;
-}
-
-static void nameplates_ensure_init(void)
-{
-    int i;
-    RecompuiResource root;
-
-    if (s_nameplate_initialized)
-        return;
-    s_nameplate_initialized = 1;
-
-    nameplates_load_textures();
-
-    s_nameplate_ctx = recompui_create_context();
-    recompui_set_context_captures_input(s_nameplate_ctx, 0);
-    recompui_set_context_captures_mouse(s_nameplate_ctx, 0);
-    recompui_open_context(s_nameplate_ctx);
-
-    root = recompui_context_root(s_nameplate_ctx);
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
-    {
-        s_nameplate_cards[i] = recompui_create_element(s_nameplate_ctx, root);
-        recompui_set_position(s_nameplate_cards[i], POSITION_ABSOLUTE);
-        recompui_set_width(s_nameplate_cards[i], 220.0f, UNIT_DP);
-        recompui_set_margin_left(s_nameplate_cards[i], -110.0f, UNIT_DP);
-        recompui_set_display(s_nameplate_cards[i], DISPLAY_NONE);
-        recompui_set_flex_direction(s_nameplate_cards[i], FLEX_DIRECTION_ROW);
-        recompui_set_align_items(s_nameplate_cards[i], ALIGN_ITEMS_CENTER);
-        recompui_set_justify_content(s_nameplate_cards[i], JUSTIFY_CONTENT_CENTER);
-        recompui_set_gap(s_nameplate_cards[i], 6.0f, UNIT_DP);
-        recompui_set_background_color(s_nameplate_cards[i], &NAMEPLATE_BG);
-        recompui_set_border_radius(s_nameplate_cards[i], 4.0f, UNIT_DP);
-        recompui_set_padding(s_nameplate_cards[i], 3.0f, UNIT_DP);
-
-        s_nameplate_icons[i] = recompui_create_imageview(
-            s_nameplate_ctx, s_nameplate_cards[i], s_nameplate_blank_texture);
-        recompui_set_width(s_nameplate_icons[i], NAMEPLATE_ICON_SIZE, UNIT_DP);
-        recompui_set_height(s_nameplate_icons[i], NAMEPLATE_ICON_SIZE, UNIT_DP);
-
-        s_nameplate_labels[i] = recompui_create_label(s_nameplate_ctx, s_nameplate_cards[i], "", LABELSTYLE_ANNOTATION);
-        recompui_set_text_align(s_nameplate_labels[i], TEXT_ALIGN_CENTER);
-        recompui_set_font_size(s_nameplate_labels[i], 20.0f, UNIT_DP);
-        recompui_set_font_weight(s_nameplate_labels[i], 700);
-        recompui_set_color(s_nameplate_labels[i], &NAMEPLATE_TEXT);
-    }
-
-    recompui_close_context(s_nameplate_ctx);
-}
-
-static float clamp_dp(float value, float lo, float hi)
-{
-    if (value < lo)
-        return lo;
-    if (value > hi)
-        return hi;
-    return value;
-}
-
-static float nameplate_scale_from_depth(float depth)
-{
-    float t;
-
-    if (depth <= NAMEPLATE_NEAR_DEPTH)
-        return NAMEPLATE_MAX_SCALE;
-    if (depth >= NAMEPLATE_FAR_DEPTH)
-        return NAMEPLATE_MIN_SCALE;
-
-    t = (depth - NAMEPLATE_NEAR_DEPTH) / (NAMEPLATE_FAR_DEPTH - NAMEPLATE_NEAR_DEPTH);
-    return NAMEPLATE_MAX_SCALE + (NAMEPLATE_MIN_SCALE - NAMEPLATE_MAX_SCALE) * t;
-}
-
-static void hide_nameplate_slot(int slot_index)
-{
-    nameplates_ensure_init();
-    if (s_nameplate_cards[slot_index] != RECOMPUI_NULL_RESOURCE)
-    {
-        recompui_open_context(s_nameplate_ctx);
-        recompui_set_display(s_nameplate_cards[slot_index], DISPLAY_NONE);
-        recompui_close_context(s_nameplate_ctx);
-    }
-}
-
-static void set_nameplates_context_visible(int visible)
-{
-    nameplates_ensure_init();
-    if (visible)
-    {
-        if (!s_nameplate_ctx_visible)
-        {
-            recompui_show_context(s_nameplate_ctx);
-            s_nameplate_ctx_visible = 1;
-        }
-    }
-    else if (s_nameplate_ctx_visible)
-    {
-        recompui_hide_context(s_nameplate_ctx);
-        s_nameplate_ctx_visible = 0;
-    }
-}
-
-static void update_nameplate_slot(int slot_index, const RemotePlayer *remote, const PlayerObject *local_obj)
-{
-    const float half_width = 960.0f;
-    const float half_height = 540.0f;
-    const float focal_x = 900.0f;
-    const float focal_y = 620.0f;
-    const float label_height = 55.0f;
-    float eye_x;
-    float eye_y;
-    float eye_z;
-    float radius;
-    float forward_x;
-    float forward_z;
-    float right_x;
-    float right_z;
-    float rel_x;
-    float rel_y;
-    float rel_z;
-    float depth;
-    float vertical_depth;
-    float side;
-    float screen_x;
-    float screen_y;
-    float label_scale;
-    float card_width;
-    float icon_size;
-    float font_size;
-
-    nameplates_ensure_init();
-    if (!remote || !local_obj || s_nameplate_cards[slot_index] == RECOMPUI_NULL_RESOURCE)
-    {
-        hide_nameplate_slot(slot_index);
-        return;
-    }
-
-    radius = D_8020D1D0_5C90E0;
-    if (radius < 1.0f)
-        radius = 1.0f;
-
-    eye_x = local_obj->x + D_8020D1C0_5C90D0.x;
-    eye_y = local_obj->y + D_8020D1C0_5C90D0.y;
-    eye_z = local_obj->z + D_8020D1C0_5C90D0.z;
-
-    forward_x = -D_8020D1C0_5C90D0.x / radius;
-    forward_z = -D_8020D1C0_5C90D0.z / radius;
-    right_x = -forward_z;
-    right_z = forward_x;
-
-    rel_x = (float)remote->x - eye_x;
-    rel_y = ((float)remote->y + label_height) - eye_y;
-    rel_z = (float)remote->z - eye_z;
-    depth = rel_x * forward_x + rel_z * forward_z;
-
-    if (depth < 20.0f || depth > NAMEPLATE_HIDE_DEPTH)
-    {
-        hide_nameplate_slot(slot_index);
-        return;
-    }
-
-    label_scale = nameplate_scale_from_depth(depth);
-    card_width = 220.0f * label_scale;
-    icon_size = NAMEPLATE_ICON_SIZE * label_scale;
-    font_size = 20.0f * label_scale;
-
-    side = rel_x * right_x + rel_z * right_z;
-    vertical_depth = depth + 260.0f;
-    screen_x = clamp_dp(half_width + (side / depth) * focal_x, 80.0f, 1840.0f);
-    screen_y = clamp_dp(half_height - (rel_y / vertical_depth) * focal_y, 60.0f, 980.0f);
-
-    recompui_open_context(s_nameplate_ctx);
-    recompui_set_width(s_nameplate_cards[slot_index], card_width, UNIT_DP);
-    recompui_set_margin_left(s_nameplate_cards[slot_index], -(card_width * 0.5f), UNIT_DP);
-    recompui_set_gap(s_nameplate_cards[slot_index], 6.0f * label_scale, UNIT_DP);
-    recompui_set_padding(s_nameplate_cards[slot_index], 3.0f * label_scale, UNIT_DP);
-    recompui_set_border_radius(s_nameplate_cards[slot_index], 4.0f * label_scale, UNIT_DP);
-    recompui_set_width(s_nameplate_icons[slot_index], icon_size, UNIT_DP);
-    recompui_set_height(s_nameplate_icons[slot_index], icon_size, UNIT_DP);
-    recompui_set_imageview_texture(
-        s_nameplate_icons[slot_index],
-        (remote->ch >= 0 && remote->ch < 4) ? s_nameplate_char_textures[remote->ch] : s_nameplate_blank_texture);
-    recompui_set_text(s_nameplate_labels[slot_index], remote->name);
-    recompui_set_font_size(s_nameplate_labels[slot_index], font_size, UNIT_DP);
-    recompui_set_color(s_nameplate_labels[slot_index], remote->same_team ? &NAMEPLATE_TEXT : &NAMEPLATE_TEXT_OPPONENT);
-    recompui_set_left(s_nameplate_cards[slot_index], screen_x, UNIT_DP);
-    recompui_set_top(s_nameplate_cards[slot_index], screen_y, UNIT_DP);
-    recompui_set_display(s_nameplate_cards[slot_index], DISPLAY_FLEX);
-    recompui_close_context(s_nameplate_ctx);
 }
 
 static void publish_local_state(PlayerObject *local_obj)
@@ -883,10 +654,39 @@ static int ensure_remote_particle_marker(const RemotePlayer *remote, int slot_in
     return 1;
 }
 
+static int render_remote_nameplate(int slot_index, const RemotePlayer *remote, const PlayerObject *local_obj)
+{
+    AnchorNameplateCamera camera;
+    AnchorNameplatePlayer nameplate_remote;
+
+    if (!local_obj || !remote)
+    {
+        anchor_nameplates_hide_slot(slot_index);
+        return 0;
+    }
+
+    camera.player_x = local_obj->x;
+    camera.player_y = local_obj->y;
+    camera.player_z = local_obj->z;
+    camera.camera_x = D_8020D1C0_5C90D0.x;
+    camera.camera_y = D_8020D1C0_5C90D0.y;
+    camera.camera_z = D_8020D1C0_5C90D0.z;
+    camera.camera_radius = D_8020D1D0_5C90E0;
+
+    nameplate_remote.x = remote->x;
+    nameplate_remote.y = remote->y;
+    nameplate_remote.z = remote->z;
+    nameplate_remote.ch = remote->ch;
+    nameplate_remote.same_team = remote->same_team;
+    nameplate_remote.name = remote->name;
+    return anchor_nameplates_render_slot(slot_index, &nameplate_remote, &camera);
+}
+
 static void update_remote_particle_markers(PlayerObject *local_obj)
 {
     int remote_index;
     int slot_index = 0;
+    int visible_nameplates = 0;
     int hide_index;
 
     if (s_marker_owner_task != D_801FC604_5B8514)
@@ -899,9 +699,9 @@ static void update_remote_particle_markers(PlayerObject *local_obj)
         for (hide_index = 0; hide_index < ANCHOR_REMOTE_MAX; ++hide_index)
         {
             set_marker_slot_visible(hide_index, 0);
-            hide_nameplate_slot(hide_index);
+            anchor_nameplates_hide_slot(hide_index);
         }
-        set_nameplates_context_visible(0);
+        anchor_nameplates_set_context_visible(0);
         return;
     }
 
@@ -917,17 +717,17 @@ static void update_remote_particle_markers(PlayerObject *local_obj)
 
         smooth_remote_player(remote, &smoothed_remote);
         ensure_remote_particle_marker(&smoothed_remote, slot_index);
-        update_nameplate_slot(slot_index, &smoothed_remote, local_obj);
+        visible_nameplates += render_remote_nameplate(slot_index, &smoothed_remote, local_obj);
         slot_index++;
     }
 
     for (hide_index = slot_index; hide_index < ANCHOR_REMOTE_MAX; ++hide_index)
     {
         set_marker_slot_visible(hide_index, 0);
-        hide_nameplate_slot(hide_index);
+        anchor_nameplates_hide_slot(hide_index);
     }
 
-    set_nameplates_context_visible(slot_index > 0);
+    anchor_nameplates_set_context_visible(visible_nameplates > 0);
 }
 
 /* Frame-end hook on the main gameplay/update tick. Anchor publishes the local
