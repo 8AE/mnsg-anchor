@@ -109,6 +109,14 @@ static const RecompuiColor COLOR_TEAM_HDR = {0, 160, 140, 255}; /* muted teal fo
 /* Last room ID we sent to Python; 0xFFFF = "not sent yet". */
 static unsigned short s_prev_room_id = 0xFFFF;
 
+static int is_rdram_pointer(const void *ptr)
+{
+    unsigned int addr = (unsigned int)(unsigned long)ptr;
+    unsigned int phys = addr & 0x1fffffffu;
+
+    return addr != 0 && phys < 0x00800000u;
+}
+
 /* =========================================================================
    Notification context
    ========================================================================= */
@@ -471,7 +479,7 @@ void anchor_ui_update(void)
     /* ---- Send our world position to teammates ----------------------------- */
     {
         void *bg_w = D_801FC60C_5B851C;
-        if (bg_w)
+        if (is_rdram_pointer(bg_w))
         {
             int px = (int)*(float *)((char *)bg_w + 0x08);
             int py = (int)*(float *)((char *)bg_w + 0x0C);

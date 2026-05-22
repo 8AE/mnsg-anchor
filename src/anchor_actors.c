@@ -191,6 +191,14 @@ static unsigned int ptr_low32(void *ptr)
     return (unsigned int)(unsigned long)ptr;
 }
 
+static int is_rdram_pointer(const void *ptr)
+{
+    unsigned int addr = (unsigned int)(unsigned long)ptr;
+    unsigned int phys = addr & 0x1fffffffu;
+
+    return addr != 0 && phys < 0x00800000u;
+}
+
 static unsigned char read_u8_at(void *obj, unsigned int offset)
 {
     unsigned char *p = (unsigned char *)obj;
@@ -429,7 +437,7 @@ static void publish_local_state(PlayerObject *local_obj)
     if (s_position_keepalive_timer > 0)
         s_position_keepalive_timer--;
 
-    if (!local_obj || s_state_send_timer > 0)
+    if (!is_rdram_pointer(local_obj) || s_state_send_timer > 0)
         return;
 
     x = (int)local_obj->x;
@@ -619,7 +627,7 @@ static int ensure_remote_particle_marker(const RemotePlayer *remote, int slot_in
     void *effect_task;
     void *particles;
 
-    if (!remote || !D_801FC604_5B8514)
+    if (!remote || !is_rdram_pointer(D_801FC604_5B8514))
         return 0;
 
     if (s_marker_owner_task != D_801FC604_5B8514)
@@ -659,7 +667,7 @@ static int render_remote_nameplate(int slot_index, const RemotePlayer *remote, c
     AnchorNameplateCamera camera;
     AnchorNameplatePlayer nameplate_remote;
 
-    if (!local_obj || !remote)
+    if (!is_rdram_pointer(local_obj) || !remote)
     {
         anchor_nameplates_hide_slot(slot_index);
         return 0;
@@ -688,6 +696,19 @@ static void update_remote_particle_markers(PlayerObject *local_obj)
     int slot_index = 0;
     int visible_nameplates = 0;
     int hide_index;
+
+    if (!is_rdram_pointer(local_obj) || !is_rdram_pointer(D_801FC604_5B8514))
+    {
+        s_marker_owner_task = 0;
+        for (hide_index = 0; hide_index < ANCHOR_REMOTE_MAX; ++hide_index)
+        {
+            s_marker_tasks[hide_index] = 0;
+            s_marker_particles[hide_index] = 0;
+            anchor_nameplates_hide_slot(hide_index);
+        }
+        anchor_nameplates_set_context_visible(0);
+        return;
+    }
 
     if (s_marker_owner_task != D_801FC604_5B8514)
         clear_marker_slots_for_new_owner();
