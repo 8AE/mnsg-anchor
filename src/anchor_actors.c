@@ -15,7 +15,7 @@
 #include "icon_sasuke.h"
 #include "icon_yae.h"
 
-#define ANCHOR_REMOTE_MAX 8
+#define ANCHOR_REMOTE_MAX 25
 #define POSITION_SEND_FRAMES 4
 #define POSITION_KEEPALIVE_FRAMES 30
 #define POSITION_MIN_DELTA_SQ 36
@@ -930,6 +930,9 @@ static void update_remote_particle_markers(PlayerObject *local_obj)
     set_nameplates_context_visible(slot_index > 0);
 }
 
+/* Frame-end hook on the main gameplay/update tick. Anchor publishes the local
+ * player state, refreshes remote lobby positions, and updates visible marker
+ * particles/nameplates after the game has advanced the current frame. */
 RECOMP_HOOK_RETURN("func_80002040_2C40")
 void anchor_actors_update_particle_markers(void)
 {
