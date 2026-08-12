@@ -260,6 +260,31 @@ int anchor_set_position(int pos_x, int pos_y, int pos_z)
     return result;
 }
 
+int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
+                             int action, int frame_100, int frame_count_100,
+                             int rot_x, int rot_y, int rot_z)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("pos_x", pos_x);
+    REPY_FN_SET_S32("pos_y", pos_y);
+    REPY_FN_SET_S32("pos_z", pos_z);
+    REPY_FN_SET_S32("action", action);
+    REPY_FN_SET_S32("frame_100", frame_100);
+    REPY_FN_SET_S32("frame_count_100", frame_count_100);
+    REPY_FN_SET_S32("rot_x", rot_x);
+    REPY_FN_SET_S32("rot_y", rot_y);
+    REPY_FN_SET_S32("rot_z", rot_z);
+    REPY_FN_EXEC_CACHE(anchor_set_position_anim_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.set_position_anim(\n"
+                       "    pos_x, pos_y, pos_z, action, frame_100,\n"
+                       "    frame_count_100, rot_x, rot_y, rot_z\n"
+                       ")\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_set_character(const char *char_name)
 {
     REPY_FN_SETUP;

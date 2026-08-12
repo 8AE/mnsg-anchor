@@ -16,16 +16,16 @@ The mod hooks its return so Anchor work runs after the normal game step:
 
 - `item_sync_update` drains network packets and writes save flags.
 - `anchor_character_frame_hook` keeps the selected character legal.
-- `anchor_actors_update_particle_markers` publishes local position and updates
-  remote markers/nameplates.
+- `anchor_actors_update_cutscene_models` publishes local position/animation and
+  updates remote Goemon/Ebisumaru cutscene models and nameplates.
 - Race UI hooks apply pending race setup once save memory exists.
 
 ### `D_800C7AB2`
 
 Current room/scene id. Actor manager references read this while deciding which
 actors belong in the active room. The mod uses it as the local room id for
-Anchor state and as a visibility filter so remote markers are only drawn when a
-teammate is in the same room.
+Anchor state and as a visibility filter so remote models are only drawn when a
+player is in the same room.
 
 ## Save Data And Character State
 
@@ -182,26 +182,33 @@ Global game-system pointer. Direct race start writes the selected destination
 stage through this pointer and also updates the static game-system destination
 fields before entering the warp/load step.
 
-## Remote Marker Effect Tasks
+## Remote Cutscene-Model Tasks
 
 ### `D_801FC604_5B8514`
 
-Current actor/task owner. Effect code and actor spawning read this pointer as
-the active parent task. Anchor remote marker tasks are parented to it; if the
-pointer changes during a room transition, the mod discards cached marker task
-pointers and creates new ones.
+Ghidra shows this as the live player task. `func_801CB668` stores the newly
+created task here, copies its first attached object from task `+0x18` into
+`D_801FC60C`, and later player action binding writes the active action id at
+task `+0xCC`.
+
+Anchor parents each remote cutscene-model task to this task. When the pointer
+changes, cached remote pointers are discarded because the old task tree has
+already been destroyed by the room transition.
 
 ### `D_801FC60C_5B851C`
 
-Current player world object pointer. The mod only relies on the first known
-position fields:
+Current player model/display object. Anchor reads:
 
 - `+0x08`: world X
 - `+0x0c`: world Y
 - `+0x10`: world Z
+- `+0x14/+0x16/+0x18`: X/Y/Z rotation
+- `+0x28`: current animation frame
 
-Those fields are used for local position publishing and for projecting remote
-nameplates relative to the local player.
+The local frame count is obtained with `func_8001B5AC_1C1AC`. Frame, frame
+count, action, and rotations are sent with the position packet so another
+client can map the normalized animation loop phase onto a cutscene model whose clip
+has a different length.
 
 ### `D_8020D1C0_5C90D0` And `D_8020D1D0_5C90E0`
 
@@ -221,61 +228,73 @@ Allocates and inserts an engine task. Decompilation shows this wrapper:
 2. Calls `func_80034D24(task)` to reorder the task in its linked list by
    priority/depth.
 
-Anchor uses it to create a persistent effect task per visible remote player
-slot.
+Anchor uses it to create one child task per visible supported remote character,
+matching the opening-cutscene creator pattern.
 
-### `func_80035EEC_36AEC`
+### `func_8020D6BC_5C8B8C`
 
-Allocates a chain of particle/effect records from the game's effect pool. It
-masks `count` to one byte, checks the remaining pool capacity for `kind`, calls
-an allocator for each record, and appends them through task offsets `+0x18` and
-`+0x1c`. It returns the first allocated particle, or `NULL` if allocation fails.
+Gameplay stage-resource dispatcher. Ghidra shows it calling the load function
+selected from the current stage metadata. Anchor hooks its return and appends
+the two opening resources only after normal stage resource loading:
 
-Anchor requests three kind-2 particles for each marker sparkle.
+- file `0x288` for cutscene Goemon;
+- file `0x277` for the normal cutscene Ebisumaru variant.
 
-### `func_801EE4AC_5AA3BC`
+This keeps resource loading out of the per-frame update hook.
 
-Initializes the common effect-task header from a parent task:
+### `func_80013B14_14714`
 
-- Clears bytes/halfwords at offsets `0x60..0x68`.
-- Stores `effect_type` at `+0x64`.
-- Stores the parent task pointer at `+0x84`.
-- Copies parent state from parent `+0x5c` into task `+0x5c`.
+Loads or reuses one file in the game's wave/resource registry. Ghidra shows it
+finding the next registry entry, decompressing the requested file into the
+registry's current end pointer, resolving resource references, and returning
+the aligned next address. The remote resource hook calls this for `0x288` and
+`0x277`.
 
-Anchor calls it immediately after task allocation so the effect task behaves
-like a normal child effect owned by the current scene task.
+### `func_800141C4_14DC4`
 
-### `func_801EE750_5AA660`
+Looks up a loaded resource file and returns its registered data pointer, or
+`-1` when absent. Anchor verifies both required files before constructing a
+remote model.
 
-Initializes particle draw/config state. Ghidra shows it calling a reset helper,
-then setting particle `+0x30` to a render-mode table entry selected by `type`
-ORed with the caller-provided `flags`.
+### `func_8000DBF0_E7F0`
 
-Anchor passes `particle + 0x80` in the flags so the particle draws the display
-list built into its own memory.
+This is the stable model/display allocator called by both decompiled opening
+creators. It allocates one kind-2 record, writes the model pointer, animation
+context, transform, scale, and resource ids, then resolves those resources via
+`func_80014218_14E18`.
 
-### `func_801EF684_5AB594`
+The remote mapping reproduces the verified cutscene arguments:
 
-Initializes the tiny state block paired with a particle. The game writes a
-default config/vtable pointer, clears a state byte, stores `0xffff` in a
-halfword, then runs a common reset helper. Anchor keeps one of these state
-blocks in the effect task at `task + 0xa0 + particle_index * 8`.
+| Character | File | Model pointer | Animation context | Base rotation |
+| --- | ---: | ---: | ---: | --- |
+| Goemon | `0x288` | `0x180000AC` | `0x8006D920` | `0x8000,0x8000,0x8000` |
+| Ebisumaru | `0x277` | `0x18000554` | `0x8006D898` | `0,0,0` |
 
-### `func_801DC554_598464`
+Both use scale `0.1`. Sasuke and Yae do not have verified models in this
+opening sequence, so they remain nameplate-only instead of being assigned an
+incorrect character model.
 
-Builds and cache-writes a tiny display list:
+### `func_8001B5AC_1C1AC`
 
-1. `gSPDisplayList(texture)`
-2. Optional primitive color
-3. Environment color
-4. `gSPEndDisplayList()`
+Resolves the object's flagged model pointer and returns its animation frame
+count. The verified cutscene Goemon model reports 2 frames and normal
+Ebisumaru reports 20. Anchor maps the sender's `frame/frame_count` loop phase to
+the receiver's cutscene clip and predicts between packets using the observed
+phase delta.
 
-Anchor uses it to recolor the stock sparkle texture and pulse marker alpha
-without maintaining separate display-list assets.
+### `func_80034EF8_35AF8`
 
-### `D_80204DA0_5C0CB0` And `D_802049C0_5C08D0`
+Deletes a task and its attached records. This is the cleanup function used by
+the opening director at the end of state 10. Anchor uses it when a remote
+leaves, changes to an unsupported character, disconnects, or exits the room.
 
-Stock effect assets. Cross references show `D_80204DA0` being passed into
-particle init helpers and `D_802049C0` being used as a texture/display-list
-asset by multiple effect routines. Anchor reuses them for lightweight remote
-presence markers.
+## Hook Boundary
+
+The remote implementation follows the recomp hook compatibility model:
+
+- a return hook on `func_8020D6BC_5C8B8C` stages the two extra resources after
+  the game loads its stage resources;
+- a return hook on `func_80002040_2C40` publishes and applies the final
+  per-frame player state;
+- the overlay-local `file_18` creators are not patched or called while another
+  overlay occupies their VRAM addresses.

@@ -181,6 +181,27 @@ extern "C"
    int anchor_set_position(int pos_x, int pos_y, int pos_z);
 
    /**
+    * @brief Broadcast position plus the live player animation state.
+    *
+    * The animation frame and clip length are scaled by 100 so receivers can
+    * map the player's normalized loop phase onto a different model clip.
+    *
+    * @param pos_x            World X coordinate.
+    * @param pos_y            World Y coordinate.
+    * @param pos_z            World Z coordinate.
+    * @param action           Current action id from player task offset 0xCC.
+    * @param frame_100        Current model frame at object offset 0x28, times 100.
+    * @param frame_count_100  Current model clip length, times 100.
+    * @param rot_x            Model X rotation from object offset 0x14.
+    * @param rot_y            Model Y rotation from object offset 0x16.
+    * @param rot_z            Model Z rotation from object offset 0x18.
+    * @return 1 if sent, 0 otherwise.
+    */
+   int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
+                                int action, int frame_100, int frame_count_100,
+                                int rot_x, int rot_y, int rot_z);
+
+   /**
     * @brief Broadcast the local player's currently selected character.
     *
     * Sends an UPDATE_CLIENT_STATE packet with a ``currentCharacter`` field so

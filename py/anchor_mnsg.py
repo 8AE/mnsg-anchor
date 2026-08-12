@@ -348,6 +348,18 @@ def _recv_loop() -> None:
                             _player_states[cid]["velZ"] = int(packet.get("velZ", 0))
                             _player_states[cid]["posSeq"] = int(packet.get("posSeq", 0))
                             _player_states[cid]["posT"] = int(packet.get("posT", 0))
+                            if "action" in packet:
+                                _player_states[cid]["action"] = int(packet.get("action", -1))
+                            if "animFrame100" in packet:
+                                _player_states[cid]["animFrame100"] = int(packet.get("animFrame100", 0))
+                            if "animFrameCount100" in packet:
+                                _player_states[cid]["animFrameCount100"] = int(packet.get("animFrameCount100", 0))
+                            if "rotX" in packet:
+                                _player_states[cid]["rotX"] = int(packet.get("rotX", 0))
+                            if "rotY" in packet:
+                                _player_states[cid]["rotY"] = int(packet.get("rotY", 0))
+                            if "rotZ" in packet:
+                                _player_states[cid]["rotZ"] = int(packet.get("rotZ", 0))
 
                 # Update a single player's status when they broadcast their state.
                 if ptype == "UPDATE_CLIENT_STATE":
@@ -388,6 +400,18 @@ def _recv_loop() -> None:
                                     _player_states[cid]["posSeq"] = int(cs["posSeq"])
                                 if "posT" in cs:
                                     _player_states[cid]["posT"] = int(cs["posT"])
+                                if "action" in cs:
+                                    _player_states[cid]["action"] = int(cs["action"])
+                                if "animFrame100" in cs:
+                                    _player_states[cid]["animFrame100"] = int(cs["animFrame100"])
+                                if "animFrameCount100" in cs:
+                                    _player_states[cid]["animFrameCount100"] = int(cs["animFrameCount100"])
+                                if "rotX" in cs:
+                                    _player_states[cid]["rotX"] = int(cs["rotX"])
+                                if "rotY" in cs:
+                                    _player_states[cid]["rotY"] = int(cs["rotY"])
+                                if "rotZ" in cs:
+                                    _player_states[cid]["rotZ"] = int(cs["rotZ"])
                                 if "currentCharacter" in cs:
                                     _player_states[cid]["character"] = str(cs["currentCharacter"])
                             else:
@@ -410,6 +434,12 @@ def _recv_loop() -> None:
                                     "velZ": int(cs.get("velZ", 0)),
                                     "posSeq": int(cs.get("posSeq", 0)),
                                     "posT": int(cs.get("posT", 0)),
+                                    "action": int(cs.get("action", -1)),
+                                    "animFrame100": int(cs.get("animFrame100", 0)),
+                                    "animFrameCount100": int(cs.get("animFrameCount100", 0)),
+                                    "rotX": int(cs.get("rotX", 0)),
+                                    "rotY": int(cs.get("rotY", 0)),
+                                    "rotZ": int(cs.get("rotZ", 0)),
                                     "character": str(cs.get("currentCharacter", "")),
                                 }
 
@@ -759,8 +789,23 @@ def send_custom_packet(
 
 
 def set_position(x: int, y: int, z: int) -> bool:
+    """Backward-compatible position-only sender."""
+    return set_position_anim(x, y, z, -1, 0, 0, 0, 0, 0)
+
+
+def set_position_anim(
+    x: int,
+    y: int,
+    z: int,
+    action: int,
+    frame_100: int,
+    frame_count_100: int,
+    rot_x: int,
+    rot_y: int,
+    rot_z: int,
+) -> bool:
     """
-    Broadcast this client's world-space position to teammates.
+    Broadcast world-space position and the live animation phase to teammates.
 
     This is the hot movement payload, so it intentionally avoids repeating
     identity/team fields that are sent by handshake, room, and character
@@ -771,6 +816,12 @@ def set_position(x: int, y: int, z: int) -> bool:
         x: World X coordinate (int, from CLS_BG_W::position.x truncated).
         y: World Y coordinate.
         z: World Z coordinate.
+        action: Current player action id.
+        frame_100: Current animation frame multiplied by 100.
+        frame_count_100: Current animation loop length multiplied by 100.
+        rot_x: Current model X rotation.
+        rot_y: Current model Y rotation.
+        rot_z: Current model Z rotation.
 
     Returns True if the packet was sent.
     """
@@ -801,6 +852,12 @@ def set_position(x: int, y: int, z: int) -> bool:
             _player_states[_client_id]["velZ"] = vel_z
             _player_states[_client_id]["posSeq"] = _position_seq
             _player_states[_client_id]["posT"] = now_ms
+            _player_states[_client_id]["action"] = int(action)
+            _player_states[_client_id]["animFrame100"] = int(frame_100)
+            _player_states[_client_id]["animFrameCount100"] = int(frame_count_100)
+            _player_states[_client_id]["rotX"] = int(rot_x)
+            _player_states[_client_id]["rotY"] = int(rot_y)
+            _player_states[_client_id]["rotZ"] = int(rot_z)
     return _send_raw({
         "type": "MNSG_PLAYER_POS",
         "clientId": _client_id,
@@ -813,6 +870,12 @@ def set_position(x: int, y: int, z: int) -> bool:
         "velZ": vel_z,
         "posSeq": _position_seq,
         "posT": now_ms,
+        "action": int(action),
+        "animFrame100": int(frame_100),
+        "animFrameCount100": int(frame_count_100),
+        "rotX": int(rot_x),
+        "rotY": int(rot_y),
+        "rotZ": int(rot_z),
         "quiet": True,
     })
 
@@ -1040,7 +1103,8 @@ def get_lobby_positions_json() -> str:
     Return a compact JSON array of all online non-self lobby members with their
     current room ID and world-space position, for use by the phantom actor system.
 
-    Each entry: {"cid": int, "n": str, "room": int, "x": int, "y": int, "z": int, "hp": int}
+    Each entry includes identity, position, velocity, animation, rotation, and
+    character fields used by the remote cutscene-model renderer.
 
     Fields:
       "cid"  – client ID (unique per player, stable within a session).
@@ -1070,7 +1134,7 @@ def get_lobby_positions_json() -> str:
             py = int(v.get("posY", 0)) if has_pos else 0
             pz = int(v.get("posZ", 0)) if has_pos else 0
             char_lookup = {"Goemon": 0, "Ebisumaru": 1, "Sasuke": 2, "Yae": 3}
-            ch = char_lookup.get(v.get("character", "Goemon"), 0)
+            ch = char_lookup.get(v.get("character", ""), -1)
             result.append({
                 "cid": cid,
                 "n": v.get("name", f"Player{cid}"),
@@ -1084,6 +1148,12 @@ def get_lobby_positions_json() -> str:
                 "vy": int(v.get("velY", 0)),
                 "vz": int(v.get("velZ", 0)),
                 "s": int(v.get("posSeq", 0)),
+                "a": int(v.get("action", -1)),
+                "af": int(v.get("animFrame100", 0)),
+                "al": int(v.get("animFrameCount100", 0)),
+                "rx": int(v.get("rotX", 0)),
+                "ry": int(v.get("rotY", 0)),
+                "rz": int(v.get("rotZ", 0)),
                 "tm": 1 if v.get("teamId", "") == _team_id else 0,
             })
     return json.dumps(result, separators=(",", ":"))
