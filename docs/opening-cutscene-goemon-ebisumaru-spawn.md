@@ -1,266 +1,210 @@
 # Opening Cutscene Goemon and Ebisumaru Spawn Trace
 
-## Scope
+## Scope and corrected result
 
-This document traces only the special Goemon and Ebisumaru objects used by the
-new-file opening cutscene. They are not gameplay/player actors, and they are not
-spawned by the room actor manager.
+This document traces only the Goemon and Ebisumaru presentation used by the
+new-file opening in static overlay `file_18` (ROM
+`0x676C80..0x694CA0`, VRAM `0x8020D2A0`). It does not treat later room actors
+or ordinary NPCs as either character.
 
-The trace was reconstructed from:
+The corrected result is asymmetric:
+
+- Ebisumaru is a standalone cutscene task with a model/display object created
+  directly from file `0x4D9`.
+- Goemon has a cutscene-specific controller task, but that task does **not**
+  create a Goemon model. It moves the already-live player model objects through
+  globals `D_801FC60C` and `D_801FC61C`, and the director changes Goemon's
+  animation through the live player task `D_801FC604`.
+
+Consequently, there is no standalone opening-Goemon file/model tuple that can
+be copied into `func_8000DBF0`. A recreation that forbids all player-renderer
+assets can reproduce standalone Ebisumaru, but cannot create a second visible
+Goemon from this opening path.
+
+The earlier identification of `func_802135E4` as Goemon and
+`func_80213D4C` as Ebisumaru was wrong. Runtime screenshots showed those exact
+resources as a food/throwable prop and a male NPC. Rechecking the director
+proves that both are later scene events, while the real character tasks are
+created together during opening initialization.
+
+## Evidence boundary
+
+The trace uses:
 
 - the supplied boot-to-new-file function log;
-- Ghidra decompilation of the stable engine functions;
-- a dedicated Ghidra import of static overlay `file_18`, whose code occupies ROM
-  `0x676C80..0x694CA0` and is loaded at VRAM `0x8020D2A0`;
-- debug strings in that overlay, including `OPENING_START:` and
-  `GOEMON_CREAT1`.
+- Ghidra MCP decompilation of stable task, resource, model, and player-action
+  helpers;
+- `file_18` instructions from the exact US ROM at the symbol-map ROM offsets,
+  necessary because several overlays reuse the same VRAM range;
+- the observed remote-render output, which matches the two previously selected
+  resource roots exactly.
 
-A separate import is important because several static overlays reuse the same
-VRAM range. Looking at an unrelated overlay at the same VRAM address produces a
-valid decompilation of the wrong code.
+The relevant stable Ghidra results are:
 
-## Result
+- `func_80013AC4` walks a zero-terminated list and loads each file through
+  `func_80013B14`;
+- `func_8000DBF0` creates and binds a model/display record;
+- `func_801DAC7C`/`func_801DAD68` select an action on the live player task;
+- `func_8001B5AC` resolves a model pointer and returns its frame count.
 
-The opening overlay creates both characters as ordinary engine tasks with
-attached model/display objects:
+## Opening initialization path
 
-```text
-new-file setup
-  func_8000B640_C240
-  func_8000B5D0_C1D0
-  func_8000B3E4_BFE4
-  func_80020440_21040                 select/load the static overlay pair
-    func_800203D4_20FD4
-    func_80211EA0_67B880             file_18 opening entry point
-      func_80211D7C_67B75C           create opening director
-        func_8020D2E0_676CC0         opening resource/setup work
-        func_8020D540_676F20         opening camera/render setup
-        func_8020D998_677378         per-frame opening state machine
-          func_802135E4_67CFC4       create Goemon or a nearby scene prop
-            func_80213540_67CF20     Goemon/prop movement callback
-          func_80213D4C_67D72C       create Ebisumaru
-            func_802139C4_67D3A4     Ebisumaru movement/animation callback
-            func_80213B8C_67D56C     change Ebisumaru visual variant
-            func_80213C84_67D664     set interpolation duration
-            func_80213C90_67D670     set movement target
-```
-
-The supplied log contains this exact sequence: `func_80211EA0` through
-`func_8020D998` begins at log lines 507-512, the Goemon creator/callback appears
-at lines 680 and 685, and the Ebisumaru creator and helpers appear at lines
-732-737.
-
-## Entering the opening overlay
-
-`func_80020440_21040` selects and loads a pair of static overlays through
-`func_800203D4_20FD4`. For the new-file opening it dispatches
-`func_80211EA0_67B880` in `file_18`.
-
-`func_80211EA0_67B880` reads the opening-scene selector and chooses the opening
-branch. That branch calls `func_80211D7C_67B75C`, which:
-
-1. creates the opening director task with the engine task allocator;
-2. installs `func_8020D998_677378` as its update callback;
-3. initializes the cutscene resources, camera, and render state through
-   `func_8020D2E0_676CC0` and `func_8020D540_676F20`.
-
-`func_8020D998_677378` is a 34-state director. The two requested characters are
-created in director state 10. The state owns every task described below and
-explicitly destroys them before moving to state 11.
-
-## Goemon creation
-
-At state-10 counter value 1, the director calls:
-
-```c
-func_802135E4_67CFC4(
-    director,
-    0,                    // type 0: Goemon
-    { 90.0, 20.0, -90.0 },
-    { -1.8, 0.5, 0.0 }
-);
-```
-
-The returned task is retained in the director's state work area at `+0x30`.
-The director also plays sound `0x28A` at this point.
-
-Ghidra shows `func_802135E4_67CFC4` doing the following for type 0:
-
-1. Allocate a child task through `func_80034E08` and give it callback
-   `func_80213540_67CF20`.
-2. Create the model/display object through `func_8000DBF0` using:
-   - resource file id `0x288`;
-   - flagged model pointer `0x180000AC`, which resolves to offset `0xAC` in
-     that resource;
-   - animation/context pointer `0x8006D920`;
-   - scale `0.1`;
-   - the position supplied by the director.
-3. Store velocity in task fields `+0x60`, `+0x64`, and `+0x68`.
-4. Set all three model rotations to `0x8000` for type 0.
-
-The nearby `GOEMON_CREAT1` debug string and the type-0 model branch identify
-this object as the cutscene Goemon.
-
-The same creator is called again at counter values 20 and 40 with type 1 and
-type 2. Those objects use model pointers `0x480065F0` and `0x48003EC0` from the
-same resource file and are scene props, not Ebisumaru. Their returned tasks are
-stored at `+0x34` and `+0x38`. Treating the second call as “the second
-character” is therefore incorrect.
-
-### Goemon update behavior
-
-`func_80213540_67CF20` is a small ballistic-motion callback:
+The opening entry creates a director whose update function is
+`func_8020D998_677378`. During its initialization branch, that director does
+the following:
 
 ```text
-vertical_velocity -= 0.1
-model.position     += velocity
-
-if model.y < 0:
-    model.y = 0
-    velocity.x /=  2
-    velocity.y /= -2
-    velocity.z /=  2
+func_8020D998_677378
+  func_8020D818_6771F8             load initial opening resource list
+    func_80013AC4
+      files 0x71, 0x4D9, 0x4AB, 0x4DA
+  func_80212684_67C064             create Goemon controller
+    callback func_80211F60_67B940
+  func_80212DA4_67C784             create standalone Ebisumaru
+    callback func_802126FC_67C0DC
 ```
 
-This is a self-contained cutscene movement task. It does not initialize a
-gameplay actor record and never supplies an actor id to the actor manager.
+The exact director call sites are:
 
-## Ebisumaru creation
+| Operation | VRAM call site | ROM call site |
+| --- | ---: | ---: |
+| Load initial opening files | `0x8020DA6C` | `0x67744C` |
+| Create Goemon controller | `0x8020DA90` | `0x677470` |
+| Create Ebisumaru | `0x8020DAAC` | `0x67748C` |
 
-At state-10 counter value `195` (`0xC3`), the director calls:
+The director passes these initial positions:
 
-```c
-ebi = func_80213D4C_67D72C(director, 80.0, 0.0, -90.0);
-func_80213C84_67D664(ebi, 80.0);
-func_80213B8C_67D56C(ebi, 1);
-func_80213C90_67D670(ebi, 40.0, -90.0);
+- Goemon controller: `(90.0, 0.0, -80.0)`;
+- Ebisumaru: `(90.0, 0.0, -90.0)`.
+
+It retains the Goemon controller at director work offset `+0x10` and the
+Ebisumaru task at `+0x14`. Later director states repeatedly operate on these
+same two tasks.
+
+## Goemon: controller around the live player renderer
+
+`func_80212684_67C064` allocates a child task with callback
+`func_80211F60_67B940`. It stores interpolation/controller state, including the
+initial coordinates, but never calls `func_8000DBF0` and never creates a model
+record.
+
+`func_80211F60_67B940` updates the controller's position, rotation, and scale.
+It then writes those values into the two existing player display objects held
+by:
+
+- `D_801FC60C`: the live player's primary model/display object;
+- `D_801FC61C`: the related secondary player display object.
+
+The opening director changes Goemon's animations by calling
+`func_801DAC7C` on `D_801FC604`, the live player task. Ghidra decompilation of
+`func_801DAD68`, which `func_801DAC7C` wraps, shows it indexing the selected
+character's player action table and rebinding the live player's model record.
+
+This is the decisive distinction:
+
+```text
+Goemon opening task
+  owns controller state
+  does not own/create a Goemon model
+  drives the existing player renderer
+
+Ebisumaru opening task
+  owns controller state
+  creates and owns its cutscene model
 ```
 
-The returned Ebisumaru task is retained at director state-work offset `+0x18`.
+Calling `func_80212684` a standalone Goemon model creator is therefore
+incorrect. Spawning another copy of its callback would move the local player
+objects, not render an independent remote Goemon.
 
-`func_80213D4C_67D72C`:
+## Ebisumaru: standalone cutscene model
 
-1. creates a child task through `func_80034E08` with callback
-   `func_802139C4_67D3A4`;
-2. creates its model/display object through `func_8000DBF0` with scale `0.1`;
-3. initially selects resource file `0x277` and flagged model pointer
-   `0x18000554` (resource offset `0x554`), with animation/context pointer
-   `0x8006D898`;
-4. stores the destination coordinates `80.0, 0.0, -90.0` in task fields
-   `+0x68`, `+0x74`, and `+0x80`;
-5. initializes a secondary model/animation pointer from the created model.
+`func_80212DA4_67C784` is the standalone Ebisumaru creator. It:
 
-The creator starts the render object at zeroed coordinates. The subsequent
-interpolation and target calls move it into the shot.
+1. allocates a child task through `func_80034E08` with callback
+   `func_802126FC_67C0DC`;
+2. calls `func_8000DBF0` with the exact model arguments below;
+3. stores the initial coordinates in its controller work area;
+4. allocates a related secondary kind-2 display record used by its update
+   callback.
 
-### Visual-variant change
+The verified model arguments are:
 
-At counter value `275` (`0x113`), the director performs the cutscene's
-Ebisumaru clothing/underwear change:
+| Field | Value |
+| --- | ---: |
+| Resource file | `0x4D9` |
+| Flagged model pointer | `0x68000B0C` |
+| Animation context | `0xC006D898` |
+| Rotation | `0, 0, 0` |
+| Scale | `0.1, 0.1, 0.1` |
+| Secondary file id | `0` |
 
-```c
-func_80213B8C_67D56C(ebi, 2);
-func_80213C90_67D670(ebi, 35.0, -75.0);
-```
+The pointer `0x68000B0C` resolves through resource slot 8 to offset `0xB0C`
+inside file `0x4D9`. It is not the `0x18000554` pointer from file `0x277`
+that produced the male NPC in the remote-player screenshot.
 
-It also plays sound `0x28B`. Variant 2 changes the existing render object to
-resource file `0x4D8`, flagged model pointer `0x18001A3C` (resource offset
-`0x1A3C`), then resolves the new resource and resets the model's animation
-frame.
+### Ebisumaru animation selection
 
-The complete selector in `func_80213B8C_67D56C` is:
+The director calls `func_80212A04_67C3E4` to change Ebisumaru's animation.
+That function selects one of nine model/animation pointers in file `0x4D9`,
+sets a per-animation frame step, and resets the model frame. Its initial pointer
+is `0x68000B0C`.
 
-| Variant | Resource file | Model pointer | Animation step |
-| ---: | ---: | ---: | ---: |
-| 0 | `0x277` | `0x180009B4` | `0.2` |
-| 1 | `0x277` | `0x18000554` | `0.3` |
-| 2 | `0x4D8` | `0x18001A3C` | `0.2` |
+`func_802126FC_67C0DC` advances and wraps the selected model frame, applies
+controller interpolation, and copies the resulting transform and render state
+to the attached records each frame. A remote recreation may map the sender's
+normalized animation phase onto this fixed cutscene clip by writing model
+frame `+0x28` and bounding it with `func_8001B5AC`.
 
-The state-10 timing, the initial variant-1 selection, and the later variant-2
-model/resource replacement match the on-screen Ebisumaru gag and distinguish
-this task from the Goemon-adjacent props.
+## The two previously misidentified functions
 
-### Ebisumaru update behavior
+### `func_802135E4_67CFC4`
 
-`func_802139C4_67D3A4`:
+This creator is first called much later at director call site `0x8020E0D4`.
+Its callback `func_80213540_67CF20` applies gravity, velocity, ground collision,
+and bounce damping. The type-0 resource tuple is:
 
-- moves the task's current coordinates toward its stored targets using
-  per-axis interpolation steps;
-- advances the selected model animation by the variant's animation step and
-  wraps/clamps it against the animation length;
-- copies the task's rotation and interpolated coordinates into the attached
-  model every frame.
+- file `0x288`;
+- pointer `0x180000AC`;
+- context `0x8006D920`.
 
-`func_80213C84_67D664` sets the interpolation duration.
-`func_80213C90_67D670` stores the next movement target, calculates the
-per-frame deltas, and updates the facing angle.
+That tuple is the food/throwable-looking object in the screenshot, not Goemon.
+The nearby `GOEMON_CREAT1` debug text describes the surrounding scene event;
+it is not sufficient evidence that the created model is Goemon.
 
-## Shared model-resource path
+### `func_80213D4C_67D72C`
 
-Both creators ultimately call `func_8000DBF0`. Its decompilation shows that it
-allocates a model/display object, writes its model and animation/context
-pointers, position, rotation, scale, and resource ids, and then calls
-`func_80014218_14E18` to resolve the required loaded resources.
+This creator is called later at `0x8020E428` and produces the male NPC shown in
+the screenshot. Its initial tuple is file `0x277`, pointer `0x18000554`, and
+context `0x8006D898`. Its variant/interpolation helpers operate on that scene
+NPC; they are not the standalone Ebisumaru animation helpers.
 
-The opening setup includes the resources used here in its load list, including
-`0x288`, `0x277`, and `0x4D8`. The flagged model values passed by the creators
-are resource-relative references, not gameplay character ids.
+## Implementation consequence
 
-## Lifetime and cleanup
+The remote renderer must use file `0x4D9`, pointer `0x68000B0C`, and context
+`0xC006D898` for standalone cutscene Ebisumaru.
 
-At state-10 counter value `450` (`0x1C2`), the director advances to state 11
-and deletes:
+For Goemon, the opening trace offers only two truthful choices:
 
-- the Goemon task at director work `+0x30`;
-- the two prop tasks at `+0x34` and `+0x38`;
-- the Ebisumaru task at `+0x18`.
+1. keep Goemon nameplate-only while preserving the prohibition on all
+   playable-renderer data; or
+2. authorize use of Goemon's render assets to create an independent plain
+   model task, while still avoiding the playable actor constructor, player
+   manager, and gameplay actor behavior.
 
-Deletion uses the normal task cleanup helper (`func_80034EF8_35AF8`). The
-characters therefore exist only inside this opening-director state.
+Using `0x288/0x180000AC` is not a third choice; it is the wrong prop proven by
+both its ballistic callback and the runtime screenshot.
 
-## Address reference
-
-All overlay addresses below are from `file_18`:
+## Correct address reference
 
 | Purpose | VRAM | ROM |
 | --- | ---: | ---: |
-| Opening entry point | `0x80211EA0` | `0x67B880` |
-| Create opening director | `0x80211D7C` | `0x67B75C` |
 | Opening state machine | `0x8020D998` | `0x677378` |
-| Goemon/prop creator | `0x802135E4` | `0x67CFC4` |
-| Goemon/prop update | `0x80213540` | `0x67CF20` |
-| Ebisumaru update | `0x802139C4` | `0x67D3A4` |
-| Ebisumaru variant selector | `0x80213B8C` | `0x67D56C` |
-| Ebisumaru interpolation duration | `0x80213C84` | `0x67D664` |
-| Ebisumaru movement target | `0x80213C90` | `0x67D670` |
-| Ebisumaru creator | `0x80213D4C` | `0x67D72C` |
-
-Useful call sites inside `func_8020D998_677378` are:
-
-| State-10 action | VRAM call site | ROM call site |
-| --- | ---: | ---: |
-| Create Goemon | `0x8020E0D4` | `0x677AB4` |
-| Create type-1 prop | `0x8020E13C` | `0x677B1C` |
-| Create type-2 prop | `0x8020E1F0` | `0x677BD0` |
-| Create Ebisumaru | `0x8020E428` | `0x677E08` |
-| Select Ebisumaru variant 2 | `0x8020E48C` | `0x677E6C` |
-
-## Code that must not be used for these characters
-
-The function log transitions out of `file_18` after the opening finishes. Only
-then does it load the gameplay room and run the room actor manager. Those later
-spawns are not part of the opening sequence.
-
-In particular:
-
-- do not use the local playable-character constructor or character-change
-  callback;
-- do not use the old playable-player or particle remote-rendering paths as a
-  source of character model data; the current remote renderer instead
-  reproduces the cutscene task/model arguments through stable engine helpers;
-- do not route these objects through `actor_manager_spawn_actors`;
-- do not use actor ids `0x2D3` or `0x2D4`: those later overlay initializers are
-  the Lord of Oedo and Princess Yuki, not Goemon and Ebisumaru.
-
-For an opening-cutscene hook or recreation, the correct boundary is the
-`file_18` director and its four task/model functions described above.
+| Initial resource-list wrapper | `0x8020D818` | `0x6771F8` |
+| Goemon controller update | `0x80211F60` | `0x67B940` |
+| Goemon controller creator | `0x80212684` | `0x67C064` |
+| Ebisumaru update | `0x802126FC` | `0x67C0DC` |
+| Ebisumaru animation selector | `0x80212A04` | `0x67C3E4` |
+| Ebisumaru creator | `0x80212DA4` | `0x67C784` |
+| Wrong ballistic prop creator | `0x802135E4` | `0x67CFC4` |
+| Wrong scene-NPC creator | `0x80213D4C` | `0x67D72C` |

@@ -191,9 +191,13 @@ created task here, copies its first attached object from task `+0x18` into
 `D_801FC60C`, and later player action binding writes the active action id at
 task `+0xCC`.
 
-Anchor parents each remote cutscene-model task to this task. When the pointer
-changes, cached remote pointers are discarded because the old task tree has
-already been destroyed by the room transition.
+Anchor parents each standalone remote cutscene-model task to this task. When
+the pointer changes, cached remote pointers are discarded because the old task
+tree has already been destroyed by the room transition.
+
+The corrected `file_18` trace also shows the opening Goemon controller writing
+directly to this task's player model and selecting Goemon animations through
+`func_801DAC7C`. The opening does not allocate a second Goemon model.
 
 ### `D_801FC60C_5B851C`
 
@@ -235,10 +239,8 @@ matching the opening-cutscene creator pattern.
 
 Gameplay stage-resource dispatcher. Ghidra shows it calling the load function
 selected from the current stage metadata. Anchor hooks its return and appends
-the two opening resources only after normal stage resource loading:
-
-- file `0x288` for cutscene Goemon;
-- file `0x277` for the normal cutscene Ebisumaru variant.
+file `0x4D9`, the verified standalone opening-Ebisumaru resource, only after
+normal stage resource loading.
 
 This keeps resource loading out of the per-frame update hook.
 
@@ -247,40 +249,34 @@ This keeps resource loading out of the per-frame update hook.
 Loads or reuses one file in the game's wave/resource registry. Ghidra shows it
 finding the next registry entry, decompressing the requested file into the
 registry's current end pointer, resolving resource references, and returning
-the aligned next address. The remote resource hook calls this for `0x288` and
-`0x277`.
+the aligned next address. The remote resource hook calls this for `0x4D9`.
 
 ### `func_800141C4_14DC4`
 
 Looks up a loaded resource file and returns its registered data pointer, or
-`-1` when absent. Anchor verifies both required files before constructing a
-remote model.
+`-1` when absent. Anchor verifies file `0x4D9` before constructing a standalone
+remote Ebisumaru model.
 
 ### `func_8000DBF0_E7F0`
 
-This is the stable model/display allocator called by both decompiled opening
-creators. It allocates one kind-2 record, writes the model pointer, animation
+This is the stable model/display allocator called by the standalone Ebisumaru
+creator. It allocates one kind-2 record, writes the model pointer, animation
 context, transform, scale, and resource ids, then resolves those resources via
 `func_80014218_14E18`.
 
-The remote mapping reproduces the verified cutscene arguments:
+The verified Ebisumaru arguments are file `0x4D9`, model pointer
+`0x68000B0C`, animation context `0xC006D898`, zero rotation, and scale `0.1`.
 
-| Character | File | Model pointer | Animation context | Base rotation |
-| --- | ---: | ---: | ---: | --- |
-| Goemon | `0x288` | `0x180000AC` | `0x8006D920` | `0x8000,0x8000,0x8000` |
-| Ebisumaru | `0x277` | `0x18000554` | `0x8006D898` | `0,0,0` |
-
-Both use scale `0.1`. Sasuke and Yae do not have verified models in this
-opening sequence, so they remain nameplate-only instead of being assigned an
-incorrect character model.
+The opening Goemon controller does not call this allocator. It drives the live
+player model globals instead. Goemon, Sasuke, and Yae therefore remain
+nameplate-only under the current no-playable-renderer-data constraint instead
+of being assigned an incorrect prop or NPC model.
 
 ### `func_8001B5AC_1C1AC`
 
 Resolves the object's flagged model pointer and returns its animation frame
-count. The verified cutscene Goemon model reports 2 frames and normal
-Ebisumaru reports 20. Anchor maps the sender's `frame/frame_count` loop phase to
-the receiver's cutscene clip and predicts between packets using the observed
-phase delta.
+count. Anchor maps the sender's `frame/frame_count` loop phase to Ebisumaru's
+cutscene clip and predicts between packets using the observed phase delta.
 
 ### `func_80034EF8_35AF8`
 

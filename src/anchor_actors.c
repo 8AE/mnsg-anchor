@@ -2,9 +2,9 @@
  * @file anchor_actors.c
  * @brief Anchor remote-player publishing and cutscene-model rendering.
  *
- * Remote Goemon and Ebisumaru players are rendered with the model/resource
- * path used by the new-file opening cutscene. No playable-player constructor,
- * actor-manager record, or player-character resource table is used here.
+ * Standalone remote models use only model/resource paths created directly by
+ * the new-file opening cutscene. No playable-player constructor, actor-manager
+ * record, or player-character resource table is used here.
  */
 
 #include "modding.h"
@@ -24,14 +24,10 @@
 #define REMOTE_VELOCITY_LEAD_SECONDS 0.04f
 #define REMOTE_YAW_SPEED_THRESHOLD_SQ 64
 
-#define CHARACTER_GOEMON 0
 #define CHARACTER_EBISUMARU 1
-#define CUTSCENE_GOEMON_FILE_ID 0x288
-#define CUTSCENE_EBISUMARU_FILE_ID 0x277
-#define CUTSCENE_GOEMON_MODEL_PTR 0x180000ACu
-#define CUTSCENE_EBISUMARU_MODEL_PTR 0x18000554u
-#define CUTSCENE_GOEMON_ANIM_CONTEXT 0x8006D920u
-#define CUTSCENE_EBISUMARU_ANIM_CONTEXT 0x8006D898u
+#define CUTSCENE_EBISUMARU_FILE_ID 0x4D9
+#define CUTSCENE_EBISUMARU_MODEL_PTR 0x68000B0Cu
+#define CUTSCENE_EBISUMARU_ANIM_CONTEXT 0xC006D898u
 #define CUTSCENE_MODEL_SCALE 0.1f
 
 typedef struct PlayerObject
@@ -187,7 +183,7 @@ static int s_last_sent_rot_y;
 static int s_last_sent_rot_z;
 static unsigned int s_last_sent_room = 0xffffffffu;
 static int s_lobby_refresh_timer;
-static int s_cutscene_resources_ready;
+static int s_cutscene_ebisumaru_resource_ready;
 static void *s_cutscene_owner_task;
 
 static const char *const s_char_names[4] = {
@@ -261,18 +257,16 @@ static int resource_is_loaded(unsigned int file_id)
     return resource != 0 && resource != (void *)(unsigned long)0xffffffffu;
 }
 
-/* Gameplay uses a different overlay than file_18, so the opening creators
+/* Gameplay uses a different overlay than file_18, so its Ebisumaru creator
  * cannot be called directly. This return hook runs after the gameplay stage's
- * normal resource list and appends only the two verified cutscene files. */
+ * normal resource list and appends the verified standalone cutscene file. */
 RECOMP_HOOK_RETURN("func_8020D6BC_5C8B8C")
 void anchor_load_remote_cutscene_resources(void)
 {
     /* Use the normal resource loader here because func_8000DBF0 resolves its
      * flagged model pointers through the same registry immediately afterward. */
-    func_80013B14_14714(CUTSCENE_GOEMON_FILE_ID);
     func_80013B14_14714(CUTSCENE_EBISUMARU_FILE_ID);
-    s_cutscene_resources_ready =
-        resource_is_loaded(CUTSCENE_GOEMON_FILE_ID) &&
+    s_cutscene_ebisumaru_resource_ready =
         resource_is_loaded(CUTSCENE_EBISUMARU_FILE_ID);
 }
 
@@ -601,17 +595,6 @@ static int get_cutscene_model_spec(int ch, CutsceneModelSpec *spec)
 {
     if (!spec)
         return 0;
-    if (ch == CHARACTER_GOEMON)
-    {
-        spec->model_ptr = CUTSCENE_GOEMON_MODEL_PTR;
-        spec->animation_context = CUTSCENE_GOEMON_ANIM_CONTEXT;
-        spec->file_id = CUTSCENE_GOEMON_FILE_ID;
-        spec->base_rot_x = (short)0x8000;
-        spec->base_rot_y = (short)0x8000;
-        spec->base_rot_z = (short)0x8000;
-        spec->default_frame_step = 0.0f;
-        return 1;
-    }
     if (ch == CHARACTER_EBISUMARU)
     {
         spec->model_ptr = CUTSCENE_EBISUMARU_MODEL_PTR;
@@ -729,14 +712,14 @@ static int create_cutscene_model(RemoteCutsceneSlot *slot,
 {
     CutsceneModelSpec spec;
 
-    if (!slot || !remote || !s_cutscene_resources_ready ||
+    if (!slot || !remote || !s_cutscene_ebisumaru_resource_ready ||
         !is_rdram_pointer(s_cutscene_owner_task) ||
         !get_cutscene_model_spec(remote->ch, &spec) ||
         !resource_is_loaded(spec.file_id))
         return 0;
 
-    /* Use the stable task helper to reproduce the first step of both file_18
-     * creators without calling overlay-local code at reused VRAM addresses. */
+    /* Use the stable task helper to reproduce the first step of the file_18
+     * Ebisumaru creator without calling overlay-local code at reused VRAM. */
     slot->task = func_80034E08_35A08(s_cutscene_owner_task,
                                      remote_cutscene_model_update, 0);
     if (!slot->task)
@@ -993,7 +976,7 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
         if (!remote->has_pos || remote->room != (int)D_800C7AB2)
             continue;
         smooth_remote_player(remote, &smoothed_remote);
-        if (remote->ch == CHARACTER_GOEMON || remote->ch == CHARACTER_EBISUMARU)
+        if (remote->ch == CHARACTER_EBISUMARU)
         {
             ensure_remote_cutscene_model(&smoothed_remote);
         }
