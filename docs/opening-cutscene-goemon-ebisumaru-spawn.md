@@ -10,16 +10,16 @@ or ordinary NPCs as either character.
 The corrected result is asymmetric:
 
 - Ebisumaru is a standalone cutscene task with a model/display object created
-  directly from file `0x4D9`.
+  directly from file `0x4D9`; this is intentionally the naked/fundoshi opening
+  variant seen in the runtime screenshot.
 - Goemon has a cutscene-specific controller task, but that task does **not**
   create a Goemon model. It moves the already-live player model objects through
   globals `D_801FC60C` and `D_801FC61C`, and the director changes Goemon's
   animation through the live player task `D_801FC604`.
 
 Consequently, there is no standalone opening-Goemon file/model tuple that can
-be copied into `func_8000DBF0`. A recreation that forbids all player-renderer
-assets can reproduce standalone Ebisumaru, but cannot create a second visible
-Goemon from this opening path.
+be copied into `func_8000DBF0`. A recreation limited to the opening resources
+can produce only the naked Ebisumaru and cannot create a second visible Goemon.
 
 The earlier identification of `func_802135E4` as Goemon and
 `func_80213D4C` as Ebisumaru was wrong. Runtime screenshots showed those exact
@@ -156,6 +156,24 @@ to the attached records each frame. A remote recreation may map the sender's
 normalized animation phase onto this fixed cutscene clip by writing model
 frame `+0x28` and bounding it with `func_8001B5AC`.
 
+The selector table confirms why the first remote prototype was stuck running:
+
+| Selector | Flagged pointer | Frame step |
+| ---: | ---: | ---: |
+| `0` | `0x68000B0C` | `0.5` |
+| `1` | `0x68001108` | `0.1` |
+| `2` | `0x68001B10` | `0.2` |
+| `3` | `0x68001F50` | `0.25` |
+| `4` | `0x680022C4` | `0.25` |
+| `5` | keeps the current pointer | resets phase |
+| `6` | `0x680026F0` | `0.1` |
+| `7` | `0x680004B0` | `0.1` |
+| `8` | `0x68002BB4` | `0.1` |
+
+These are nine special opening clips for the same fundoshi presentation, not
+the complete clothed Ebisumaru gameplay action set. Selector `0` is the
+running-looking clip used by the initial prototype.
+
 ## The two previously misidentified functions
 
 ### `func_802135E4_67CFC4`
@@ -179,21 +197,37 @@ the screenshot. Its initial tuple is file `0x277`, pointer `0x18000554`, and
 context `0x8006D898`. Its variant/interpolation helpers operate on that scene
 NPC; they are not the standalone Ebisumaru animation helpers.
 
-## Implementation consequence
+## Remote-render implementation consequence
 
-The remote renderer must use file `0x4D9`, pointer `0x68000B0C`, and context
-`0xC006D898` for standalone cutscene Ebisumaru.
+The first prototype faithfully created the standalone file-`0x4D9` task, which
+is why it displayed naked Ebisumaru and remained on its initial running clip.
+That tuple is correct for the opening but cannot satisfy a clothed, exact-action
+remote renderer. The corrected implementation therefore preserves the
+cutscene architecture while separating it from the opening's presentation
+assets:
 
-For Goemon, the opening trace offers only two truthful choices:
+1. create an independent plain child task with `func_80034E08`;
+2. attach one kind-2 model/display record with `func_8000DBF0`;
+3. never call the playable constructor, player manager, character-change
+   function, action-binding function, controls, or gameplay callbacks;
+4. stage only immutable Goemon/Ebisumaru render data at the scene-load hook;
+5. select the character's immutable `0x1C`-byte action record from the received
+   character/action ids, bind its display pointer to the plain object, and copy
+   the received frame and rotations.
 
-1. keep Goemon nameplate-only while preserving the prohibition on all
-   playable-renderer data; or
-2. authorize use of Goemon's render assets to create an independent plain
-   model task, while still avoiding the playable actor constructor, player
-   manager, and gameplay actor behavior.
+The render-only resource mapping is:
 
-Using `0x288/0x180000AC` is not a third choice; it is the wrong prop proven by
-both its ballistic callback and the runtime screenshot.
+| Remote character | Broad render file | Raw action-model file |
+| --- | ---: | ---: |
+| Goemon | `0x120` | `0x123` |
+| Ebisumaru | `0x124` | `0x127` |
+
+This produces clothed Goemon/Ebisumaru and a one-to-one action clip without
+creating another playable actor. The action table is read as immutable model
+metadata; none of its playable behavior callbacks are installed or executed.
+
+Using `0x288/0x180000AC` or `0x277/0x18000554` is still incorrect: those are
+the proven ballistic prop and male scene NPC from the earlier screenshot.
 
 ## Correct address reference
 

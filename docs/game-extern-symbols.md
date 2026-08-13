@@ -182,115 +182,133 @@ Global game-system pointer. Direct race start writes the selected destination
 stage through this pointer and also updates the static game-system destination
 fields before entering the warp/load step.
 
-## Remote Cutscene-Model Tasks
+## Remote Cutscene-Style Model Tasks
+
+The renderer follows the opening cutscene's task architecture but does not call
+an overlay-local character creator and does not create another playable actor.
+It uses immutable Goemon/Ebisumaru display data on a plain child task.
 
 ### `D_801FC604_5B8514`
 
-Ghidra shows this as the live player task. `func_801CB668` stores the newly
-created task here, copies its first attached object from task `+0x18` into
-`D_801FC60C`, and later player action binding writes the active action id at
-task `+0xCC`.
-
-Anchor parents each standalone remote cutscene-model task to this task. When
-the pointer changes, cached remote pointers are discarded because the old task
-tree has already been destroyed by the room transition.
-
-The corrected `file_18` trace also shows the opening Goemon controller writing
-directly to this task's player model and selecting Goemon animations through
-`func_801DAC7C`. The opening does not allocate a second Goemon model.
+Ghidra shows this as the live player task. Anchor reads its final action byte at
+`+0xCC` for publishing and uses the task only as the parent of independent
+remote render children. When the pointer changes, mod-side handles are
+discarded without touching the destroyed task tree.
 
 ### `D_801FC60C_5B851C`
 
-Current player model/display object. Anchor reads:
+Current local player model/display object. Anchor reads:
 
-- `+0x08`: world X
-- `+0x0c`: world Y
-- `+0x10`: world Z
-- `+0x14/+0x16/+0x18`: X/Y/Z rotation
-- `+0x28`: current animation frame
+- `+0x08/+0x0C/+0x10`: world position;
+- `+0x14/+0x16/+0x18`: rotation;
+- `+0x28`: current animation frame.
 
-The local frame count is obtained with `func_8001B5AC_1C1AC`. Frame, frame
-count, action, and rotations are sent with the position packet so another
-client can map the normalized animation loop phase onto a cutscene model whose clip
-has a different length.
+The frame count is obtained with `func_8001B5AC`. Character, action, frame,
+frame count, and rotations are sent together so the receiving client binds the
+same character/action record and predicts the one frame between packets.
 
-### `D_8020D1C0_5C90D0` And `D_8020D1D0_5C90E0`
+### `D_8020D1C0_5C90D0` and `D_8020D1D0_5C90E0`
 
-Camera vector and horizontal radius. Camera routines write both globals; the
-nameplate code uses the vector as the offset from player position to camera
-position, then divides by the radius to derive a forward vector for simple 3D
-to 2D projection.
+Engine-maintained camera offset and radius. They are read only for nameplate
+projection and are not involved in model creation.
 
 ### `func_80034E08_35A08`
 
-Allocates and inserts an engine task. Decompilation shows this wrapper:
-
-1. Calls `func_80034B58(task_list, update, flags)` to take a task from the
-   global free list, clear it, attach it to `task_list`, store the update
-   callback at task `+0x0c`, set flags at `+0x28`, and stamp it with a frame or
-   time value.
-2. Calls `func_80034D24(task)` to reorder the task in its linked list by
-   priority/depth.
-
-Anchor uses it to create one child task per visible supported remote character,
-matching the opening-cutscene creator pattern.
-
-### `func_8020D6BC_5C8B8C`
-
-Gameplay stage-resource dispatcher. Ghidra shows it calling the load function
-selected from the current stage metadata. Anchor hooks its return and appends
-file `0x4D9`, the verified standalone opening-Ebisumaru resource, only after
-normal stage resource loading.
-
-This keeps resource loading out of the per-frame update hook.
-
-### `func_80013B14_14714`
-
-Loads or reuses one file in the game's wave/resource registry. Ghidra shows it
-finding the next registry entry, decompressing the requested file into the
-registry's current end pointer, resolving resource references, and returning
-the aligned next address. The remote resource hook calls this for `0x4D9`.
-
-### `func_800141C4_14DC4`
-
-Looks up a loaded resource file and returns its registered data pointer, or
-`-1` when absent. Anchor verifies file `0x4D9` before constructing a standalone
-remote Ebisumaru model.
+Allocates and inserts an engine task. Anchor uses it to create one plain child
+task per visible Goemon/Ebisumaru remote, matching the standalone ownership
+pattern traced in the opening.
 
 ### `func_8000DBF0_E7F0`
 
-This is the stable model/display allocator called by the standalone Ebisumaru
-creator. It allocates one kind-2 record, writes the model pointer, animation
-context, transform, scale, and resource ids, then resolves those resources via
-`func_80014218_14E18`.
+Allocates one kind-2 model/display record and initializes its transform,
+animation context, and segment bindings. Anchor calls it with a null display
+pointer so the task begins hidden, then binds validated model data after every
+required segment base is ready.
 
-The verified Ebisumaru arguments are file `0x4D9`, model pointer
-`0x68000B0C`, animation context `0xC006D898`, zero rotation, and scale `0.1`.
+This is a generic display allocator used by cutscenes. It does not initialize a
+player task, controls, collision, inventory, or gameplay behavior.
 
-The opening Goemon controller does not call this allocator. It drives the live
-player model globals instead. Goemon, Sasuke, and Yae therefore remain
-nameplate-only under the current no-playable-renderer-data constraint instead
-of being assigned an incorrect prop or NPC model.
+### `func_8020D6BC_5C8B8C`
+
+Gameplay stage-resource dispatcher. Its return hook is the only place the
+remote renderer stages broad Goemon/Ebisumaru data and performs the initial raw
+action-file DMA. No broad resource loading occurs in the per-frame hook.
+
+### `func_80013B14_14714` and `func_800141C4_14DC4`
+
+`func_80013B14` loads or reuses a broad file in the scene resource registry;
+`func_800141C4` returns the resident base or `-1`. The renderer loads and
+validates these immutable broad files:
+
+| Character | Broad file |
+| --- | ---: |
+| Goemon | `0x120` |
+| Ebisumaru | `0x124` |
+
+The registered base is bound to object segment 9 at `+0x40`.
+
+### `func_80001D68_2968`, `func_80001D94_2994`, and `func_80001640_2240`
+
+The first two functions return a file's ROM bounds; the third performs the
+blocking DMA. At the stage hook, Anchor copies the complete raw Goemon
+`0x123` and Ebisumaru `0x127` action-model files into persistent mod-owned
+buffers. Those bases are bound to object segment 8 at `+0x38`.
+
+### `D_80203F34_5BFE44`
+
+Four immutable character action arrays; each action record is `0x1C` bytes.
+The remote renderer reads only Goemon entry 0 or Ebisumaru entry 1. It uses the
+record's display pointer, animation speed, aux selector, and aux resource table.
+
+The renderer never calls `func_801DAC7C` or `func_801DAD68`, never installs
+`D_80203B90` behavior callbacks, and never mutates the live player task. The
+table is model metadata only.
+
+### `D_80204020_5BFF30` and `D_80204028_5BFF38`
+
+Immutable per-character file-id tables. The former selects the broad file; the
+latter selects the raw action-model file. They are indexed only with validated
+remote character ids 0 and 1.
+
+### `D_80203FF0_5BFF00` and `func_800145B4_151B4`
+
+The descriptor table identifies two auxiliary display segments. On an action
+change, the renderer reads the selected action's aux metadata, loads each
+nonzero resource into a slot-owned double buffer with `func_800145B4`, and
+binds the validated segment base. This preserves faces/parts belonging to the
+selected clothed action without borrowing the local player's buffers.
 
 ### `func_8001B5AC_1C1AC`
 
-Resolves the object's flagged model pointer and returns its animation frame
-count. Anchor maps the sender's `frame/frame_count` loop phase to Ebisumaru's
-cutscene clip and predicts between packets using the observed phase delta.
+Resolves the bound segmented display pointer and returns its clip frame count.
+The receiver snaps to each authoritative remote frame and derives the
+intervening frame step from consecutive packets, including zero for a paused
+animation.
 
 ### `func_80034EF8_35AF8`
 
-Deletes a task and its attached records. This is the cleanup function used by
-the opening director at the end of state 10. Anchor uses it when a remote
-leaves, changes to an unsupported character, disconnects, or exits the room.
+Deletes a live remote task and its attached records when a peer leaves the
+room, changes to an unsupported character, or disconnects. During room teardown
+the engine already owns task destruction, so Anchor only discards stale
+mod-side handles.
+
+## Corrected Opening-Resource Boundary
+
+The opening's standalone file-`0x4D9` Ebisumaru is intentionally the
+naked/fundoshi variant and its selector exposes only nine special opening
+clips. The opening Goemon controller drives the already-live local player model
+and never creates a standalone Goemon display object.
+
+Therefore the remote implementation keeps the opening's plain task/display
+architecture but not those presentation assets. Immutable clothed
+Goemon/Ebisumaru render data is bound to independent objects; no playable actor
+code runs.
 
 ## Hook Boundary
 
-The remote implementation follows the recomp hook compatibility model:
-
-- a return hook on `func_8020D6BC_5C8B8C` stages the two extra resources after
-  the game loads its stage resources;
-- a return hook on `func_80002040_2C40` publishes and applies the final
-  per-frame player state;
-- the overlay-local `file_18` creators are not patched or called while another
-  overlay occupies their VRAM addresses.
+- `RECOMP_HOOK_RETURN("func_8020D6BC_5C8B8C")` stages both characters after
+  normal stage resource loading.
+- `RECOMP_HOOK_RETURN("func_80002040_2C40")` publishes the final local state,
+  updates remote transforms/actions/frames, and draws nameplates.
+- Overlay-local `file_18` creators are neither patched nor called while
+  another overlay occupies their VRAM addresses.

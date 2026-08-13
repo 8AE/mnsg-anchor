@@ -1,15 +1,16 @@
 /**
  * @file anchor_actors.c
- * @brief Anchor remote-player publishing and cutscene-model rendering.
+ * @brief Anchor remote publishing and cutscene-style model rendering.
  *
- * Standalone remote models use only model/resource paths created directly by
- * the new-file opening cutscene. No playable-player constructor, actor-manager
- * record, or player-character resource table is used here.
+ * Remote Goemon/Ebisumaru models use standalone task/display objects like the
+ * opening cutscene. Model/action data is bound as immutable render input; no
+ * playable constructor, player actor, controls, or behavior callback is used.
  */
 
 #include "modding.h"
 #include "anchor.h"
 #include "anchor_nameplates.h"
+#include "anchor_player_models.h"
 
 #define ANCHOR_REMOTE_MAX 25
 #define POSITION_SEND_FRAMES 2
@@ -22,13 +23,9 @@
 #define REMOTE_SNAP_DISTANCE_SQ 250000.0f
 #define REMOTE_SMOOTHING_FACTOR 0.35f
 #define REMOTE_VELOCITY_LEAD_SECONDS 0.04f
-#define REMOTE_YAW_SPEED_THRESHOLD_SQ 64
 
+#define CHARACTER_GOEMON 0
 #define CHARACTER_EBISUMARU 1
-#define CUTSCENE_EBISUMARU_FILE_ID 0x4D9
-#define CUTSCENE_EBISUMARU_MODEL_PTR 0x68000B0Cu
-#define CUTSCENE_EBISUMARU_ANIM_CONTEXT 0xC006D898u
-#define CUTSCENE_MODEL_SCALE 0.1f
 
 typedef struct PlayerObject
 {
@@ -79,35 +76,6 @@ typedef struct RemoteSmoothing
     int seq;
 } RemoteSmoothing;
 
-typedef struct CutsceneModelSpec
-{
-    unsigned int model_ptr;
-    unsigned int animation_context;
-    unsigned short file_id;
-    short base_rot_x;
-    short base_rot_y;
-    short base_rot_z;
-    float default_frame_step;
-} CutsceneModelSpec;
-
-typedef struct RemoteCutsceneSlot
-{
-    int active;
-    int cid;
-    int seen;
-    int ch;
-    int last_seq;
-    int last_action;
-    int last_remote_frame_100;
-    int last_remote_frame_count_100;
-    short fallback_yaw;
-    float frame;
-    float frame_step;
-    float frame_count;
-    void *task;
-    void *model;
-} RemoteCutsceneSlot;
-
 /* Current room id. The remote renderer uses the same room boundary as the
  * game so it never leaves cutscene-model tasks visible across room changes. */
 extern unsigned short D_800C7AB2;
@@ -125,37 +93,6 @@ extern PlayerObject *D_801FC60C_5B851C;
 extern Vec3f D_8020D1C0_5C90D0;
 extern float D_8020D1D0_5C90E0;
 
-/* Allocate a child task and install its update callback. This is the stable
- * engine wrapper used by both opening-cutscene character creators. */
-extern void *func_80034E08_35A08(void *parent_task,
-                                  void (*update)(void *, void *),
-                                  unsigned short flags);
-
-/* Allocate and initialize one model/display record on a task. The opening
- * cutscene passes its model pointer, animation context, transform, scale, and
- * resource file id through this stable engine function. */
-extern void *func_8000DBF0_E7F0(void *task,
-                                 unsigned int model_ptr,
-                                 unsigned int animation_context,
-                                 float x, float y, float z,
-                                 short rot_x, short rot_y, short rot_z,
-                                 float scale_x, float scale_y, float scale_z,
-                                 unsigned short file_id,
-                                 unsigned short secondary_file_id);
-
-/* Delete a task and its attached records. The file_18 opening director uses
- * this exact helper when it removes Goemon and Ebisumaru at state 10's end. */
-extern void func_80034EF8_35AF8(void *task);
-
-/* Load one resource file into the game's wave/resource registry. The hook
- * below calls it immediately after normal stage resources load, never from
- * the per-frame remote update path. */
-extern void *func_80013B14_14714(unsigned int file_id);
-
-/* Return the registered data pointer for a loaded resource file, or -1 when
- * absent. This verifies both cutscene resources before model construction. */
-extern void *func_800141C4_14DC4(unsigned int file_id);
-
 /* Resolve the active model pointer and return its animation frame count.
  * Local counts are transmitted for normalized phase mapping; remote counts
  * bound the selected cutscene model's frame field. */
@@ -167,7 +104,7 @@ extern float func_8001B5AC_1C1AC(void *model);
 
 static RemotePlayer s_remote_players[ANCHOR_REMOTE_MAX];
 static RemoteSmoothing s_remote_smoothing[ANCHOR_REMOTE_MAX];
-static RemoteCutsceneSlot s_cutscene_slots[ANCHOR_REMOTE_MAX];
+static AnchorPlayerModelRemote s_remote_models[ANCHOR_REMOTE_MAX];
 static int s_remote_count;
 static int s_state_send_timer;
 static int s_position_keepalive_timer;
@@ -183,8 +120,6 @@ static int s_last_sent_rot_y;
 static int s_last_sent_rot_z;
 static unsigned int s_last_sent_room = 0xffffffffu;
 static int s_lobby_refresh_timer;
-static int s_cutscene_ebisumaru_resource_ready;
-static void *s_cutscene_owner_task;
 
 static const char *const s_char_names[4] = {
     "Goemon", "Ebisumaru", "Sasuke", "Yae"};
@@ -210,21 +145,6 @@ static const char *sfind(const char *hay, const char *needle)
     return 0;
 }
 
-static void write_u8_at(void *obj, unsigned int offset, unsigned char value)
-{
-    *(unsigned char *)((unsigned char *)obj + offset) = value;
-}
-
-static void write_u16_at(void *obj, unsigned int offset, unsigned short value)
-{
-    *(unsigned short *)((unsigned char *)obj + offset) = value;
-}
-
-static void write_float_at(void *obj, unsigned int offset, float value)
-{
-    *(float *)((unsigned char *)obj + offset) = value;
-}
-
 static unsigned char read_u8_at(const void *obj, unsigned int offset)
 {
     return *(const unsigned char *)((const unsigned char *)obj + offset);
@@ -248,26 +168,15 @@ static int is_rdram_pointer(const void *ptr)
     return addr != 0 && phys < 0x00800000u;
 }
 
-static int resource_is_loaded(unsigned int file_id)
-{
-    /* Use the engine registry lookup so model creation is attempted only after
-     * the return hook has made the file available to flagged model pointers. */
-    void *resource = func_800141C4_14DC4(file_id);
-
-    return resource != 0 && resource != (void *)(unsigned long)0xffffffffu;
-}
-
-/* Gameplay uses a different overlay than file_18, so its Ebisumaru creator
- * cannot be called directly. This return hook runs after the gameplay stage's
- * normal resource list and appends the verified standalone cutscene file. */
+/* Gameplay uses a different overlay than file_18. This return hook runs after
+ * normal stage resources and stages the immutable Goemon/Ebisumaru render
+ * files required by the standalone remote model tasks. */
 RECOMP_HOOK_RETURN("func_8020D6BC_5C8B8C")
 void anchor_load_remote_cutscene_resources(void)
 {
-    /* Use the normal resource loader here because func_8000DBF0 resolves its
-     * flagged model pointers through the same registry immediately afterward. */
-    func_80013B14_14714(CUTSCENE_EBISUMARU_FILE_ID);
-    s_cutscene_ebisumaru_resource_ready =
-        resource_is_loaded(CUTSCENE_EBISUMARU_FILE_ID);
+    /* Use the dedicated stage-load path so broad decompression and whole-file
+     * action DMA never occur inside the per-frame remote update hook. */
+    anchor_player_models_load_resources();
 }
 
 static int parse_int_after(const char *obj, const char *key, int fallback)
@@ -496,8 +405,8 @@ static void publish_local_state(PlayerObject *local_obj)
         s_last_sent_action = -2;
     }
     anchor_set_local_room(room);
-    /* Read only the selected-character id to choose the matching cutscene
-     * model on peers; no playable model resource or constructor is reused. */
+    /* Read only the selected-character id so peers select the matching
+     * immutable render assets; no playable constructor or behavior is run. */
     char_idx = *CURRENT_CHAR_PTR & 3;
     anchor_set_character(s_char_names[char_idx]);
     if (s_state_send_timer > 0)
@@ -591,312 +500,6 @@ static void refresh_lobby(void)
         recomp_free(json);
 }
 
-static int get_cutscene_model_spec(int ch, CutsceneModelSpec *spec)
-{
-    if (!spec)
-        return 0;
-    if (ch == CHARACTER_EBISUMARU)
-    {
-        spec->model_ptr = CUTSCENE_EBISUMARU_MODEL_PTR;
-        spec->animation_context = CUTSCENE_EBISUMARU_ANIM_CONTEXT;
-        spec->file_id = CUTSCENE_EBISUMARU_FILE_ID;
-        spec->base_rot_x = 0;
-        spec->base_rot_y = 0;
-        spec->base_rot_z = 0;
-        spec->default_frame_step = 0.3f;
-        return 1;
-    }
-    return 0;
-}
-
-static RemoteCutsceneSlot *find_cutscene_slot_by_cid(int cid)
-{
-    int i;
-
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
-        if (s_cutscene_slots[i].active && s_cutscene_slots[i].cid == cid)
-            return &s_cutscene_slots[i];
-    return 0;
-}
-
-static RemoteCutsceneSlot *find_cutscene_slot_by_task(void *task)
-{
-    int i;
-
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
-        if (s_cutscene_slots[i].active && s_cutscene_slots[i].task == task)
-            return &s_cutscene_slots[i];
-    return 0;
-}
-
-static void clear_cutscene_slot(RemoteCutsceneSlot *slot, int delete_task)
-{
-    if (!slot)
-        return;
-    /* Use the opening cutscene's own task cleanup helper when the task tree is
-     * still live so the attached model record returns to the engine pool. */
-    if (delete_task && slot->task)
-        func_80034EF8_35AF8(slot->task);
-    slot->active = 0;
-    slot->cid = 0;
-    slot->seen = 0;
-    slot->ch = -1;
-    slot->last_seq = 0;
-    slot->last_action = -2;
-    slot->last_remote_frame_100 = 0;
-    slot->last_remote_frame_count_100 = 0;
-    slot->fallback_yaw = 0;
-    slot->frame = 0.0f;
-    slot->frame_step = 0.0f;
-    slot->frame_count = 0.0f;
-    slot->task = 0;
-    slot->model = 0;
-}
-
-static void reset_cutscene_slots(int delete_tasks)
-{
-    int i;
-
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
-        clear_cutscene_slot(&s_cutscene_slots[i], delete_tasks);
-}
-
-static RemoteCutsceneSlot *allocate_cutscene_slot(int cid, int ch)
-{
-    int i;
-
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
-    {
-        if (!s_cutscene_slots[i].active)
-        {
-            s_cutscene_slots[i].active = 1;
-            s_cutscene_slots[i].cid = cid;
-            s_cutscene_slots[i].ch = ch;
-            s_cutscene_slots[i].last_action = -2;
-            return &s_cutscene_slots[i];
-        }
-    }
-    return 0;
-}
-
-static void wrap_cutscene_frame(RemoteCutsceneSlot *slot)
-{
-    float period;
-
-    if (!slot || slot->frame_count <= 1.0f)
-    {
-        if (slot)
-            slot->frame = 0.0f;
-        return;
-    }
-    period = slot->frame_count;
-    while (slot->frame >= period)
-        slot->frame -= period;
-    while (slot->frame < 0.0f)
-        slot->frame += period;
-}
-
-static void remote_cutscene_model_update(void *task, void *model)
-{
-    RemoteCutsceneSlot *slot = find_cutscene_slot_by_task(task);
-
-    if (!slot || model != slot->model)
-        return;
-    slot->frame += slot->frame_step;
-    wrap_cutscene_frame(slot);
-    write_float_at(model, 0x28, slot->frame);
-}
-
-static int create_cutscene_model(RemoteCutsceneSlot *slot,
-                                 const RemotePlayer *remote)
-{
-    CutsceneModelSpec spec;
-
-    if (!slot || !remote || !s_cutscene_ebisumaru_resource_ready ||
-        !is_rdram_pointer(s_cutscene_owner_task) ||
-        !get_cutscene_model_spec(remote->ch, &spec) ||
-        !resource_is_loaded(spec.file_id))
-        return 0;
-
-    /* Use the stable task helper to reproduce the first step of the file_18
-     * Ebisumaru creator without calling overlay-local code at reused VRAM. */
-    slot->task = func_80034E08_35A08(s_cutscene_owner_task,
-                                     remote_cutscene_model_update, 0);
-    if (!slot->task)
-        return 0;
-    /* Use the shared model allocator with the exact decompiled cutscene model,
-     * context, base transform, scale, and resource id for this character. */
-    slot->model = func_8000DBF0_E7F0(
-        slot->task, spec.model_ptr, spec.animation_context,
-        (float)remote->x, (float)remote->y, (float)remote->z,
-        spec.base_rot_x, spec.base_rot_y, spec.base_rot_z,
-        CUTSCENE_MODEL_SCALE, CUTSCENE_MODEL_SCALE, CUTSCENE_MODEL_SCALE,
-        spec.file_id, 0);
-    if (!slot->model)
-    {
-        /* Use normal task cleanup because the model allocator failed after the
-         * child task was already linked into the live owner tree. */
-        func_80034EF8_35AF8(slot->task);
-        slot->task = 0;
-        return 0;
-    }
-    /* Resolve the cutscene model's own clip length so received playable-player
-     * phase is mapped into this different, fixed cutscene animation. */
-    slot->frame_count = func_8001B5AC_1C1AC(slot->model);
-    slot->frame_step = spec.default_frame_step;
-    write_u8_at(slot->model, 0x65, 0);
-    return 1;
-}
-
-static short yaw_from_velocity(int vx, int vz, short fallback)
-{
-    int avx;
-    int avz;
-
-    if (vx * vx + vz * vz < REMOTE_YAW_SPEED_THRESHOLD_SQ)
-        return fallback;
-    avx = vx < 0 ? -vx : vx;
-    avz = vz < 0 ? -vz : vz;
-    if (avx > avz * 2)
-        return vx >= 0 ? 0x4000 : (short)0xc000;
-    if (avz > avx * 2)
-        return vz >= 0 ? (short)0x8000 : 0;
-    if (vx >= 0 && vz >= 0)
-        return 0x6000;
-    if (vx < 0 && vz >= 0)
-        return (short)0xa000;
-    if (vx < 0 && vz < 0)
-        return (short)0xe000;
-    return 0x2000;
-}
-
-static float map_remote_animation_frame(const RemotePlayer *remote,
-                                        float remote_model_frame_count)
-{
-    int source_frame;
-    int source_period;
-    float destination_period;
-
-    if (!remote || remote_model_frame_count <= 1.0f)
-        return 0.0f;
-    destination_period = remote_model_frame_count;
-    source_period = remote->anim_frame_count_100;
-    if (source_period <= 100)
-    {
-        source_frame = remote->anim_frame_100;
-        if (source_frame < 0)
-            source_frame = 0;
-        return (float)source_frame / 100.0f;
-    }
-    source_frame = remote->anim_frame_100;
-    while (source_frame < 0)
-        source_frame += source_period;
-    while (source_frame >= source_period)
-        source_frame -= source_period;
-    return ((float)source_frame / (float)source_period) * destination_period;
-}
-
-static void sync_cutscene_animation(RemoteCutsceneSlot *slot,
-                                    const RemotePlayer *remote)
-{
-    int delta;
-    int period;
-    float destination_period;
-
-    if (!slot || !remote || !slot->model || remote->seq == slot->last_seq)
-        return;
-    slot->frame = map_remote_animation_frame(remote, slot->frame_count);
-    slot->frame_step = 0.0f;
-    if (slot->last_seq != 0 && remote->action == slot->last_action &&
-        remote->anim_frame_count_100 > 100 &&
-        remote->anim_frame_count_100 == slot->last_remote_frame_count_100 &&
-        slot->frame_count > 1.0f)
-    {
-        period = remote->anim_frame_count_100;
-        delta = remote->anim_frame_100 - slot->last_remote_frame_100;
-        if (delta < -(period / 2))
-            delta += period;
-        else if (delta > period / 2)
-            delta -= period;
-        destination_period = slot->frame_count;
-        slot->frame_step =
-            ((float)delta / (float)period) * destination_period /
-            REMOTE_PACKET_FRAME_INTERVAL;
-    }
-    slot->last_seq = remote->seq;
-    slot->last_action = remote->action;
-    slot->last_remote_frame_100 = remote->anim_frame_100;
-    slot->last_remote_frame_count_100 = remote->anim_frame_count_100;
-    wrap_cutscene_frame(slot);
-    write_float_at(slot->model, 0x28, slot->frame);
-}
-
-static void update_cutscene_transform(RemoteCutsceneSlot *slot,
-                                      const RemotePlayer *remote)
-{
-    CutsceneModelSpec spec;
-    short rot_x;
-    short rot_y;
-    short rot_z;
-
-    if (!slot || !slot->model || !remote ||
-        !get_cutscene_model_spec(slot->ch, &spec))
-        return;
-    if (remote->action >= 0)
-    {
-        rot_x = (short)(spec.base_rot_x + (short)remote->rot_x);
-        rot_y = (short)(spec.base_rot_y + (short)remote->rot_y);
-        rot_z = (short)(spec.base_rot_z + (short)remote->rot_z);
-        slot->fallback_yaw = (short)remote->rot_y;
-    }
-    else
-    {
-        slot->fallback_yaw = yaw_from_velocity(remote->vx, remote->vz,
-                                                slot->fallback_yaw);
-        rot_x = spec.base_rot_x;
-        rot_y = (short)(spec.base_rot_y + slot->fallback_yaw);
-        rot_z = spec.base_rot_z;
-    }
-    write_float_at(slot->model, 0x08, (float)remote->x);
-    write_float_at(slot->model, 0x0c, (float)remote->y);
-    write_float_at(slot->model, 0x10, (float)remote->z);
-    write_u16_at(slot->model, 0x14, (unsigned short)rot_x);
-    write_u16_at(slot->model, 0x16, (unsigned short)rot_y);
-    write_u16_at(slot->model, 0x18, (unsigned short)rot_z);
-    write_float_at(slot->model, 0x1c, CUTSCENE_MODEL_SCALE);
-    write_float_at(slot->model, 0x20, CUTSCENE_MODEL_SCALE);
-    write_float_at(slot->model, 0x24, CUTSCENE_MODEL_SCALE);
-    write_u8_at(slot->model, 0x65, 0);
-}
-
-static int ensure_remote_cutscene_model(const RemotePlayer *remote)
-{
-    RemoteCutsceneSlot *slot;
-    CutsceneModelSpec spec;
-
-    if (!remote || !get_cutscene_model_spec(remote->ch, &spec))
-        return 0;
-    slot = find_cutscene_slot_by_cid(remote->cid);
-    if (slot && slot->ch != remote->ch)
-    {
-        clear_cutscene_slot(slot, 1);
-        slot = 0;
-    }
-    if (!slot)
-        slot = allocate_cutscene_slot(remote->cid, remote->ch);
-    if (!slot)
-        return 0;
-    slot->seen = 1;
-    if ((!slot->task || !slot->model) && !create_cutscene_model(slot, remote))
-    {
-        clear_cutscene_slot(slot, 0);
-        return 0;
-    }
-    sync_cutscene_animation(slot, remote);
-    update_cutscene_transform(slot, remote);
-    return 1;
-}
-
 static int render_remote_nameplate(int slot_index, const RemotePlayer *remote,
                                    const PlayerObject *local_obj)
 {
@@ -928,40 +531,37 @@ static int render_remote_nameplate(int slot_index, const RemotePlayer *remote,
 
 static void update_remote_cutscene_models(PlayerObject *local_obj)
 {
-    /* Use the live engine player task as the owner of the remote child tasks;
-     * this makes normal room teardown own their lifetime. */
+    /* Use the live player task only as the owner of independent remote render
+     * children, matching the opening cutscene's task hierarchy. */
     void *owner_task = D_801FC604_5B8514;
     int remote_index;
+    int model_count = 0;
     int slot_index = 0;
     int visible_nameplates = 0;
     int i;
 
     if (!is_rdram_pointer(local_obj) || !is_rdram_pointer(owner_task))
     {
-        reset_cutscene_slots(0);
-        s_cutscene_owner_task = 0;
+        /* The previous owner may already have been torn down; clear mod-side
+         * handles without dereferencing or deleting that stale external task. */
+        anchor_player_models_reset();
         for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
             anchor_nameplates_hide_slot(i);
         anchor_nameplates_set_context_visible(0);
         return;
-    }
-    if (s_cutscene_owner_task != owner_task)
-    {
-        reset_cutscene_slots(0);
-        s_cutscene_owner_task = owner_task;
     }
     if (!anchor_is_connected())
     {
         s_remote_count = 0;
         clear_remote_smoothing();
-        reset_cutscene_slots(1);
+        /* The owner is live here, so an empty update safely deletes all remote
+         * cutscene-style child tasks through the model module. */
+        anchor_player_models_update(0, 0, owner_task);
         for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
             anchor_nameplates_hide_slot(i);
         anchor_nameplates_set_context_visible(0);
         return;
     }
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
-        s_cutscene_slots[i].seen = 0;
 
     for (remote_index = 0;
          remote_index < s_remote_count && slot_index < ANCHOR_REMOTE_MAX;
@@ -969,30 +569,45 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
     {
         RemotePlayer *remote = &s_remote_players[remote_index];
         RemotePlayer smoothed_remote;
-        RemoteCutsceneSlot *old_slot;
 
-        /* Compare against the engine room global so off-room model tasks are
-         * destroyed rather than merely hidden. */
         if (!remote->has_pos || remote->room != (int)D_800C7AB2)
             continue;
+
         smooth_remote_player(remote, &smoothed_remote);
-        if (remote->ch == CHARACTER_EBISUMARU)
+        if ((remote->ch == CHARACTER_GOEMON ||
+             remote->ch == CHARACTER_EBISUMARU) &&
+            model_count < ANCHOR_REMOTE_MAX)
         {
-            ensure_remote_cutscene_model(&smoothed_remote);
+            AnchorPlayerModelRemote *model = &s_remote_models[model_count++];
+
+            model->cid = smoothed_remote.cid;
+            model->ch = smoothed_remote.ch;
+            model->x = smoothed_remote.x;
+            model->y = smoothed_remote.y;
+            model->z = smoothed_remote.z;
+            model->vx = smoothed_remote.vx;
+            model->vy = smoothed_remote.vy;
+            model->vz = smoothed_remote.vz;
+            model->seq = smoothed_remote.seq;
+            model->action = smoothed_remote.action;
+            model->anim_frame_100 = smoothed_remote.anim_frame_100;
+            model->anim_frame_count_100 =
+                smoothed_remote.anim_frame_count_100;
+            model->rot_x = smoothed_remote.rot_x;
+            model->rot_y = smoothed_remote.rot_y;
+            model->rot_z = smoothed_remote.rot_z;
+            model->same_team = smoothed_remote.same_team;
         }
-        else
-        {
-            old_slot = find_cutscene_slot_by_cid(remote->cid);
-            if (old_slot)
-                clear_cutscene_slot(old_slot, 1);
-        }
+
         visible_nameplates +=
             render_remote_nameplate(slot_index, &smoothed_remote, local_obj);
         slot_index++;
     }
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
-        if (s_cutscene_slots[i].active && !s_cutscene_slots[i].seen)
-            clear_cutscene_slot(&s_cutscene_slots[i], 1);
+
+    /* Bind the sender's character/action records to plain cutscene-style
+     * objects. This call never runs playable constructors or behavior code. */
+    anchor_player_models_update(s_remote_models, model_count,
+                                owner_task);
     for (i = slot_index; i < ANCHOR_REMOTE_MAX; ++i)
         anchor_nameplates_hide_slot(i);
     anchor_nameplates_set_context_visible(visible_nameplates > 0);
