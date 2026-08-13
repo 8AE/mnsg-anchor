@@ -117,6 +117,7 @@ extern void func_80003728_4328(unsigned char step);
 #define RACE_CHALLENGE_ONE_LIFE 4
 #define RACE_CHALLENGE_ENEMY_MULT_SHIFT 3
 #define RACE_CHALLENGE_ENEMY_MULT_MASK 0x18
+#define RACE_CHALLENGE_RYO_SYNC 0x20
 #define SAVE_SPAWN_ROOM 0x204
 #define SAVE_PLAYER_ROT 0x208
 #define SAVE_SPAWN_X 0x20A
@@ -290,6 +291,7 @@ static RecompuiResource s_damage_sync_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_damage_sync_detail_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_no_hit_detail_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_one_life_detail_lbl = RECOMPUI_NULL_RESOURCE;
+static RecompuiResource s_ryo_sync_detail_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_enemy_multiplier_detail_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_live_config_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
@@ -333,6 +335,7 @@ static int s_pending_challenges_done = 0;
 static int s_pending_toggle_damage_sync = 0;
 static int s_pending_toggle_no_hit = 0;
 static int s_pending_toggle_one_life = 0;
+static int s_pending_toggle_ryo_sync = 0;
 static int s_pending_cycle_enemy_multiplier = 0;
 static int s_pending_category_idx = -1;
 static int s_pending_goal_category_idx = -1;
@@ -344,6 +347,7 @@ static int s_location_idx = 0;
 static int s_damage_sync_enabled = 0;
 static int s_no_hit_enabled = 0;
 static int s_one_life_enabled = 0;
+static int s_ryo_sync_enabled = 0;
 static int s_enemy_multiplier = 1;
 static int s_flag_count = 0;
 static int s_category_count = 0;
@@ -786,6 +790,8 @@ static int race_challenge_bits(void)
         bits |= RACE_CHALLENGE_NO_HIT;
     if (s_one_life_enabled)
         bits |= RACE_CHALLENGE_ONE_LIFE;
+    if (s_ryo_sync_enabled)
+        bits |= RACE_CHALLENGE_RYO_SYNC;
     bits |= (s_enemy_multiplier - 1) << RACE_CHALLENGE_ENEMY_MULT_SHIFT;
     return bits;
 }
@@ -795,6 +801,7 @@ static void apply_race_challenge_runtime(void)
     anchor_runtime_set_damage_sync_enabled(s_damage_sync_enabled);
     anchor_runtime_set_no_hit_enabled(s_no_hit_enabled);
     anchor_runtime_set_one_life_enabled(s_one_life_enabled);
+    anchor_runtime_set_ryo_sync_enabled(s_ryo_sync_enabled);
     anchor_runtime_set_enemy_multiplier(s_enemy_multiplier);
 }
 
@@ -1025,6 +1032,7 @@ static int apply_race_config_code(const char *code)
     s_damage_sync_enabled = (challenge_bits & RACE_CHALLENGE_DAMAGE_SYNC) ? 1 : 0;
     s_no_hit_enabled = (challenge_bits & RACE_CHALLENGE_NO_HIT) ? 1 : 0;
     s_one_life_enabled = (challenge_bits & RACE_CHALLENGE_ONE_LIFE) ? 1 : 0;
+    s_ryo_sync_enabled = (challenge_bits & RACE_CHALLENGE_RYO_SYNC) ? 1 : 0;
     s_enemy_multiplier =
         ((challenge_bits & RACE_CHALLENGE_ENEMY_MULT_MASK) >> RACE_CHALLENGE_ENEMY_MULT_SHIFT) + 1;
     if (s_enemy_multiplier < 1 || s_enemy_multiplier > 3)
@@ -1338,6 +1346,7 @@ static void update_damage_sync_label(void)
     int enabled_count = (s_damage_sync_enabled ? 1 : 0) +
                         (s_no_hit_enabled ? 1 : 0) +
                         (s_one_life_enabled ? 1 : 0) +
+                        (s_ryo_sync_enabled ? 1 : 0) +
                         (s_enemy_multiplier > 1 ? 1 : 0);
     int pos = 0;
     char enemy_mult_text[4];
@@ -1375,6 +1384,11 @@ static void update_damage_sync_label(void)
     {
         recompui_set_text(s_one_life_detail_lbl, s_one_life_enabled ? "Enabled" : "Disabled");
         recompui_set_color(s_one_life_detail_lbl, s_one_life_enabled ? &R_GREEN : &R_DIM);
+    }
+    if (s_ryo_sync_detail_lbl != RECOMPUI_NULL_RESOURCE)
+    {
+        recompui_set_text(s_ryo_sync_detail_lbl, s_ryo_sync_enabled ? "Enabled" : "Disabled");
+        recompui_set_color(s_ryo_sync_detail_lbl, s_ryo_sync_enabled ? &R_GREEN : &R_DIM);
     }
     enemy_mult_text[0] = (char)('0' + s_enemy_multiplier);
     enemy_mult_text[1] = 'x';
@@ -1563,6 +1577,14 @@ static void on_one_life_clicked(RecompuiResource res, const RecompuiEventData *e
     (void)ud;
     if (ev->type == UI_EVENT_CLICK)
         s_pending_toggle_one_life = 1;
+}
+
+static void on_ryo_sync_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    (void)ud;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_toggle_ryo_sync = 1;
 }
 
 static void on_enemy_multiplier_clicked(RecompuiResource res, const RecompuiEventData *ev, void *ud)
@@ -2316,6 +2338,13 @@ static void build_challenges_view(RecompuiResource parent)
                                 &s_one_life_detail_lbl,
                                 on_one_life_clicked);
     build_challenge_toggle_card(s_challenges_view,
+                                "Ryo Sync",
+                                "Sync both ryo earned and ryo spent between teammates during the race.",
+                                "Toggle",
+                                s_ryo_sync_enabled,
+                                &s_ryo_sync_detail_lbl,
+                                on_ryo_sync_clicked);
+    build_challenge_toggle_card(s_challenges_view,
                                 "Enemy Multiplier",
                                 "Experimental. Choose how many copies of each enemy actor spawn when a room loads; the game could crash.",
                                 "Cycle",
@@ -2488,6 +2517,7 @@ static void race_ui_init(void)
     s_damage_sync_enabled = 0;
     s_no_hit_enabled = 0;
     s_one_life_enabled = 0;
+    s_ryo_sync_enabled = 0;
     s_enemy_multiplier = 1;
     apply_race_challenge_runtime();
 
@@ -2609,6 +2639,8 @@ const char *anchor_race_get_config_json(void)
     append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_no_hit_enabled ? 1 : 0);
     append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"ol\":");
     append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_one_life_enabled ? 1 : 0);
+    append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"ryo\":");
+    append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_ryo_sync_enabled ? 1 : 0);
     append_text_limited(s_config_json, &pos, (int)sizeof(s_config_json), ",\"em\":");
     append_uint(s_config_json, &pos, (int)sizeof(s_config_json), s_enemy_multiplier);
     append_char_limited(s_config_json, &pos, (int)sizeof(s_config_json), '}');
@@ -2657,6 +2689,9 @@ void anchor_race_apply_config_json(const char *json)
     s_damage_sync_enabled = parse_json_int_after(json, "\"dmg\"", s_damage_sync_enabled) ? 1 : 0;
     s_no_hit_enabled = parse_json_int_after(json, "\"nh\"", s_no_hit_enabled) ? 1 : 0;
     s_one_life_enabled = parse_json_int_after(json, "\"ol\"", s_one_life_enabled) ? 1 : 0;
+    /* Older host configs do not contain this challenge; keep it off rather
+     * than inheriting a stale local setup choice. */
+    s_ryo_sync_enabled = parse_json_int_after(json, "\"ryo\"", 0) ? 1 : 0;
     s_enemy_multiplier = parse_json_int_after(json, "\"em\"", s_enemy_multiplier);
     if (s_enemy_multiplier < 1 || s_enemy_multiplier > 3)
         s_enemy_multiplier = parse_json_int_after(json, "\"de\"", 0) ? 2 : 1;
@@ -3064,6 +3099,14 @@ void anchor_startup_race_frame_hook(void)
         s_one_life_enabled = !s_one_life_enabled;
         update_damage_sync_label();
         set_status(s_one_life_enabled ? "1 life enabled." : "1 life disabled.", 1);
+    }
+
+    if (s_pending_toggle_ryo_sync)
+    {
+        s_pending_toggle_ryo_sync = 0;
+        s_ryo_sync_enabled = !s_ryo_sync_enabled;
+        update_damage_sync_label();
+        set_status(s_ryo_sync_enabled ? "Ryo sync enabled." : "Ryo sync disabled.", 1);
     }
 
     if (s_pending_cycle_enemy_multiplier)

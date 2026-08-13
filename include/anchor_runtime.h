@@ -8,6 +8,8 @@ void anchor_runtime_set_no_hit_enabled(int enabled);
 int anchor_runtime_no_hit_enabled(void);
 void anchor_runtime_set_one_life_enabled(int enabled);
 int anchor_runtime_one_life_enabled(void);
+void anchor_runtime_set_ryo_sync_enabled(int enabled);
+int anchor_runtime_ryo_sync_enabled(void);
 void anchor_runtime_set_enemy_multiplier(int multiplier);
 int anchor_runtime_enemy_multiplier(void);
 

@@ -46,7 +46,7 @@
 #define REMOTE_YAW_SPEED_THRESHOLD_SQ 64
 #define REMOTE_MODEL_SCALE 0.1f
 #define REMOTE_FRAME_SNAP_THRESHOLD 4.0f
-#define REMOTE_PACKET_FRAME_INTERVAL 2.0f
+#define REMOTE_PACKET_FRAME_INTERVAL 6.0f
 
 #define REMOTE_MODEL_SLOT_COUNT ANCHOR_PLAYER_MODEL_MAX
 #define CHARACTER_COUNT 4
@@ -876,8 +876,8 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
                 slot->frame_step = delta / REMOTE_PACKET_FRAME_INTERVAL;
         }
 
-        /* Snap to every authoritative packet. The derived step above only
-         * predicts the one intervening frame, including paused animations. */
+        /* Snap to every authoritative packet. The derived step above predicts
+         * the frames until the next expected packet, including paused clips. */
         slot->frame = target_frame;
         slot->last_remote_frame_100 = remote->anim_frame_100;
         slot->last_remote_frame_count_100 = remote->anim_frame_count_100;

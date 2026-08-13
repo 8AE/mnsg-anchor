@@ -5,8 +5,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 ### Features
 
 * **Item / flag sync** — every tracked item or flag gained by a player is broadcast to the team in real time.  Players who join late automatically receive the team's accumulated progress.
-* **Damage & heal sync** — damage taken by one team member is applied to all other members; healing is shared the same way.  Either player can die from synced damage.  Can be toggled in the mod settings.
-* **Ryo (money) sync** — only *gains* are synced: when a player picks up ryo the same amount is added to every teammate's wallet.  Spending never propagates, and late joiners keep their own balance until the next pickup.
+* **Race challenges** — race hosts can optionally sync team damage and healing, or sync both ryo earnings and spending, alongside the No Hit, 1 Life, and enemy-multiplier challenges. These rules do not run in standard multiplayer.
 * **In-game HUD** — a notification banner confirms connection success or failure; a persistent player-list panel (top-left) shows every player currently in the room, their character, and their position.
 * **Teams** — players can be grouped into teams within a room so that flag queues and save-state syncs are scoped to the team.
 * **Reconnect support** — client IDs are preserved across sessions so the server can deliver queued packets on reconnect.
@@ -28,9 +27,9 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 | Stat                                    | Behaviour                                                                                   |
 | --------------------------------------- | ------------------------------------------------------------------------------------------- |
 | HP Max                                  | Highest value wins; receiving an upgrade also refills current HP to the new maximum         |
-| Current HP                              | Damage and healing are applied as deltas — teammates share the same HP changes in real time |
+| Current HP                              | Standard multiplayer does not sync it; the Team Damage Sync race challenge shares damage and healing deltas |
 | Fortune Dolls (total & traded)          | Highest value wins                                                                          |
-| Ryo (money)                             | Gains only — the pickup delta is added to each teammate's wallet; spending never syncs      |
+| Ryo (money)                             | Standard multiplayer does not sync it; the Ryo Sync race challenge shares both earnings and spending deltas |
 | Fish counts (red / yellow / blue)       | Highest value wins                                                                          |
 | Mr. Elly Fant & Mr. Arrow (per dungeon) | Highest value wins                                                                          |
 
@@ -47,6 +46,10 @@ Every individual silver doll (40 rooms) and gold doll (5 rooms) room pickup flag
 
 Networking is handled by `py/anchor_mnsg.py`, a Python module that runs inside the [REPY (RecompExternalPython)](https://github.com/LT-Schmiddy/zelda64recomp-python-extlibs-mod) extlib embedded in the `.nrm`. REPY must be installed as a dependency mod.
 
+Player movement is coalesced to a steady 10 Hz update rate, with action changes and animation-loop restarts sent immediately. Receivers keep only the newest movement state per player instead of adding movement packets to the gameplay-event queue.
+
+Join-time item synchronization uses one compact team-state snapshot followed by durable incremental flag packets. This avoids the previous burst of hundreds of individual packets when a save loads or a teammate joins.
+
 The public default server is **anchor.hm64.org:43383**.
 
 ### Configuration
@@ -62,7 +65,6 @@ All options are available in the mod settings menu inside the game:
 | Team ID                 | `default`         | Team within the room (shared save-state queue)                                 |
 | Show NET Button         | Enabled           | Show the NET button in the bottom-left corner                                  |
 | Show Item Notifications | Enabled           | Show a toast when items or flags are received or found                         |
-| Damage Sync             | Enabled           | Sync damage taken and healing between teammates; either player can die from it |
 | Show Room ID (Hex)      | Disabled          | Display the raw hexadecimal room ID next to the area name in the player list   |
 | Show Player Positions   | Disabled          | Display each player's X, Y, Z world position next to their name                |
 

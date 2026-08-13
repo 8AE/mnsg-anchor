@@ -34,13 +34,12 @@ Key packet types received from the server:
 Item-sync protocol (implemented in src/item_sync.c):
   On connect with a valid save:
     1. anchor_mnsg.request_team_state() is called so the server delivers
-       any queued SET_FLAG packets from teammates.
-    2. A full push begins: every non-zero tracked item is sent one per frame
-       as a SET_FLAG packet with addToQueue=true.  The server stores these
-       so newly joining players receive the complete team inventory on join.
+       the compact team snapshot followed by queued SET_FLAG deltas.
+    2. One loaded teammate is elected to answer with a single
+       UPDATE_TEAM_STATE packet, avoiding duplicate join-time floods.
   Each frame:
     - Incoming SET_FLAG packets are applied to the local save data.
-    - Incoming REQUEST_TEAM_STATE packets trigger a re-push of all items.
+    - Incoming REQUEST_TEAM_STATE packets schedule one compact snapshot.
     - Newly obtained items are broadcast immediately as SET_FLAG packets.
 
   Tracked items (from MNSGRecompRando / save_data_tool.h):
@@ -109,8 +108,11 @@ _rx_thread: "threading.Thread | None" = None
 # Last room ID sent to the server (avoids redundant state updates).
 _local_room_id: int = -1
 _local_character: str = ""
+_local_save_loaded: bool = False
 _last_position_sent: "tuple[int, int, int] | None" = None
 _last_position_sent_ms: int = 0
+_last_position_action: int = -2
+_last_position_frame_100: int = 0
 _position_seq: int = 0
 _race_status: str = ""
 _race_config_json: str = ""
@@ -121,6 +123,8 @@ _race_config_json: str = ""
 
 DEFAULT_HOST: str = "anchor.hm64.org"
 DEFAULT_PORT: int = 43383
+MOVEMENT_MIN_INTERVAL_MS: int = 50
+ANIMATION_RESTART_DELTA_100: int = 50
 
 ###############################################################################
 # Room ID → area name lookup table
@@ -235,27 +239,47 @@ _build_room_names()
 
 def _send_raw(packet: dict) -> bool:
     """Serialise *packet* as JSON, append \\x00, and send over TCP."""
-    global _connected
-    if not _connected or _sock is None:
+    sock = _sock
+    if not _connected or sock is None:
         return False
     try:
         data = (json.dumps(packet, separators=(",", ":")) + "\x00").encode("utf-8")
         with _send_lock:
-            _sock.sendall(data)
+            if not _connected or _sock is not sock:
+                return False
+            sock.sendall(data)
         return True
     except Exception as exc:
         logger.warning("anchor_mnsg: send error: %s", exc)
-        _do_disconnect()
+        _do_disconnect(sock)
         return False
 
 
-def _recv_loop() -> None:
+def _should_handle_team_state_request(packet: dict) -> bool:
+    """Elect one loaded teammate to answer a team-state request."""
+    requester = int(packet.get("clientId", 0))
+    if _client_id <= 0:
+        return True
+
+    with _player_states_lock:
+        candidates = [
+            cid
+            for cid, state in _player_states.items()
+            if cid != requester
+            and bool(state.get("online", True))
+            and bool(state.get("isSaveLoaded", False))
+            and state.get("teamId", "") == _team_id
+        ]
+    return not candidates or _client_id == min(candidates)
+
+
+def _recv_loop(sock: socket.socket) -> None:
     """Background thread: read null-terminated packets and push to _recv_queue."""
     global _connected, _client_id, _server_message, _disabled, _local_room_id, _local_character
     buf = b""
-    while _connected and _sock is not None:
+    while _connected and _sock is sock:
         try:
-            chunk = _sock.recv(4096)
+            chunk = sock.recv(4096)
             if not chunk:
                 break
             buf += chunk
@@ -278,7 +302,7 @@ def _recv_loop() -> None:
                 if ptype == "DISABLE_ANCHOR":
                     _disabled = True
                     logger.info("anchor_mnsg: DISABLE_ANCHOR received, disconnecting.")
-                    _do_disconnect()
+                    _do_disconnect(sock)
                     return
 
                 if ptype == "HEARTBEAT":
@@ -309,6 +333,7 @@ def _recv_loop() -> None:
                                 "name": name,
                                 "teamId": cs.get("teamId", ""),
                                 "online": online,
+                                "isSaveLoaded": bool(cs.get("isSaveLoaded", False)),
                                 "self": bool(s.get("self")),
                                 "location": location,
                                 "roomId": int(cs.get("currentRoomId", -1)),
@@ -360,6 +385,9 @@ def _recv_loop() -> None:
                                 _player_states[cid]["rotY"] = int(packet.get("rotY", 0))
                             if "rotZ" in packet:
                                 _player_states[cid]["rotZ"] = int(packet.get("rotZ", 0))
+                    # Movement is already coalesced into _player_states. Do not
+                    # duplicate this hot path in the general game-event queue.
+                    continue
 
                 # Update a single player's status when they broadcast their state.
                 if ptype == "UPDATE_CLIENT_STATE":
@@ -376,6 +404,8 @@ def _recv_loop() -> None:
                                     _player_states[cid]["teamId"] = cs["teamId"]
                                 if "online" in cs:
                                     _player_states[cid]["online"] = bool(cs["online"])
+                                if "isSaveLoaded" in cs:
+                                    _player_states[cid]["isSaveLoaded"] = bool(cs["isSaveLoaded"])
                                 if "mnsgRace" in cs:
                                     _player_states[cid]["mnsgRace"] = str(cs["mnsgRace"])
                                 if "mnsgRaceConfig" in cs:
@@ -421,6 +451,7 @@ def _recv_loop() -> None:
                                     "name": name,
                                     "teamId": cs.get("teamId", ""),
                                     "online": bool(cs.get("online", True)),
+                                    "isSaveLoaded": bool(cs.get("isSaveLoaded", False)),
                                     "self": False,
                                     "location": location,
                                     "roomId": int(cs.get("currentRoomId", -1)),
@@ -443,25 +474,48 @@ def _recv_loop() -> None:
                                     "character": str(cs.get("currentCharacter", "")),
                                 }
 
-                # Enqueue for C-side polling via poll_packet().
+                if ptype == "REQUEST_TEAM_STATE" and not _should_handle_team_state_request(packet):
+                    continue
+
+                # Enqueue durable/gameplay packets for C-side polling. For a
+                # stored response, apply the snapshot before queued deltas.
                 _recv_queue.put(raw)
+                if ptype == "UPDATE_TEAM_STATE":
+                    queued_packets = packet.get("queue", [])
+                    if isinstance(queued_packets, list):
+                        for queued_packet in queued_packets:
+                            if isinstance(queued_packet, str) and queued_packet:
+                                _recv_queue.put(queued_packet)
 
         except Exception as exc:
-            if _connected:
+            if _connected and _sock is sock:
                 logger.warning("anchor_mnsg: recv error: %s", exc)
             break
 
-    _do_disconnect()
+    _do_disconnect(sock)
 
 
-def _do_disconnect() -> None:
+def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     """Close the socket and mark as disconnected (idempotent)."""
-    global _sock, _connected, _local_room_id, _local_character
+    global _sock, _connected, _local_room_id, _local_character, _local_save_loaded
     global _last_position_sent, _last_position_sent_ms
+    global _last_position_action, _last_position_frame_100
+
+    # A receiver from an older connection must never close a newer socket.
+    if expected_sock is not None and _sock is not expected_sock:
+        try:
+            expected_sock.close()
+        except Exception:
+            pass
+        return
+
     _local_room_id = -1
     _local_character = ""
+    _local_save_loaded = False
     _last_position_sent = None
     _last_position_sent_ms = 0
+    _last_position_action = -2
+    _last_position_frame_100 = 0
     _connected = False
     s = _sock
     _sock = None
@@ -502,7 +556,8 @@ def connect(
     """
     global _sock, _connected, _client_id, _room_id, _team_id, _player_name
     global _last_position_sent, _last_position_sent_ms, _position_seq, _local_character
-    global _rx_thread, _disabled, _race_status, _race_config_json
+    global _last_position_action, _last_position_frame_100
+    global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
 
     if _connected:
         logger.info("anchor_mnsg: already connected.")
@@ -515,8 +570,11 @@ def connect(
     _disabled = False
     _last_position_sent = None
     _last_position_sent_ms = 0
+    _last_position_action = -2
+    _last_position_frame_100 = 0
     _position_seq = 0
     _local_character = ""
+    _local_save_loaded = False
     _race_status = ""
     _race_config_json = ""
 
@@ -530,6 +588,7 @@ def connect(
     resolved_host = host if host else DEFAULT_HOST
     resolved_port = int(port) if port else DEFAULT_PORT
 
+    sock = None
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(10.0)
@@ -539,7 +598,11 @@ def connect(
         _connected = True
     except Exception as exc:
         logger.warning("anchor_mnsg: connection failed to %s:%d: %s", resolved_host, resolved_port, exc)
-        _do_disconnect()
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
         return False
 
     # Send the HANDSHAKE packet.
@@ -557,14 +620,14 @@ def connect(
     }
     data = (json.dumps(handshake, separators=(",", ":")) + "\x00").encode("utf-8")
     try:
-        _sock.sendall(data)
+        sock.sendall(data)
     except Exception as exc:
         logger.warning("anchor_mnsg: handshake send failed: %s", exc)
-        _do_disconnect()
+        _do_disconnect(sock)
         return False
 
     # Launch the background receiver thread.
-    _rx_thread = threading.Thread(target=_recv_loop, daemon=True, name="anchor_rx")
+    _rx_thread = threading.Thread(target=_recv_loop, args=(sock,), daemon=True, name="anchor_rx")
     _rx_thread.start()
 
     logger.info(
@@ -660,6 +723,12 @@ def update_client_state(state_json: str) -> bool:
 
     # Server requires these fields.
     state.setdefault("teamId", _team_id)
+    state.setdefault("isSaveLoaded", _local_save_loaded)
+    if _local_room_id >= 0:
+        state.setdefault("currentRoomId", _local_room_id)
+        state.setdefault("currentRoom", _ROOM_NAMES.get(_local_room_id, ""))
+    if _local_character:
+        state.setdefault("currentCharacter", _local_character)
     if _race_status:
         state.setdefault("mnsgRace", _race_status)
     if _race_config_json:
@@ -682,16 +751,9 @@ def set_save_loaded(is_loaded: bool) -> bool:
     Convenience wrapper: set isSaveLoaded flag, making yourself eligible
     to share your save state with teammates who join.
     """
-    return _send_raw({
-        "type": "UPDATE_CLIENT_STATE",
-        "state": {
-            "clientId": _client_id,
-            "teamId": _team_id,
-            "name": _player_name,
-            "online": True,
-            "isSaveLoaded": bool(is_loaded),
-        },
-    })
+    global _local_save_loaded
+    _local_save_loaded = bool(is_loaded)
+    return update_client_state(json.dumps({"isSaveLoaded": _local_save_loaded}))
 
 
 def request_team_state(target_team_id: str = "") -> bool:
@@ -826,10 +888,24 @@ def set_position_anim(
     Returns True if the packet was sent.
     """
     global _last_position_sent, _last_position_sent_ms, _position_seq
+    global _last_position_action, _last_position_frame_100
 
     if not _connected:
         return False
     now_ms = int(time.monotonic() * 1000)
+    action_changed = int(action) != _last_position_action
+    frame_restarted = (
+        not action_changed
+        and int(frame_100) + ANIMATION_RESTART_DELTA_100 < _last_position_frame_100
+    )
+    if (
+        _last_position_sent_ms > 0
+        and now_ms - _last_position_sent_ms < MOVEMENT_MIN_INTERVAL_MS
+        and not action_changed
+        and not frame_restarted
+    ):
+        return False
+
     vel_x = 0
     vel_y = 0
     vel_z = 0
@@ -838,27 +914,8 @@ def set_position_anim(
         vel_x = int((x - _last_position_sent[0]) * 1000 / dt_ms)
         vel_y = int((y - _last_position_sent[1]) * 1000 / dt_ms)
         vel_z = int((z - _last_position_sent[2]) * 1000 / dt_ms)
-    _last_position_sent = (x, y, z)
-    _last_position_sent_ms = now_ms
-    _position_seq = (_position_seq + 1) & 0x7fffffff
-
-    with _player_states_lock:
-        if _client_id in _player_states:
-            _player_states[_client_id]["posX"] = x
-            _player_states[_client_id]["posY"] = y
-            _player_states[_client_id]["posZ"] = z
-            _player_states[_client_id]["velX"] = vel_x
-            _player_states[_client_id]["velY"] = vel_y
-            _player_states[_client_id]["velZ"] = vel_z
-            _player_states[_client_id]["posSeq"] = _position_seq
-            _player_states[_client_id]["posT"] = now_ms
-            _player_states[_client_id]["action"] = int(action)
-            _player_states[_client_id]["animFrame100"] = int(frame_100)
-            _player_states[_client_id]["animFrameCount100"] = int(frame_count_100)
-            _player_states[_client_id]["rotX"] = int(rot_x)
-            _player_states[_client_id]["rotY"] = int(rot_y)
-            _player_states[_client_id]["rotZ"] = int(rot_z)
-    return _send_raw({
+    next_seq = (_position_seq + 1) & 0x7fffffff
+    sent = _send_raw({
         "type": "MNSG_PLAYER_POS",
         "clientId": _client_id,
         "currentRoomId": _local_room_id,
@@ -868,7 +925,7 @@ def set_position_anim(
         "velX": vel_x,
         "velY": vel_y,
         "velZ": vel_z,
-        "posSeq": _position_seq,
+        "posSeq": next_seq,
         "posT": now_ms,
         "action": int(action),
         "animFrame100": int(frame_100),
@@ -878,6 +935,33 @@ def set_position_anim(
         "rotZ": int(rot_z),
         "quiet": True,
     })
+    if not sent:
+        return False
+
+    _last_position_sent = (x, y, z)
+    _last_position_sent_ms = now_ms
+    _last_position_action = int(action)
+    _last_position_frame_100 = int(frame_100)
+    _position_seq = next_seq
+
+    if _client_id:
+        with _player_states_lock:
+            local = _player_states.setdefault(_client_id, {})
+            local["posX"] = x
+            local["posY"] = y
+            local["posZ"] = z
+            local["velX"] = vel_x
+            local["velY"] = vel_y
+            local["velZ"] = vel_z
+            local["posSeq"] = _position_seq
+            local["posT"] = now_ms
+            local["action"] = int(action)
+            local["animFrame100"] = int(frame_100)
+            local["animFrameCount100"] = int(frame_count_100)
+            local["rotX"] = int(rot_x)
+            local["rotY"] = int(rot_y)
+            local["rotZ"] = int(rot_z)
+    return True
 
 
 def set_character(char_name: str) -> bool:
@@ -900,19 +984,7 @@ def set_character(char_name: str) -> bool:
     if char_name == _local_character:
         return False
     _local_character = char_name
-    with _player_states_lock:
-        if _client_id in _player_states:
-            _player_states[_client_id]["character"] = char_name
-    return _send_raw({
-        "type": "UPDATE_CLIENT_STATE",
-        "state": {
-            "clientId": _client_id,
-            "teamId": _team_id,
-            "name": _player_name,
-            "online": True,
-            "currentCharacter": char_name,
-        },
-    })
+    return update_client_state(json.dumps({"currentCharacter": char_name}))
 
 
 def set_local_room(room_id: int) -> bool:

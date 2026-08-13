@@ -38,38 +38,6 @@
  * the recompui Z-stack after any other persistent context is shown.         */
 extern void debug_ui_bump_toggle_ctx(void);
 
-/* Current scene/room ID – written by the game engine each frame. */
-extern unsigned short D_800C7AB2;
-
-/*
- * Current character index – written by the character cycler every time the
- * player presses L/R to switch characters (func_801DD50C_59941C patch).
- *
- * In the rando's character_cycler.c:
- *   u32 *other_ptr = (u32 *)0x8015C5D8;  // D_8015C5D8_15D1D8
- *   other_ptr[1] = index & 0xFF;         // → 0x8015C5DC
- *
- * Values: 0=Goemon  1=Ebisumaru  2=Sasuke  3=Yae
- */
-#define CURRENT_CHAR_PTR ((volatile unsigned int *)0x8015C5DC)
-
-static const char *const s_char_names[4] = {
-    "Goemon", "Ebisumaru", "Sasuke", "Yae"};
-
-/*
- * Player background-world (CLS_BG_W) pointer.
- *
- * D_801FC60C_5B851C holds a CLS_BG_W* at runtime.  The struct layout
- * (from MNSGRecompRando include/common_structs.h):
- *
- *   CLS_W   header;      // offset 0x00, size 0x08 (next ptr + kind/pri)
- *   VEC3F_W position;    // offset 0x08: float x, float y, float z
- *
- * So position.x = *(float*)(ptr + 0x08), .y at +0x0C, .z at +0x10.
- * The pointer may be NULL between scenes; always null-check before use.
- */
-extern void *D_801FC60C_5B851C;
-
 /* =========================================================================
    Tunables
    ========================================================================= */
@@ -105,17 +73,6 @@ static const RecompuiColor COLOR_RED = {220, 60, 60, 255};
 static const RecompuiColor COLOR_GOLD = {220, 190, 60, 255};
 static const RecompuiColor COLOR_ACCENT_BG = {20, 20, 20, 200};
 static const RecompuiColor COLOR_TEAM_HDR = {0, 160, 140, 255}; /* muted teal for team section labels */
-
-/* Last room ID we sent to Python; 0xFFFF = "not sent yet". */
-static unsigned short s_prev_room_id = 0xFFFF;
-
-static int is_rdram_pointer(const void *ptr)
-{
-    unsigned int addr = (unsigned int)(unsigned long)ptr;
-    unsigned int phys = addr & 0x1fffffffu;
-
-    return addr != 0 && phys < 0x00800000u;
-}
 
 /* =========================================================================
    Notification context
@@ -190,7 +147,7 @@ typedef struct
 static PlayerRowUI s_plist_rows[MAX_DISPLAY_PLAYERS];
 static RecompuiResource s_plist_rows_container = RECOMPUI_NULL_RESOURCE;
 
-/* Pre-loaded character textures: index matches s_char_names[]. */
+/* Pre-loaded character textures: 0=Goemon, 1=Ebisumaru, 2=Sasuke, 3=Yae. */
 static RecompuiTextureHandle s_char_textures[4];
 static RecompuiTextureHandle s_blank_texture;
 static int s_textures_initialized = 0;
@@ -421,16 +378,6 @@ void anchor_ui_update(void)
         }
     }
 
-    /* ----- Room-ID tracking (runs every frame, even when disconnected) ---- */
-    {
-        unsigned short cur_room = D_800C7AB2;
-        if (cur_room != s_prev_room_id)
-        {
-            s_prev_room_id = cur_room;
-            anchor_set_local_room((unsigned int)cur_room);
-        }
-    }
-
     /* ----- Notification countdown ---------------------------------------- */
     if (s_notif_timer > 0)
     {
@@ -475,24 +422,6 @@ void anchor_ui_update(void)
         return;
     }
     s_plist_refresh_timer = PLAYER_LIST_REFRESH_FRAMES;
-
-    /* ---- Send our world position to teammates ----------------------------- */
-    {
-        void *bg_w = D_801FC60C_5B851C;
-        if (is_rdram_pointer(bg_w))
-        {
-            int px = (int)*(float *)((char *)bg_w + 0x08);
-            int py = (int)*(float *)((char *)bg_w + 0x0C);
-            int pz = (int)*(float *)((char *)bg_w + 0x10);
-            anchor_set_position(px, py, pz);
-        }
-    }
-
-    /* ---- Broadcast currently selected character to teammates ------------- */
-    {
-        unsigned int char_idx = *CURRENT_CHAR_PTR & 0x3;
-        anchor_set_character(s_char_names[char_idx]);
-    }
 
     /* Fetch structured player info from Python:
      * [{"n":"Name - Location","c":0,"r":165,"t":"default","hp":1,"x":10,"y":20,"z":30}, ...]

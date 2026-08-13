@@ -1,10 +1,10 @@
-#include "recompconfig.h"
 #include "anchor_runtime.h"
 
 static int s_initialized = 0;
 static int s_damage_sync_enabled = 0;
 static int s_no_hit_enabled = 0;
 static int s_one_life_enabled = 0;
+static int s_ryo_sync_enabled = 0;
 static int s_enemy_multiplier = 1;
 static int s_startup_complete = 0;
 
@@ -14,9 +14,10 @@ void anchor_runtime_init_defaults(void)
         return;
 
     s_initialized = 1;
-    s_damage_sync_enabled = (recomp_get_config_u32("anchor_damage_sync") == 0);
+    s_damage_sync_enabled = 0;
     s_no_hit_enabled = 0;
     s_one_life_enabled = 0;
+    s_ryo_sync_enabled = 0;
     s_enemy_multiplier = 1;
 }
 
@@ -54,6 +55,18 @@ int anchor_runtime_one_life_enabled(void)
 {
     anchor_runtime_init_defaults();
     return s_one_life_enabled;
+}
+
+void anchor_runtime_set_ryo_sync_enabled(int enabled)
+{
+    anchor_runtime_init_defaults();
+    s_ryo_sync_enabled = enabled ? 1 : 0;
+}
+
+int anchor_runtime_ryo_sync_enabled(void)
+{
+    anchor_runtime_init_defaults();
+    return s_ryo_sync_enabled;
 }
 
 void anchor_runtime_set_enemy_multiplier(int multiplier)

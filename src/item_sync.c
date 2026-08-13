@@ -8,12 +8,11 @@
  *   2. Compares the current save data against a cached snapshot; whenever
  *      a tracked item is newly gained, broadcasts a SET_FLAG packet with
  *      addToQueue=1 so offline teammates receive it upon joining.
- *   3. On first connect with a loaded save, schedules a one-item-per-frame
- *      "full push" that refreshes every non-zero value in the server queue.
+ *   3. Answers team-state requests with one compact UPDATE_TEAM_STATE snapshot
+ *      instead of broadcasting every non-zero value as a separate packet.
  *
- * When a REQUEST_TEAM_STATE packet is received, the same full-push sequence
- * is restarted so the requesting player's client can absorb the team's
- * collective progress.
+ * Python elects one loaded teammate to answer each REQUEST_TEAM_STATE packet,
+ * preventing every team member from publishing the same snapshot.
  *
  * ── Data sources ────────────────────────────────────────────────────────
  * Offsets and flag IDs are sourced from the MNSGRecompRando mod:
@@ -213,6 +212,34 @@ static int get_ds_ryo(const char *json, signed int *out)
     while (*pos == ' ')
         ++pos;
     return parse_int(&pos, out);
+}
+
+/* Append a signed decimal integer and return the first unwritten byte. */
+static char *append_signed_decimal(char *out, signed int value)
+{
+    char digits[10];
+    int count = 0;
+    unsigned int magnitude;
+
+    if (value < 0)
+    {
+        *out++ = '-';
+        magnitude = 0u - (unsigned int)value;
+    }
+    else
+    {
+        magnitude = (unsigned int)value;
+    }
+
+    do
+    {
+        digits[count++] = (char)('0' + (magnitude % 10u));
+        magnitude /= 10u;
+    } while (magnitude != 0u);
+
+    while (count-- > 0)
+        *out++ = digits[count];
+    return out;
 }
 
 /**
@@ -660,17 +687,19 @@ static SyncFlagBit s_flag_bits[] = {
 
 static int s_was_connected = 0;     /* connection state from the previous frame */
 static int s_save_was_valid = 0;    /* true if save was loaded last time we checked */
-static int s_prev_player_count = 0; /* player count from the previous frame */
 
-/* When s_push_cursor >= 0 the module is performing an initial full push.
- * Each frame one item is sent, cursor advances.
- * Values NUM_FIELDS + NUM_FLAGS .. (past end) → push complete.             */
+/* A non-negative cursor schedules one compact UPDATE_TEAM_STATE snapshot. */
 static int s_push_cursor = -1;
 
 /* Cooldown timer (in frames) before we respond to another REQUEST_TEAM_STATE.
  * Prevents response floods when multiple requests arrive close together.    */
 static int s_push_cooldown = 0;
 #define PUSH_COOLDOWN_FRAMES 180 /* ~3 seconds @ 60 fps */
+static int s_set_flag_send_timer = 0;
+#define SET_FLAG_SEND_INTERVAL_FRAMES 4 /* cap durable deltas at ~15/s */
+static int s_team_state_request_pending = 0;
+static int s_team_snapshot_broadcast_timer = -1;
+#define TEAM_SNAPSHOT_BROADCAST_DELAY_FRAMES 90
 
 /* =========================================================================
    Damage sync state
@@ -713,50 +742,22 @@ static signed int s_ryo_prev = 0; /* ryo observed last frame     */
 static int s_ryo_initialized = 0; /* 0 until baseline captured   */
 
 /* Maximum SET_FLAG packets sent per frame during incremental monitoring.
- * Kept at 1 to match the full-push rate and avoid flooding the Anchor
- * server's per-client overlapped-I/O queue on area transitions where
- * many flags change simultaneously.  Extra changes are deferred to
- * subsequent frames by leaving their cache un-updated this frame.       */
+ * Extra changes are deferred by leaving their cache un-updated. */
 #define MAX_SENDS_PER_FRAME 1
 
 #define PUSH_IDLE -1
+#define TEAM_STATE_JSON_MAX 16384
 
-/* Total items in both tables combined, used as the end sentinel.           */
-static int push_total(void) { return NUM_FIELDS + NUM_FLAGS; }
+static char s_team_state_json[TEAM_STATE_JSON_MAX];
 
-/**
- * Count the number of players currently in the room by parsing the JSON array
- * returned by anchor_get_player_names_json().  Each player name is a quoted
- * string; counting opening '"' characters and dividing by 2 gives the count.
- * Returns 0 when not connected or the array is empty ("[]").
- */
-static int get_player_count(void)
-{
-    char *json = anchor_get_player_names_json();
-    if (!json)
-        return 0;
-    int quotes = 0;
-    const char *p = json;
-    while (*p)
-    {
-        if (*p == '"')
-            ++quotes;
-        ++p;
-    }
-    recomp_free(json);
-    return quotes / 2; /* each name has one opening and one closing quote */
-}
-
-/* Start (or restart) the full-push sequence.                               */
-static void start_full_push(void)
+/* Schedule one compact response to a team-state request. */
+static void schedule_team_state_response(void)
 {
     s_push_cursor = 0;
-    recomp_printf("[ItemSync] Starting full state push (%d fields + %d flags)\n",
-                  NUM_FIELDS, NUM_FLAGS);
+    recomp_printf("[ItemSync] Compact team-state snapshot scheduled.\n");
 }
 
-/* Reset all cached values to 0 so every non-zero field is re-broadcast on
- * the next monitoring pass (or full push).                                  */
+/* Reset cached values while no valid local save is available. */
 static void reset_caches(void)
 {
     int i;
@@ -764,6 +765,17 @@ static void reset_caches(void)
         s_fields[i].cached = 0;
     for (i = 0; i < NUM_FLAGS; ++i)
         s_flag_bits[i].cached = 0;
+}
+
+/* Capture the loaded save as the local baseline without broadcasting it. */
+static void capture_caches(void)
+{
+    int i;
+
+    for (i = 0; i < NUM_FIELDS; ++i)
+        s_fields[i].cached = SAVE_READ32(s_fields[i].off);
+    for (i = 0; i < NUM_FLAGS; ++i)
+        s_flag_bits[i].cached = (unsigned char)FLAG_IS_SET(s_flag_bits[i].id);
 }
 
 /* =========================================================================
@@ -1037,6 +1049,59 @@ static const char *apply_flag(const char *flag_name, signed int val)
     return 0;
 }
 
+static int get_team_state_value(const char *json, const char *name, signed int *out)
+{
+    char quoted_name[32];
+    char *wp = quoted_name;
+    const char *pos;
+
+    *wp++ = '"';
+    while (*name && wp < quoted_name + sizeof(quoted_name) - 2)
+        *wp++ = *name++;
+    *wp++ = '"';
+    *wp = '\0';
+
+    pos = sfind(json, quoted_name);
+    if (!pos)
+        return 0;
+    while (*pos && *pos != ':')
+        ++pos;
+    if (*pos != ':')
+        return 0;
+    ++pos;
+    while (*pos == ' ' || *pos == '\t')
+        ++pos;
+    return parse_int(&pos, out);
+}
+
+/* Apply one compact UPDATE_TEAM_STATE snapshot. Queued SET_FLAG deltas are
+ * expanded by Python and arrive immediately after this packet. */
+static void apply_team_state(const char *json)
+{
+    int i;
+    int applied = 0;
+    signed int value;
+
+    for (i = 0; i < NUM_FIELDS; ++i)
+    {
+        if (get_team_state_value(json, s_fields[i].name, &value))
+        {
+            if (apply_flag(s_fields[i].name, value))
+                applied++;
+        }
+    }
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        if (get_team_state_value(json, s_flag_bits[i].name, &value))
+        {
+            if (apply_flag(s_flag_bits[i].name, value))
+                applied++;
+        }
+    }
+    capture_caches();
+    recomp_printf("[ItemSync] Applied compact team state (%d changes).\n", applied);
+}
+
 /* =========================================================================
    Packet processing
    ========================================================================= */
@@ -1063,7 +1128,7 @@ static unsigned int get_packet_client_id(const char *json)
  * Processes up to MAX_PACKETS_PER_FRAME packets per frame.
  *
  * - SET_FLAG packets matching a tracked name update the local save.
- * - REQUEST_TEAM_STATE packets from *other* clients trigger a full-push so
+ * - REQUEST_TEAM_STATE packets from *other* clients schedule one snapshot so
  *   the requester absorbs the team's combined progress.  Self-issued packets
  *   (same clientId) and packets within PUSH_COOLDOWN_FRAMES of the last push
  *   are silently ignored to prevent response cascades.
@@ -1095,6 +1160,14 @@ static void process_incoming_packets(void)
                     item_notif_push("Received from team", display);
             }
         }
+        else if (is_packet_type(pkt, "UPDATE_TEAM_STATE"))
+        {
+            apply_team_state(pkt);
+        }
+        else if (is_packet_type(pkt, "MNSG_TEAM_STATE"))
+        {
+            apply_team_state(pkt);
+        }
         else if (is_packet_type(pkt, "REQUEST_TEAM_STATE"))
         {
             unsigned int requester = get_packet_client_id(pkt);
@@ -1102,17 +1175,16 @@ static void process_incoming_packets(void)
             int is_self = (own_id != 0 && requester == own_id);
             if (!is_self && s_push_cooldown <= 0 && save_is_loaded())
             {
-                recomp_printf("[ItemSync] REQUEST_TEAM_STATE from client %u – re-push scheduled.\n",
+                recomp_printf("[ItemSync] REQUEST_TEAM_STATE from client %u – snapshot scheduled.\n",
                               requester);
-                reset_caches();
-                start_full_push();
+                schedule_team_state_response();
                 s_push_cooldown = PUSH_COOLDOWN_FRAMES;
             }
         }
         else if (is_packet_type(pkt, "DAMAGE_SYNC"))
         {
             signed int dmg = 0;
-            if (anchor_runtime_damage_sync_enabled() &&
+            if (anchor_race_is_active() && anchor_runtime_damage_sync_enabled() &&
                 get_ds_damage(pkt, &dmg) && dmg > 0 && save_is_loaded())
             {
                 unsigned char cur_hp = DS_HP_READ();
@@ -1135,7 +1207,7 @@ static void process_incoming_packets(void)
         else if (is_packet_type(pkt, "HEAL_SYNC"))
         {
             signed int heal = 0;
-            if (anchor_runtime_damage_sync_enabled() &&
+            if (anchor_race_is_active() && anchor_runtime_damage_sync_enabled() &&
                 get_ds_heal(pkt, &heal) && heal > 0 && save_is_loaded())
             {
                 unsigned char cur_hp = DS_HP_READ();
@@ -1156,14 +1228,18 @@ static void process_incoming_packets(void)
         else if (is_packet_type(pkt, "RYO_SYNC"))
         {
             signed int delta = 0;
-            if (get_ds_ryo(pkt, &delta) && delta > 0 && save_is_loaded())
+            if (anchor_race_is_active() && anchor_runtime_ryo_sync_enabled() &&
+                get_ds_ryo(pkt, &delta) && delta != 0 && save_is_loaded())
             {
                 signed int cur_ryo = DS_RYO_READ();
-                DS_RYO_WRITE(cur_ryo + delta);
+                signed int new_ryo = cur_ryo + delta;
+                if (new_ryo < 0)
+                    new_ryo = 0;
+                DS_RYO_WRITE(new_ryo);
                 /* Update baseline so the monitor does not echo this back.   */
-                s_ryo_prev = cur_ryo + delta;
-                recomp_printf("[RyoSync] Applied +%d ryo (%d -> %d)\n",
-                              (int)delta, (int)cur_ryo, (int)(cur_ryo + delta));
+                s_ryo_prev = new_ryo;
+                recomp_printf("[RyoSync] Applied delta=%d ryo (%d -> %d)\n",
+                              (int)delta, (int)cur_ryo, (int)new_ryo);
             }
         }
         else if (is_packet_type(pkt, "MNSG_RACE_FINISH"))
@@ -1171,7 +1247,7 @@ static void process_incoming_packets(void)
             anchor_race_on_finish_packet(pkt);
         }
         /* All other packet types (ALL_CLIENT_STATE, UPDATE_CLIENT_STATE,
-         * UPDATE_TEAM_STATE, etc.) are consumed here.  Python's internal
+         * etc.) are consumed here.  Python's internal
          * _player_states dict is maintained by the recv thread, so the
          * player-list overlay continues to work correctly without these
          * packets being processed on the C side.                            */
@@ -1181,50 +1257,109 @@ static void process_incoming_packets(void)
 }
 
 /* =========================================================================
-   Outgoing – full push (one item per frame)
+   Outgoing – compact team-state snapshot
    ========================================================================= */
 
-/**
- * @brief Send one item from the sync tables each frame during the initial push.
- *
- * Loops over all 32-bit fields then all flag bits, sending each non-zero
- * value.  When the entire table has been walked, reverts to monitoring mode.
- */
-static void do_push_step(void)
+static int team_state_append_char(char **wp, char *end, char c)
 {
-    if (s_push_cursor < 0 || s_push_cursor >= push_total())
-    {
-        s_push_cursor = PUSH_IDLE;
-        recomp_printf("[ItemSync] Full push complete.\n");
-        return;
-    }
+    if (*wp >= end - 1)
+        return 0;
+    *(*wp)++ = c;
+    return 1;
+}
 
-    if (s_push_cursor < NUM_FIELDS)
+static int team_state_append_text(char **wp, char *end, const char *text)
+{
+    while (*text)
     {
-        /* Push one 32-bit field. */
-        int i = s_push_cursor;
-        signed int val = SAVE_READ32(s_fields[i].off);
-        if (val != 0)
-        {
-            anchor_send_flag(s_fields[i].name, (int)val, 1);
-            s_fields[i].cached = val;
-        }
+        if (!team_state_append_char(wp, end, *text++))
+            return 0;
+    }
+    return 1;
+}
+
+static int team_state_append_entry(char **wp, char *end, const char *name,
+                                   signed int value, int *wrote_entry)
+{
+    char value_text[12];
+    char *value_end = append_signed_decimal(value_text, value);
+
+    *value_end = '\0';
+    if (*wrote_entry && !team_state_append_char(wp, end, ','))
+        return 0;
+    if (!team_state_append_char(wp, end, '"') ||
+        !team_state_append_text(wp, end, name) ||
+        !team_state_append_char(wp, end, '"') ||
+        !team_state_append_char(wp, end, ':') ||
+        !team_state_append_text(wp, end, value_text))
+        return 0;
+    *wrote_entry = 1;
+    return 1;
+}
+
+static int build_team_state_json(void)
+{
+    char *wp = s_team_state_json;
+    char *end = s_team_state_json + TEAM_STATE_JSON_MAX;
+    int wrote_entry = 0;
+    int i;
+
+    if (!team_state_append_char(&wp, end, '{'))
+        return 0;
+    for (i = 0; i < NUM_FIELDS; ++i)
+    {
+        signed int value = SAVE_READ32(s_fields[i].off);
+        if (value != 0 &&
+            !team_state_append_entry(&wp, end, s_fields[i].name, value, &wrote_entry))
+            return 0;
+    }
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        if (FLAG_IS_SET(s_flag_bits[i].id) &&
+            !team_state_append_entry(&wp, end, s_flag_bits[i].name, 1, &wrote_entry))
+            return 0;
+    }
+    if (!team_state_append_char(&wp, end, '}'))
+        return 0;
+    *wp = '\0';
+    return 1;
+}
+
+/* Share this client's merged state once after load/reconnect. This preserves
+ * pre-existing local progress without the old hundreds-of-SET_FLAG flood. */
+static int broadcast_team_state_snapshot(void)
+{
+    char *team_id;
+    int sent = 0;
+
+    if (!build_team_state_json())
+        return 0;
+    team_id = anchor_get_team_id();
+    if (team_id && team_id[0])
+        sent = anchor_send_custom_packet("MNSG_TEAM_STATE", s_team_state_json,
+                                         team_id, 0, 0);
+    if (team_id)
+        recomp_free(team_id);
+    if (sent)
+        capture_caches();
+    return sent;
+}
+
+static void send_scheduled_team_state_response(void)
+{
+    if (s_push_cursor < 0)
+        return;
+
+    s_push_cursor = PUSH_IDLE;
+    if (build_team_state_json() && anchor_update_team_state(s_team_state_json))
+    {
+        capture_caches();
+        recomp_printf("[ItemSync] Compact team-state snapshot sent.\n");
     }
     else
     {
-        /* Push one flag bit. */
-        int i = s_push_cursor - NUM_FIELDS;
-        if (FLAG_IS_SET(s_flag_bits[i].id))
-        {
-            anchor_send_flag(s_flag_bits[i].name, 1, 1);
-            s_flag_bits[i].cached = 1;
-        }
+        recomp_printf("[ItemSync] Compact team-state snapshot failed.\n");
     }
-
-    ++s_push_cursor;
-    /* Mark push as idle when we've passed the last entry. */
-    if (s_push_cursor >= push_total())
-        s_push_cursor = PUSH_IDLE;
 }
 
 /* =========================================================================
@@ -1232,12 +1367,12 @@ static void do_push_step(void)
    ========================================================================= */
 
 /**
- * @brief Detect and broadcast any newly acquired items this frame.
+ * @brief Detect and broadcast newly acquired items within the send budget.
  *
- * Runs after the initial full-push sequence completes.  Compares each
- * tracked value against the cached snapshot; any change that can only be
- * an acquisition (value gained, not lost) is immediately sent as a
- * queued SET_FLAG packet.
+ * Runs while no compact team-state response is pending. Compares each tracked
+ * value against the cached snapshot; acquisitions are sent as queued
+ * SET_FLAG packets at a bounded rate, and deferred values remain uncached so
+ * a later frame retries them.
  */
 static void monitor_and_send_changes(void)
 {
@@ -1260,12 +1395,14 @@ static void monitor_and_send_changes(void)
 
         if (should_send)
         {
-            if (sends >= MAX_SENDS_PER_FRAME)
+            if (sends >= MAX_SENDS_PER_FRAME || s_set_flag_send_timer > 0)
                 continue; /* budget exhausted – defer to next frame (cache not updated) */
 
-            anchor_send_flag(s_fields[i].name, (int)cur, 1);
+            if (!anchor_send_flag(s_fields[i].name, (int)cur, 1))
+                continue;
             anchor_race_on_flag_synced(s_fields[i].name, (int)cur);
             ++sends;
+            s_set_flag_send_timer = SET_FLAG_SEND_INTERVAL_FRAMES;
             recomp_printf("[ItemSync] Sent field '%s' = %d\n",
                           s_fields[i].name, cur);
             const char *display = get_flag_display_name(s_fields[i].name);
@@ -1286,12 +1423,14 @@ static void monitor_and_send_changes(void)
 
         if (cur)
         { /* only broadcast when flag becomes set, not when cleared */
-            if (sends >= MAX_SENDS_PER_FRAME)
+            if (sends >= MAX_SENDS_PER_FRAME || s_set_flag_send_timer > 0)
                 continue; /* defer to next frame */
 
-            anchor_send_flag(s_flag_bits[i].name, 1, 1);
+            if (!anchor_send_flag(s_flag_bits[i].name, 1, 1))
+                continue;
             anchor_race_on_flag_synced(s_flag_bits[i].name, 1);
             ++sends;
+            s_set_flag_send_timer = SET_FLAG_SEND_INTERVAL_FRAMES;
             recomp_printf("[ItemSync] Sent flag '%s' (id=0x%X)\n",
                           s_flag_bits[i].name, s_flag_bits[i].id);
             const char *display = get_flag_display_name(s_flag_bits[i].name);
@@ -1321,39 +1460,41 @@ void item_sync_update(void)
        toasts from a just-dropped connection still expire gracefully). ────── */
     item_notif_tick();
 
-    /* ── Tick the re-push cooldown regardless of connection state ────── */
+    /* ── Tick packet-rate cooldowns regardless of connection state ───── */
     if (s_push_cooldown > 0)
         --s_push_cooldown;
+    if (s_set_flag_send_timer > 0)
+        --s_set_flag_send_timer;
+    if (s_team_snapshot_broadcast_timer > 0)
+        --s_team_snapshot_broadcast_timer;
 
     /* ── Connection transitions ──────────────────────────────────────── */
     if (is_connected && !s_was_connected)
     {
-        /* Just connected: reset caches so we re-broadcast everything.    */
-        recomp_printf("[ItemSync] Connected – preparing full state push.\n");
+        /* Request the stored/online team snapshot. The local loaded save is
+         * captured as a baseline below instead of flooding SET_FLAG packets. */
+        recomp_printf("[ItemSync] Connected – requesting compact team state.\n");
         reset_caches();
         s_push_cooldown = 0;
-        s_prev_player_count = 0;
+        s_set_flag_send_timer = 0;
+        s_team_state_request_pending = 1;
+        s_team_snapshot_broadcast_timer = -1;
+        s_save_was_valid = 0;
         s_ds_initialized = 0;  /* reset damage-sync baseline on connect */
         s_ryo_initialized = 0; /* reset ryo-sync baseline on connect    */
-        /* Request any state teammates may have queued for our team.      */
-        anchor_request_team_state("");
-        /* If a save is already loaded (reconnect mid-game), push now.    */
-        if (save_is_loaded())
-        {
-            s_save_was_valid = 1;
-            start_full_push();
-        }
     }
     if (!is_connected && s_was_connected)
     {
-        /* Disconnected: cancel any in-progress push.                     */
-        recomp_printf("[ItemSync] Disconnected – clearing push state.\n");
+        /* Disconnected: cancel any pending team-state response. */
+        recomp_printf("[ItemSync] Disconnected – clearing sync state.\n");
         if (anchor_race_is_active())
             anchor_race_on_forced_disconnect();
         s_push_cursor = PUSH_IDLE;
         s_push_cooldown = 0;
+        s_set_flag_send_timer = 0;
+        s_team_state_request_pending = 0;
+        s_team_snapshot_broadcast_timer = -1;
         s_save_was_valid = 0;
-        s_prev_player_count = 0;
         s_ds_initialized = 0;  /* reset damage-sync baseline on disconnect */
         s_ryo_initialized = 0; /* reset ryo-sync baseline on disconnect   */
     }
@@ -1365,40 +1506,50 @@ void item_sync_update(void)
     /* ── Wait for a loaded save file ─────────────────────────────────── */
     int valid = save_is_loaded();
 
-    if (valid && !s_save_was_valid)
+    if (valid != s_save_was_valid)
     {
-        /* Save just became valid (player loaded a file): begin the push. */
-        recomp_printf("[ItemSync] Save loaded – starting full push.\n");
-        reset_caches();
-        start_full_push();
+        anchor_set_save_loaded(valid);
+        if (valid)
+        {
+            capture_caches();
+            s_team_snapshot_broadcast_timer = TEAM_SNAPSHOT_BROADCAST_DELAY_FRAMES;
+            recomp_printf("[ItemSync] Save loaded – local sync baseline captured.\n");
+        }
+        else
+        {
+            reset_caches();
+            s_push_cursor = PUSH_IDLE;
+            s_team_snapshot_broadcast_timer = -1;
+        }
     }
     s_save_was_valid = valid;
 
     if (!valid)
         return;
 
-    /* ── Detect new players joining and push state to them ───────────── */
+    /* Wait for the server-assigned id so the request cannot be echoed back as
+     * a clientId=0 room broadcast. */
+    if (s_team_state_request_pending && anchor_get_client_id() != 0)
     {
-        int cur_count = get_player_count();
-        if (cur_count > s_prev_player_count && s_prev_player_count > 0)
+        if (anchor_request_team_state(""))
         {
-            /* At least one new player joined.  Trigger an immediate full push
-             * so they receive all items regardless of the queue or cooldown.
-             * Skip the cooldown check here – a new join always warrants a push. */
-            recomp_printf("[ItemSync] New player joined (%d->%d) – triggering full state push.\n",
-                          s_prev_player_count, cur_count);
-            reset_caches();
-            start_full_push();
-            s_push_cooldown = PUSH_COOLDOWN_FRAMES;
+            s_team_state_request_pending = 0;
+            recomp_printf("[ItemSync] Compact team state requested.\n");
         }
-        /* Only update the previous count when the room is non-empty to avoid
-         * resetting the baseline during transient 0-player moments.           */
-        if (cur_count > 0)
-            s_prev_player_count = cur_count;
     }
 
     /* ── Process incoming packets ─────────────────────────────────────── */
     process_incoming_packets();
+
+    if (s_team_snapshot_broadcast_timer == 0 &&
+        !s_team_state_request_pending && anchor_get_client_id() != 0)
+    {
+        s_team_snapshot_broadcast_timer = -1;
+        if (broadcast_team_state_snapshot())
+            recomp_printf("[ItemSync] Compact local team snapshot broadcast.\n");
+        else
+            recomp_printf("[ItemSync] Compact local team snapshot broadcast failed.\n");
+    }
 
     /* ── Damage sync ─────────────────────────────────────────────────── */
     /* Monitor the active character's HP each frame.  When it drops without
@@ -1449,7 +1600,8 @@ void item_sync_update(void)
                 recomp_printf("[RaceChallenge] No hit forced HP to zero.\n");
             }
 
-            if (is_connected && anchor_runtime_damage_sync_enabled())
+            if (is_connected && race_challenges_active &&
+                anchor_runtime_damage_sync_enabled())
             {
                 /* Build JSON payload {"damage":N} without printf.          */
                 char ds_payload[20];
@@ -1483,7 +1635,7 @@ void item_sync_update(void)
             /* HP increased this frame – the active character was healed.   */
             unsigned char healed = (unsigned char)(ds_cur_hp - s_ds_prev_hp);
 
-            if (anchor_runtime_damage_sync_enabled())
+            if (race_challenges_active && anchor_runtime_damage_sync_enabled())
             {
                 /* Build JSON payload {"heal":N} without printf.            */
                 char hs_payload[18];
@@ -1517,11 +1669,10 @@ void item_sync_update(void)
         }
     }
 
-    /* ── Ryo delta sync ───────────────────────────────────────────────── */
-    /* Broadcasts only the amount gained (delta) to teammates so each     */
-    /* player's balance increases by the same amount picked up.  Late    */
-    /* joiners keep their own balance until the next pickup occurs.       */
-    if (!valid)
+    /* ── Race challenge: Ryo delta sync ───────────────────────────────── */
+    /* During an active race, broadcast both positive and negative balance */
+    /* deltas so earning and spending ryo are mirrored by teammates.       */
+    if (!valid || !anchor_race_is_active() || !anchor_runtime_ryo_sync_enabled())
     {
         s_ryo_initialized = 0;
     }
@@ -1533,16 +1684,13 @@ void item_sync_update(void)
             s_ryo_prev = ryo_cur;
             s_ryo_initialized = 1;
         }
-        else if (ryo_cur > s_ryo_prev && is_connected)
+        else if (ryo_cur != s_ryo_prev && is_connected)
         {
             signed int delta = ryo_cur - s_ryo_prev;
 
             /* Build JSON payload {"ryo":N} without printf.                 */
             char ryo_payload[24];
             char *wp = ryo_payload;
-            char tmp[10];
-            int n_digits = 0;
-            signed int v = delta;
             *wp++ = '{';
             *wp++ = '"';
             *wp++ = 'r';
@@ -1550,20 +1698,7 @@ void item_sync_update(void)
             *wp++ = 'o';
             *wp++ = '"';
             *wp++ = ':';
-            if (v == 0)
-            {
-                *wp++ = '0';
-            }
-            else
-            {
-                while (v > 0)
-                {
-                    tmp[n_digits++] = (char)('0' + v % 10);
-                    v /= 10;
-                }
-                while (n_digits-- > 0)
-                    *wp++ = tmp[n_digits];
-            }
+            wp = append_signed_decimal(wp, delta);
             *wp++ = '}';
             *wp = '\0';
 
@@ -1578,10 +1713,10 @@ void item_sync_update(void)
         }
     }
 
-    /* ── Full push (one step per frame) ──────────────────────────────── */
+    /* ── Compact response to a pending team-state request ────────────── */
     if (s_push_cursor >= 0)
     {
-        do_push_step();
+        send_scheduled_team_state_response();
         return; /* skip monitor pass while pushing to keep frame budget */
     }
 

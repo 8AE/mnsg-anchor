@@ -14,16 +14,15 @@
 #include "anchor_player_models.h"
 
 #define ANCHOR_REMOTE_MAX 25
-#define POSITION_SEND_FRAMES 2
-#define POSITION_KEEPALIVE_FRAMES 30
+#define POSITION_SEND_FRAMES 6
+#define POSITION_KEEPALIVE_FRAMES 120
 #define POSITION_MIN_DELTA_SQ 36
 #define ANIMATION_SEND_DELTA_100 20
 #define ANIMATION_RESTART_DELTA_100 50
 #define LOBBY_REFRESH_FRAMES 1
-#define REMOTE_PACKET_FRAME_INTERVAL 2.0f
 #define REMOTE_SNAP_DISTANCE_SQ 250000.0f
 #define REMOTE_SMOOTHING_FACTOR 0.35f
-#define REMOTE_VELOCITY_LEAD_SECONDS 0.04f
+#define REMOTE_VELOCITY_LEAD_SECONDS 0.08f
 
 #define CHARACTER_GOEMON 0
 #define CHARACTER_EBISUMARU 1
@@ -418,10 +417,11 @@ static void publish_local_state(PlayerObject *local_obj)
     if (s_position_keepalive_timer > 0)
         s_position_keepalive_timer--;
     /* Validate the external player task before reading its action field; room
-     * transitions temporarily clear or replace this engine-owned pointer. */
+     * transitions temporarily clear or replace this engine-owned pointer.
+     * Sample every frame so action changes and animation restarts can bypass
+     * the normal network cadence without increasing steady-state traffic. */
     if (!is_rdram_pointer(local_obj) ||
-        !is_rdram_pointer(D_801FC604_5B8514) ||
-        s_state_send_timer > 0)
+        !is_rdram_pointer(D_801FC604_5B8514))
         return;
 
     x = (int)local_obj->x;
@@ -449,8 +449,9 @@ static void publish_local_state(PlayerObject *local_obj)
         dy = y - s_last_sent_y;
         dz = z - s_last_sent_z;
         should_send_position =
-            (dx * dx + dy * dy + dz * dz) >= POSITION_MIN_DELTA_SQ ||
-            s_position_keepalive_timer <= 0;
+            s_state_send_timer <= 0 &&
+            ((dx * dx + dy * dy + dz * dz) >= POSITION_MIN_DELTA_SQ ||
+             s_position_keepalive_timer <= 0);
     }
     anim_delta = frame_100 - s_last_sent_frame_100;
     if (anim_delta < 0)
@@ -459,14 +460,14 @@ static void publish_local_state(PlayerObject *local_obj)
         action == s_last_sent_action &&
         frame_100 + ANIMATION_RESTART_DELTA_100 < s_last_sent_frame_100;
     should_send_animation =
-        s_state_send_timer <= 0 ||
         action != s_last_sent_action ||
         frame_restarted ||
-        anim_delta >= ANIMATION_SEND_DELTA_100 ||
-        frame_count_100 != s_last_sent_frame_count_100 ||
-        rot_x != s_last_sent_rot_x ||
-        rot_y != s_last_sent_rot_y ||
-        rot_z != s_last_sent_rot_z;
+        (s_state_send_timer <= 0 &&
+         (anim_delta >= ANIMATION_SEND_DELTA_100 ||
+          frame_count_100 != s_last_sent_frame_count_100 ||
+          rot_x != s_last_sent_rot_x ||
+          rot_y != s_last_sent_rot_y ||
+          rot_z != s_last_sent_rot_z));
     if (!should_send_position && !should_send_animation)
         return;
 

@@ -127,14 +127,6 @@ options = ["Enabled", "Disabled"]
 default = "Enabled"
 
 [[manifest.config_options]]
-id = "anchor_damage_sync"
-name = "Team Damage Sync (default)"
-description = "Default state for Race Setup > Challenges. The host race config controls the live race setting."
-type = "Enum"
-options = ["Enabled", "Disabled"]
-default = "Disabled"
-
-[[manifest.config_options]]
 id = "anchor_show_room_hex"
 name = "Show Room ID (Hex)"
 description = "Display the raw hexadecimal room ID next to the area name in the player list (e.g. \"Oedo Castle 1F (0x00A5)\")."
