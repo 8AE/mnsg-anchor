@@ -210,7 +210,8 @@ assets:
 2. attach one kind-2 model/display record with `func_8000DBF0`;
 3. never call the playable constructor, player manager, character-change
    function, action-binding function, controls, or gameplay callbacks;
-4. stage only immutable Goemon/Ebisumaru render data at the scene-load hook;
+4. stage only immutable Goemon/Ebisumaru/Sasuke/Yae render data at the
+   scene-load hook;
 5. select the character's immutable `0x1C`-byte action record from the received
    character/action ids, bind its display pointer to the plain object, and copy
    the received frame and rotations.
@@ -221,10 +222,13 @@ The render-only resource mapping is:
 | --- | ---: | ---: |
 | Goemon | `0x120` | `0x123` |
 | Ebisumaru | `0x124` | `0x127` |
+| Sasuke | `0x128` | `0x12B` |
+| Yae | `0x12C` | `0x12F` |
 
-This produces clothed Goemon/Ebisumaru and a one-to-one action clip without
-creating another playable actor. The action table is read as immutable model
-metadata; none of its playable behavior callbacks are installed or executed.
+This produces the clothed version of every playable character and a one-to-one
+action clip without creating another playable actor. The action table is read
+as immutable model metadata; none of its playable behavior callbacks are
+installed or executed.
 
 Using `0x288/0x180000AC` or `0x277/0x18000554` is still incorrect: those are
 the proven ballistic prop and male scene NPC from the earlier screenshot.

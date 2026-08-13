@@ -34,7 +34,7 @@
 #include "anchor_flag_catalog.h"
 
 /* Set to 1 to show the DBG button in the bottom-right corner. */
-static int DEBUG_BUTTON_ENABLED = 0;
+static int DEBUG_BUTTON_ENABLED = 1;
 
 /* Provided by item_sync.c */
 void item_sync_force_flag(const char *name);

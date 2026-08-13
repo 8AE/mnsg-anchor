@@ -17,7 +17,7 @@ The mod hooks its return so Anchor work runs after the normal game step:
 - `item_sync_update` drains network packets and writes save flags.
 - `anchor_character_frame_hook` keeps the selected character legal.
 - `anchor_actors_update_cutscene_models` publishes local position/animation and
-  updates remote Goemon/Ebisumaru cutscene models and nameplates.
+  updates all four remote cutscene models and nameplates.
 - Race UI hooks apply pending race setup once save memory exists.
 
 ### `D_800C7AB2`
@@ -186,7 +186,8 @@ fields before entering the warp/load step.
 
 The renderer follows the opening cutscene's task architecture but does not call
 an overlay-local character creator and does not create another playable actor.
-It uses immutable Goemon/Ebisumaru display data on a plain child task.
+It uses immutable Goemon/Ebisumaru/Sasuke/Yae display data on a plain child
+task.
 
 ### `D_801FC604_5B8514`
 
@@ -215,8 +216,8 @@ projection and are not involved in model creation.
 ### `func_80034E08_35A08`
 
 Allocates and inserts an engine task. Anchor uses it to create one plain child
-task per visible Goemon/Ebisumaru remote, matching the standalone ownership
-pattern traced in the opening.
+task per visible Goemon/Ebisumaru/Sasuke/Yae remote, matching the standalone
+ownership pattern traced in the opening.
 
 ### `func_8000DBF0_E7F0`
 
@@ -239,8 +240,9 @@ it does not call the player initializer.
 ### `func_8020D6BC_5C8B8C`
 
 Gameplay stage-resource dispatcher. Its return hook is the only place the
-remote renderer stages broad Goemon/Ebisumaru data and performs the initial raw
-action-file DMA. No broad resource loading occurs in the per-frame hook.
+remote renderer stages broad Goemon/Ebisumaru/Sasuke/Yae data and performs the
+initial raw action-file DMA. No broad resource loading occurs in the per-frame
+hook.
 
 ### `func_80013B14_14714` and `func_800141C4_14DC4`
 
@@ -252,6 +254,8 @@ validates these immutable broad files:
 | --- | ---: |
 | Goemon | `0x120` |
 | Ebisumaru | `0x124` |
+| Sasuke | `0x128` |
+| Yae | `0x12C` |
 
 The registered base is bound to object segment 9 at `+0x40`.
 
@@ -259,14 +263,16 @@ The registered base is bound to object segment 9 at `+0x40`.
 
 The first two functions return a file's ROM bounds; the third performs the
 blocking DMA. At the stage hook, Anchor copies the complete raw Goemon
-`0x123` and Ebisumaru `0x127` action-model files into persistent mod-owned
-buffers. Those bases are bound to object segment 8 at `+0x38`.
+`0x123`, Ebisumaru `0x127`, Sasuke `0x12B`, and Yae `0x12F` action-model files
+into persistent mod-owned buffers. Those bases are bound to object segment 8
+at `+0x38`.
 
 ### `D_80203F34_5BFE44`
 
 Four immutable character action arrays; each action record is `0x1C` bytes.
-The remote renderer reads only Goemon entry 0 or Ebisumaru entry 1. It uses the
-record's display pointer, animation speed, aux selector, and aux resource table.
+The remote renderer selects Goemon entry 0, Ebisumaru entry 1, Sasuke entry 2,
+or Yae entry 3. It uses the record's display pointer, animation speed, aux
+selector, and aux resource table.
 
 The renderer never calls `func_801DAC7C` or `func_801DAD68`, never installs
 `D_80203B90` behavior callbacks, and never mutates the live player task. The
@@ -276,7 +282,7 @@ table is model metadata only.
 
 Immutable per-character file-id tables. The former selects the broad file; the
 latter selects the raw action-model file. They are indexed only with validated
-remote character ids 0 and 1.
+remote character ids 0 through 3.
 
 ### `D_80203FF0_5BFF00`, `D_80203FF8_5BFF08`, and `func_800145B4_151B4`
 
@@ -336,14 +342,14 @@ heap. `func_801DC630` starts at `0x80305500`, advances the resident scene arena
 four times by `0x1000` for its two-channel double buffers, and then carves its
 larger action-model buffers. Anchor now follows that persistent-arena pattern:
 
-- after both remote characters and all broad dependencies are resident, it
+- after all four remote characters and their broad dependencies are resident, it
   finds the scene registry's zero-id cursor;
 - it reserves `25 * 2 * 2 * 0x1000 = 0x64000` bytes, enough for both double-
   buffered channels of every remote slot;
 - it advances the external cursor so any later scene resource begins after
   the reserved range;
-- it rejects a reservation whose end would cross `0x80800000`, and keeps both
-  character caches unavailable rather than rendering with unsafe addresses;
+- it rejects a reservation whose end would cross `0x80800000`, and keeps all
+  four character caches unavailable rather than rendering with unsafe addresses;
 - it invalidates every old face-buffer pointer when a new stage rebuilds the
   registry.
 
@@ -380,12 +386,12 @@ and never creates a standalone Goemon display object.
 
 Therefore the remote implementation keeps the opening's plain task/display
 architecture but not those presentation assets. Immutable clothed
-Goemon/Ebisumaru render data is bound to independent objects; no playable actor
-code runs.
+Goemon/Ebisumaru/Sasuke/Yae render data is bound to independent objects; no
+playable actor code runs.
 
 ## Hook Boundary
 
-- `RECOMP_HOOK_RETURN("func_8020D6BC_5C8B8C")` stages both characters after
+- `RECOMP_HOOK_RETURN("func_8020D6BC_5C8B8C")` stages all four characters after
   normal stage resource loading.
 - `RECOMP_HOOK_RETURN("func_80002040_2C40")` publishes the final local state,
   queues complete remote snapshots, and draws nameplates. Each remote

@@ -1,6 +1,6 @@
 /**
  * @file anchor_player_models.c
- * @brief Render remote Goemon/Ebisumaru with cutscene-style model tasks.
+ * @brief Render all four remote characters with cutscene-style model tasks.
  *
  * The opening-cutscene trace shows the game does NOT use the player manager
  * or the slot-indexed staging chain to display character models in scripted
@@ -13,10 +13,11 @@
  *      object+0x34, position/rotation/scale, all with no player task.
  *   3. Animates through object+0x28 (frame) and object+0x30 (anim state).
  *
- * This file uses that task/object architecture, then binds immutable Goemon
- * and Ebisumaru render assets and action records so the clothed model and the
- * sender's exact action clip can be displayed. It never calls a playable
- * character constructor, playable action callback, or player-manager update.
+ * This file uses that task/object architecture, then binds immutable Goemon,
+ * Ebisumaru, Sasuke, and Yae render assets and action records so the clothed
+ * model and the sender's exact action clip can be displayed. It never calls a
+ * playable character constructor, playable action callback, or player-manager
+ * update.
  * The action files are cached whole in mod memory; the broad character files
  * are registered by the normal scene resource loader. Face/part resources are
  * different: their pixels are referenced by generated N64 display-list
@@ -48,7 +49,7 @@
 #define REMOTE_PACKET_FRAME_INTERVAL 2.0f
 
 #define REMOTE_MODEL_SLOT_COUNT ANCHOR_PLAYER_MODEL_MAX
-#define CHARACTER_COUNT 2
+#define CHARACTER_COUNT 4
 #define AUX_BUFFER_SIZE 0x1000u
 #define AUX_RESOURCE_COUNT 2
 #define AUX_FLIP_COUNT 2
@@ -168,12 +169,12 @@ extern unsigned char D_80203FF0_5BFF00[];
  * selects the object segment rebound when a timed face/part resource changes. */
 extern unsigned short D_80203FF8_5BFF08[];
 
-/* Per-character broad character-resource file ids. Only Goemon/Ebisumaru
- * entries are read to stage the correct clothed render data. */
+/* Per-character broad character-resource file ids. All four entries are read
+ * to stage the correct clothed Goemon/Ebisumaru/Sasuke/Yae render data. */
 extern unsigned short D_80204020_5BFF30[];
 
-/* Per-character raw action-model file ids. Only Goemon/Ebisumaru entries are
- * copied into mod-owned render caches. */
+/* Per-character raw action-model file ids. All four entries are copied into
+ * mod-owned render caches for exact remote action selection. */
 extern unsigned short D_80204028_5BFF38[];
 
 /* DMA mode byte the stock action copy (func_801DC70C) forces to 1 around
@@ -384,16 +385,16 @@ void anchor_player_models_load_resources(void)
     for (ch = 0; ch < CHARACTER_COUNT; ++ch)
     {
         CharacterModelCache *cache = &s_char_cache[ch];
-        /* Use the immutable broad-file table to keep Goemon and Ebisumaru
+        /* Use the immutable broad-file table to keep all four character
          * resources independent of the local player's selected character. */
         unsigned int broad_id = D_80204020_5BFF30[ch];
 
         cache->ready = 0;
         cache->broad = 0;
 
-        /* Use the scene loader during the stage-load return hook so Goemon's
-         * and Ebisumaru's clothed broad render resources are resident before
-         * any per-frame remote task runs. */
+        /* Use the scene loader during the stage-load return hook so every
+         * character's clothed broad render resources are resident before any
+         * per-frame remote task runs. */
         func_80013B14_14714(broad_id);
         cache->broad = resident_resource_base(broad_id);
         if (!cache->broad || !cache_action_file(ch))
@@ -409,7 +410,7 @@ void anchor_player_models_load_resources(void)
 
     if (!reserve_aux_render_arena())
     {
-        /* Without original-RDRAM face storage, leave both external character
+        /* Without original-RDRAM face storage, leave all external character
          * resources unavailable instead of submitting corrupt texture data. */
         for (ch = 0; ch < CHARACTER_COUNT; ++ch)
             s_char_cache[ch].ready = 0;
@@ -536,7 +537,7 @@ static int ensure_slot_task(RemoteModelSlot *slot, const AnchorPlayerModelRemote
     scale = REMOTE_MODEL_SCALE;
 
     /* Spawn hidden: model pointer 0 renders nothing. +0x30 gets the immutable
-     * renderer context required by the clothed Goemon/Ebisumaru display data;
+     * renderer context required by the clothed four-character display data;
      * no player initialization or behavior function is called. */
     object = func_8000DBF0_E7F0(slot->task, 0,
                                 CLOTHED_CHARACTER_ANIM_CONTEXT,
@@ -553,8 +554,9 @@ static int ensure_slot_task(RemoteModelSlot *slot, const AnchorPlayerModelRemote
     /* Ghidra: FUN_801CC30C writes object+0x05 = 2 immediately after assigning
      * the clothed player animation context. FUN_8000DBF0 and its free-list
      * allocator do not initialize this byte, so explicitly select the same
-     * render-object mode before binding Goemon/Ebisumaru display data. This is
-     * renderer state only; no playable task or player behavior is invoked. */
+     * render-object mode before binding the selected character display data.
+     * This is renderer state only; no playable task or player behavior is
+     * invoked. */
     write_u8_at(object, 0x05, CLOTHED_CHARACTER_OBJECT_MODE);
     slot->object = object;
     hide_object(object);

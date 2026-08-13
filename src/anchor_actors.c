@@ -2,9 +2,10 @@
  * @file anchor_actors.c
  * @brief Anchor remote publishing and cutscene-style model rendering.
  *
- * Remote Goemon/Ebisumaru models use standalone task/display objects like the
- * opening cutscene. Model/action data is bound as immutable render input; no
- * playable constructor, player actor, controls, or behavior callback is used.
+ * Remote Goemon/Ebisumaru/Sasuke/Yae models use standalone task/display
+ * objects like the game's character cutscenes. Model/action data is bound as
+ * immutable render input; no playable constructor, player actor, controls, or
+ * behavior callback is used.
  */
 
 #include "modding.h"
@@ -26,6 +27,9 @@
 
 #define CHARACTER_GOEMON 0
 #define CHARACTER_EBISUMARU 1
+#define CHARACTER_SASUKE 2
+#define CHARACTER_YAE 3
+#define CHARACTER_COUNT 4
 
 typedef struct PlayerObject
 {
@@ -169,8 +173,8 @@ static int is_rdram_pointer(const void *ptr)
 }
 
 /* Gameplay uses a different overlay than file_18. This return hook runs after
- * normal stage resources and stages the immutable Goemon/Ebisumaru render
- * files required by the standalone remote model tasks. */
+ * normal stage resources and stages the immutable render files for all four
+ * characters required by the standalone remote model tasks. */
 RECOMP_HOOK_RETURN("func_8020D6BC_5C8B8C")
 void anchor_load_remote_cutscene_resources(void)
 {
@@ -574,8 +578,8 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
             continue;
 
         smooth_remote_player(remote, &smoothed_remote);
-        if ((remote->ch == CHARACTER_GOEMON ||
-             remote->ch == CHARACTER_EBISUMARU) &&
+        if (remote->ch >= CHARACTER_GOEMON &&
+            remote->ch < CHARACTER_COUNT &&
             model_count < ANCHOR_REMOTE_MAX)
         {
             AnchorPlayerModelRemote *model = &s_remote_models[model_count++];
