@@ -18,7 +18,10 @@
  * sender's exact action clip can be displayed. It never calls a playable
  * character constructor, playable action callback, or player-manager update.
  * The action files are cached whole in mod memory; the broad character files
- * are registered by the normal scene resource loader.
+ * are registered by the normal scene resource loader. Face/part resources are
+ * different: their pixels are referenced by generated N64 display-list
+ * commands, so their per-slot double buffers are carved from the stock scene
+ * arena below 0x80800000 instead of the extended recomp heap.
  *
  * Object segment binding (matches the player object layout):
  *   +0x38 action file base (segment 8; action model pointers are file-
@@ -52,6 +55,18 @@
 #define AUX_SEQUENCE_MAX_STEPS 32
 #define AUX_RESOURCE_ID_LIMIT 0x8770u
 #define BUFFER_ALIGN 16u
+#define SCENE_RESOURCE_ENTRY_COUNT 48
+#define RENDER_RDRAM_END 0x80800000u
+#define AUX_ARENA_SIZE                                                     \
+    (REMOTE_MODEL_SLOT_COUNT * AUX_RESOURCE_COUNT * AUX_FLIP_COUNT *       \
+     AUX_BUFFER_SIZE)
+
+typedef struct SceneResourceEntry
+{
+    unsigned short file_id;
+    unsigned short padding;
+    unsigned char *data;
+} SceneResourceEntry;
 
 typedef struct CharacterModelCache
 {
@@ -113,6 +128,12 @@ extern void *func_80013B14_14714(unsigned int file_id);
  * bound to segment 9 of each remote model object. */
 extern void *func_800141C4_14DC4(unsigned int file_id);
 
+/* Scene resource registry and resident-arena cursor. Ghidra shows
+ * func_80013B14 using the first file_id == 0 entry's data pointer as the next
+ * broad-resource destination; func_801DC630 carves the stock player's
+ * persistent face buffers from this same arena. */
+extern SceneResourceEntry D_80167FC0_168BC0[SCENE_RESOURCE_ENTRY_COUNT];
+
 /* Blocking DMA copy from ROM. The action-model file is stored raw (the stock
  * func_801DC70C DMAs ranges of it directly), so the whole file is copied. */
 extern void func_80001640_2240(unsigned int rom_addr, void *dst, unsigned int size);
@@ -164,6 +185,8 @@ extern unsigned short D_80204028_5BFF38[];
 static CharacterModelCache s_char_cache[CHARACTER_COUNT];
 static RemoteModelSlot s_slots[REMOTE_MODEL_SLOT_COUNT];
 static void *s_owner_task;
+static unsigned char *s_aux_arena_next;
+static unsigned char *s_aux_arena_end;
 
 static void remote_model_task_update(void *task, void *object);
 
@@ -202,6 +225,94 @@ static unsigned char *alloc_aligned(unsigned int size)
     if (addr == 0)
         return 0;
     return (unsigned char *)(unsigned long)((addr + (BUFFER_ALIGN - 1u)) & ~(BUFFER_ALIGN - 1u));
+}
+
+static void invalidate_aux_render_arena(void)
+{
+    int slot_index;
+    int channel;
+    int flip;
+
+    s_aux_arena_next = 0;
+    s_aux_arena_end = 0;
+    for (slot_index = 0; slot_index < REMOTE_MODEL_SLOT_COUNT; ++slot_index)
+    {
+        RemoteModelSlot *slot = &s_slots[slot_index];
+
+        for (channel = 0; channel < AUX_RESOURCE_COUNT; ++channel)
+        {
+            for (flip = 0; flip < AUX_FLIP_COUNT; ++flip)
+                slot->aux_buffer[channel][flip] = 0;
+            slot->aux_resource_id[channel] = 0;
+            slot->aux_flip[channel] = 0;
+            slot->aux_cursor[channel] = 0;
+            slot->aux_skip_update[channel] = 0;
+        }
+        /* Force the next scheduled task update to rebind segment 8/9 and both
+         * face segments from the newly rebuilt external scene arena. */
+        slot->bound_ch = -1;
+        slot->bound_action = -1;
+        slot->aux_last_frame = 0.0f;
+    }
+}
+
+/* Reserve all renderer-visible face buffers from the stock resident resource
+ * arena. FUN_801DC630 uses the same bump-allocation pattern for the local
+ * player's four 0x1000-byte buffers. Keeping these addresses in the original
+ * 8 MiB RDRAM window prevents N64 texture commands from truncating an extended
+ * recomp_alloc address such as 0x81000000 to unrelated texture memory. */
+static int reserve_aux_render_arena(void)
+{
+    SceneResourceEntry *free_entry = 0;
+    unsigned int start;
+    unsigned int end;
+    int i;
+
+    /* Read the external scene registry to find the loader's sentinel cursor;
+     * reserving at that cursor keeps all already-loaded broad dependencies
+     * below the remote face arena. */
+    for (i = 0; i < SCENE_RESOURCE_ENTRY_COUNT; ++i)
+    {
+        if (D_80167FC0_168BC0[i].file_id == 0)
+        {
+            free_entry = &D_80167FC0_168BC0[i];
+            break;
+        }
+    }
+    if (!free_entry || !free_entry->data)
+        return 0;
+
+    start = ((unsigned int)(unsigned long)free_entry->data & 0xbfffffffu);
+    start = (start + (BUFFER_ALIGN - 1u)) & ~(BUFFER_ALIGN - 1u);
+    end = start + AUX_ARENA_SIZE;
+    if (end < start || end > RENDER_RDRAM_END ||
+        !is_rdram_pointer((void *)(unsigned long)start) ||
+        !is_rdram_pointer((void *)(unsigned long)(end - 1u)))
+    {
+        recomp_printf("[remote_models] face arena %x..%x is outside render RDRAM\n",
+                      start, end);
+        return 0;
+    }
+
+    /* Advance the external scene loader's sentinel because later resident
+     * resources must begin after the remote face buffers, not overwrite them. */
+    free_entry->data = (unsigned char *)(unsigned long)end;
+    s_aux_arena_next = (unsigned char *)(unsigned long)start;
+    s_aux_arena_end = (unsigned char *)(unsigned long)end;
+    recomp_printf("[remote_models] face arena reserved at %x..%x\n", start, end);
+    return 1;
+}
+
+static unsigned char *alloc_aux_render_buffer(void)
+{
+    unsigned char *buffer;
+
+    if (!s_aux_arena_next || !s_aux_arena_end ||
+        s_aux_arena_next > s_aux_arena_end - AUX_BUFFER_SIZE)
+        return 0;
+    buffer = s_aux_arena_next;
+    s_aux_arena_next += AUX_BUFFER_SIZE;
+    return buffer;
 }
 
 /* ------------------------------------------------------------------ */
@@ -266,6 +377,10 @@ void anchor_player_models_load_resources(void)
 {
     int ch;
 
+    /* A new stage rebuilds the external scene registry and its resident arena,
+     * so discard every pointer into the previous stage before reserving again. */
+    invalidate_aux_render_arena();
+
     for (ch = 0; ch < CHARACTER_COUNT; ++ch)
     {
         CharacterModelCache *cache = &s_char_cache[ch];
@@ -290,6 +405,15 @@ void anchor_player_models_load_resources(void)
         cache->ready = 1;
         recomp_printf("[remote_models] ch %d clothed model/action cache ready\n",
                       ch);
+    }
+
+    if (!reserve_aux_render_arena())
+    {
+        /* Without original-RDRAM face storage, leave both external character
+         * resources unavailable instead of submitting corrupt texture data. */
+        for (ch = 0; ch < CHARACTER_COUNT; ++ch)
+            s_char_cache[ch].ready = 0;
+        recomp_printf("[remote_models] face arena reservation failed\n");
     }
 }
 
@@ -499,7 +623,7 @@ static int bind_aux_resource(RemoteModelSlot *slot, int channel,
      * the previous expression while the next face/part resource is loaded. */
     flip = slot->aux_flip[channel] ^ 1;
     if (!slot->aux_buffer[channel][flip])
-        slot->aux_buffer[channel][flip] = alloc_aligned(AUX_BUFFER_SIZE);
+        slot->aux_buffer[channel][flip] = alloc_aux_render_buffer();
     buffer = slot->aux_buffer[channel][flip];
     if (!buffer)
         return 0;

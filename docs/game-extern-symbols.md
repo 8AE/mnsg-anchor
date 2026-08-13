@@ -310,6 +310,47 @@ The renderer does not call these playable-task functions. The buffers are
 `0x1000` bytes each, matching the four stock buffers allocated by
 `func_801DC630`.
 
+### `D_80167FC0_168BC0` and renderer-visible face memory
+
+Ghidra identifies `D_80167FC0_168BC0` as the 48-entry resident scene-resource
+registry. `func_80013B14` finds the first entry whose file id is zero and uses
+that entry's data pointer as the next free address. It writes the aligned end
+of the loaded file into the following entry, making the zero-id entry a bump
+cursor for the next resident allocation.
+
+This distinction fixes the persistent corrupted-face bug. `recomp_alloc`
+serves memory beginning at `0x81000000`, beyond the original 8 MiB RDRAM
+window. The CPU-side model walker can read action metadata and geometry from
+that extended memory, which is why the remote body rendered correctly.
+Face/part resources are different: their texture addresses reach RT64 through
+generated N64 display-list commands. Ghidra shows `func_800196F0` emitting each
+object segment base by adding `0x80000000` to the bound KSEG0 pointer. A normal
+base such as `0x80305500` therefore becomes physical `0x00305500`; an extended
+base such as `0x81000000` becomes `0x01000000`, outside the renderer's normal
+8 MiB window. With extended-RDRAM display-list mode not enabled by the base
+recomp, that address samples unrelated memory, producing the multicolored or
+missing faces seen on both Goemon and Ebisumaru.
+
+The stock player does not allocate these buffers from the general 40 KiB game
+heap. `func_801DC630` starts at `0x80305500`, advances the resident scene arena
+four times by `0x1000` for its two-channel double buffers, and then carves its
+larger action-model buffers. Anchor now follows that persistent-arena pattern:
+
+- after both remote characters and all broad dependencies are resident, it
+  finds the scene registry's zero-id cursor;
+- it reserves `25 * 2 * 2 * 0x1000 = 0x64000` bytes, enough for both double-
+  buffered channels of every remote slot;
+- it advances the external cursor so any later scene resource begins after
+  the reserved range;
+- it rejects a reservation whose end would cross `0x80800000`, and keeps both
+  character caches unavailable rather than rendering with unsafe addresses;
+- it invalidates every old face-buffer pointer when a new stage rebuilds the
+  registry.
+
+The action files remain in mod memory because they are consumed by the CPU-side
+model path. Only the auxiliary buffers whose pixels become renderer-visible
+texture addresses require original-RDRAM residency.
+
 Aux loads and model-segment rebinds run from each remote model's ordinary task
 callback. They are not performed from the return hook after the selected game
 step has completed. This preserves the engine's pre-render ordering and avoids
