@@ -38,6 +38,7 @@
 #define REMOTE_PLAYER_ACTION_CHARACTER_SWITCH 0xba
 #define PLAYER_MODEL_RENDER_SEGMENT 0x60000000u
 #define CLOTHED_CHARACTER_ANIM_CONTEXT 0xc01fc680u
+#define CLOTHED_CHARACTER_OBJECT_MODE 2u
 #define REMOTE_YAW_SPEED_THRESHOLD_SQ 64
 #define REMOTE_MODEL_SCALE 0.1f
 #define REMOTE_FRAME_SNAP_THRESHOLD 4.0f
@@ -45,9 +46,11 @@
 
 #define REMOTE_MODEL_SLOT_COUNT ANCHOR_PLAYER_MODEL_MAX
 #define CHARACTER_COUNT 2
-#define AUX_BUFFER_SIZE 0x2000u
+#define AUX_BUFFER_SIZE 0x1000u
 #define AUX_RESOURCE_COUNT 2
 #define AUX_FLIP_COUNT 2
+#define AUX_SEQUENCE_MAX_STEPS 32
+#define AUX_RESOURCE_ID_LIMIT 0x8770u
 #define BUFFER_ALIGN 16u
 
 typedef struct CharacterModelCache
@@ -76,6 +79,11 @@ typedef struct RemoteModelSlot
     unsigned char *aux_buffer[AUX_RESOURCE_COUNT][AUX_FLIP_COUNT];
     unsigned int aux_resource_id[AUX_RESOURCE_COUNT];
     int aux_flip[AUX_RESOURCE_COUNT];
+    unsigned char aux_cursor[AUX_RESOURCE_COUNT];
+    unsigned char aux_skip_update[AUX_RESOURCE_COUNT];
+    float aux_last_frame;
+    AnchorPlayerModelRemote pending_remote;
+    int pending_valid;
 } RemoteModelSlot;
 
 /* Allocate and insert an engine task under `task_list` with an update
@@ -117,6 +125,11 @@ extern unsigned int func_80001D94_2994(unsigned int file_id);
  * the per-action aux face/part resources (like func_801DC87C). */
 extern unsigned char *func_800145B4_151B4(unsigned int resource_id, void *dst);
 
+/* Return the stored size of a resource id without loading it. The remote
+ * renderer uses this to reject invalid aux ids before they can write display
+ * data outside a stock-sized face buffer. */
+extern int func_80014698_15298(unsigned int resource_id, void *rom_address_out);
+
 /* Frame count of the object's currently bound model; used to wrap the
  * remote animation frame the same way the stock player update does. */
 extern float func_8001B5AC_1C1AC(void *object);
@@ -127,8 +140,12 @@ extern float func_8001B5AC_1C1AC(void *object);
 extern unsigned char *D_80203F34_5BFE44[];
 
 /* Aux staging descriptor bytes: two (?, segment) pairs; the segment bytes
- * pick the object segment base at object + segment*8 + 0x38. */
+ * pick the action-start object segment bases at +0x38 + segment*8. */
 extern unsigned char D_80203FF0_5BFF00[];
+
+/* Per-frame aux descriptors used by FUN_801DB060/FUN_801DB1D4. Each low byte
+ * selects the object segment rebound when a timed face/part resource changes. */
+extern unsigned short D_80203FF8_5BFF08[];
 
 /* Per-character broad character-resource file ids. Only Goemon/Ebisumaru
  * entries are read to stage the correct clothed render data. */
@@ -148,11 +165,7 @@ static CharacterModelCache s_char_cache[CHARACTER_COUNT];
 static RemoteModelSlot s_slots[REMOTE_MODEL_SLOT_COUNT];
 static void *s_owner_task;
 
-static void remote_model_task_update(void *task, void *object)
-{
-    (void)task;
-    (void)object;
-}
+static void remote_model_task_update(void *task, void *object);
 
 static void write_u8_at(void *obj, unsigned int offset, unsigned char value)
 {
@@ -332,10 +345,16 @@ static void kill_slot(RemoteModelSlot *slot, int delete_task)
     slot->yaw = 0;
     slot->frame = 0.0f;
     slot->frame_step = 1.0f;
+    slot->aux_last_frame = 0.0f;
+    slot->pending_valid = 0;
     slot->task = 0;
     slot->object = 0;
     for (i = 0; i < AUX_RESOURCE_COUNT; ++i)
+    {
         slot->aux_resource_id[i] = 0;
+        slot->aux_cursor[i] = 0;
+        slot->aux_skip_update[i] = 0;
+    }
 }
 
 void anchor_player_models_reset(void)
@@ -407,6 +426,12 @@ static int ensure_slot_task(RemoteModelSlot *slot, const AnchorPlayerModelRemote
         return 0;
     }
 
+    /* Ghidra: FUN_801CC30C writes object+0x05 = 2 immediately after assigning
+     * the clothed player animation context. FUN_8000DBF0 and its free-list
+     * allocator do not initialize this byte, so explicitly select the same
+     * render-object mode before binding Goemon/Ebisumaru display data. This is
+     * renderer state only; no playable task or player behavior is invoked. */
+    write_u8_at(object, 0x05, CLOTHED_CHARACTER_OBJECT_MODE);
     slot->object = object;
     hide_object(object);
     return 1;
@@ -432,62 +457,161 @@ static int remote_action_or_idle(int action)
     return REMOTE_PLAYER_ACTION_IDLE;
 }
 
-/* Stage the action's two aux face/part resources (what func_801DAF54 +
- * func_801DC87C do for the local player, into slot-owned double buffers)
- * and bind them to the object segment bases. */
-static int bind_aux_resources(RemoteModelSlot *slot, unsigned char *entry)
+static int bind_aux_resource(RemoteModelSlot *slot, int channel,
+                             unsigned int segment, unsigned int resource)
 {
-    unsigned char *aux_table = *(unsigned char **)(entry + 0x18);
-    int i;
+    unsigned char *buffer;
+    unsigned char *end;
+    int flip;
 
-    for (i = 0; i < AUX_RESOURCE_COUNT; ++i)
+    if (resource == 0)
+        return 1;
+    if (channel < 0 || channel >= AUX_RESOURCE_COUNT ||
+        segment < 1 || segment > 5 || resource == 0xffu ||
+        resource >= AUX_RESOURCE_ID_LIMIT)
+        return 0;
+
+    if (slot->aux_resource_id[channel] == resource)
     {
-        /* Resource index selection mirrors func_801DB180: entry 0 uses
-         * table index 0, entry 1 uses the action record byte +0x14. */
-        unsigned int index = (i == 0) ? 0u : (unsigned int)*(entry + 0x14);
-        unsigned int segment = D_80203FF0_5BFF00[i * 2 + 1];
-        unsigned int resource;
-        unsigned char *buffer;
-        unsigned char *end;
-        int flip;
-
-        if (!aux_table)
-            continue;
-        resource = *(unsigned int *)(aux_table + index * 8);
-        if (resource == 0)
-            continue;
-        if (segment < 1 || segment > 5)
-            return 0;
-
-        if (slot->aux_resource_id[i] == resource)
-        {
-            buffer = slot->aux_buffer[i][slot->aux_flip[i]];
-            if (!buffer)
-                return 0;
-            write_u32_at(slot->object, 0x38 + segment * 8, (unsigned int)(unsigned long)buffer);
-            continue;
-        }
-
-        /* Double-buffer like the stock aux staging so a buffer still being
-         * consumed by the renderer is never overwritten in place. */
-        flip = slot->aux_flip[i] ^ 1;
-        if (!slot->aux_buffer[i][flip])
-            slot->aux_buffer[i][flip] = alloc_aligned(AUX_BUFFER_SIZE);
-        buffer = slot->aux_buffer[i][flip];
+        buffer = slot->aux_buffer[channel][slot->aux_flip[channel]];
         if (!buffer)
             return 0;
-
-        end = func_800145B4_151B4(resource, buffer);
-        if (!end || end < buffer || end > buffer + AUX_BUFFER_SIZE)
-        {
-            recomp_printf("[remote_models] aux resource %x overflow\n", resource);
-            return 0;
-        }
-        slot->aux_flip[i] = flip;
-        slot->aux_resource_id[i] = resource;
-        write_u32_at(slot->object, 0x38 + segment * 8, (unsigned int)(unsigned long)buffer);
+        write_u32_at(slot->object, 0x38 + segment * 8,
+                     (unsigned int)(unsigned long)buffer);
+        return 1;
     }
 
+    /* Use the stock resource-size query to reject an unrelated table value
+     * before FUN_800145B4 is allowed to write into a face buffer. Correct
+     * player aux resources fit the 0x1000-byte buffers from FUN_801DC630. */
+    {
+        int stored_size = func_80014698_15298(resource, 0);
+
+        if (stored_size <= 0 || stored_size > (int)AUX_BUFFER_SIZE)
+        {
+            recomp_printf("[remote_models] invalid aux resource %x size %d\n",
+                          resource, stored_size);
+            return 0;
+        }
+    }
+
+    /* Match FUN_801DC87C's double buffer so a display list can finish using
+     * the previous expression while the next face/part resource is loaded. */
+    flip = slot->aux_flip[channel] ^ 1;
+    if (!slot->aux_buffer[channel][flip])
+        slot->aux_buffer[channel][flip] = alloc_aligned(AUX_BUFFER_SIZE);
+    buffer = slot->aux_buffer[channel][flip];
+    if (!buffer)
+        return 0;
+
+    /* Use the stock small-resource loader because face resources may be raw or
+     * compressed; validate its end pointer before exposing the segment base. */
+    end = func_800145B4_151B4(resource, buffer);
+    if (!end || end < buffer || end > buffer + AUX_BUFFER_SIZE)
+    {
+        recomp_printf("[remote_models] aux resource %x overflow\n", resource);
+        return 0;
+    }
+    slot->aux_flip[channel] = flip;
+    slot->aux_resource_id[channel] = resource;
+    write_u32_at(slot->object, 0x38 + segment * 8,
+                 (unsigned int)(unsigned long)buffer);
+    return 1;
+}
+
+/* Stage the two initial face/part resources exactly as FUN_801DAF54 does when
+ * a new action is bound. Timed expression updates are handled separately. */
+static int bind_initial_aux_resources(RemoteModelSlot *slot,
+                                      unsigned char *entry)
+{
+    unsigned char *aux_table = *(unsigned char **)(entry + 0x18);
+    int channel;
+
+    if (!aux_table)
+        return 1;
+    for (channel = 0; channel < AUX_RESOURCE_COUNT; ++channel)
+    {
+        /* Mirror FUN_801DB180: channel zero begins at row zero; channel one
+         * begins at the action record's +0x14 row. */
+        unsigned int row = channel == 0 ? 0u : (unsigned int)*(entry + 0x14);
+        unsigned int segment = D_80203FF0_5BFF00[channel * 2 + 1];
+        unsigned int resource = *(unsigned int *)(aux_table + row * 8);
+
+        if (!bind_aux_resource(slot, channel, segment, resource))
+            return 0;
+        slot->aux_cursor[channel] = 0;
+        /* FUN_801DAF54 marks each channel so FUN_801DB060 skips exactly the
+         * first per-frame update after an action-start resource bind. */
+        slot->aux_skip_update[channel] = 1;
+    }
+    return 1;
+}
+
+/* Advance the two face/part cursors at most one row per rendered frame, as
+ * FUN_801DB060/FUN_801DB1D4 do. Keeping cursor state is important when a peer
+ * joins mid-animation: a stateless multi-row scan can leave the known action
+ * sequence and submit an unrelated resource as an RT64 display list. */
+static int sync_timed_aux_resources(RemoteModelSlot *slot,
+                                    unsigned char *entry, float frame)
+{
+    unsigned char *aux_table = *(unsigned char **)(entry + 0x18);
+    int rewound = frame < slot->aux_last_frame;
+    int channel;
+
+    if (!aux_table)
+        return 1;
+    for (channel = 0; channel < AUX_RESOURCE_COUNT; ++channel)
+    {
+        unsigned int base_row =
+            channel == 0 ? 0u : (unsigned int)*(entry + 0x14);
+        unsigned int cursor;
+        unsigned int row;
+        unsigned int resource;
+        unsigned int segment;
+        unsigned int threshold;
+
+        if (slot->aux_skip_update[channel])
+        {
+            slot->aux_skip_update[channel] = 0;
+            continue;
+        }
+
+        if (frame == 0.0f || rewound)
+            slot->aux_cursor[channel] = 0;
+        cursor = slot->aux_cursor[channel];
+        if (cursor >= AUX_SEQUENCE_MAX_STEPS)
+            return 0;
+
+        row = base_row + cursor;
+        threshold = *(aux_table + row * 8 + 4);
+        if (frame != 0.0f && !rewound && (float)threshold > frame)
+            continue;
+
+        /* Stock advances no more than one record in a call, and a zero
+         * threshold keeps the current record selected. */
+        if (frame != 0.0f && !rewound && threshold != 0)
+        {
+            cursor++;
+            if (cursor >= AUX_SEQUENCE_MAX_STEPS)
+                return 0;
+            slot->aux_cursor[channel] = (unsigned char)cursor;
+            row = base_row + cursor;
+        }
+
+        resource = *(unsigned int *)(aux_table + row * 8);
+        if (resource == 0xffu)
+        {
+            slot->aux_cursor[channel] = 0;
+            resource = *(unsigned int *)(aux_table + base_row * 8);
+        }
+        /* Use the stock per-frame descriptor array because it can differ from
+         * the action-start segment descriptor used by FUN_801DAF54. */
+        segment = (unsigned int)(D_80203FF8_5BFF08[channel] & 0xffu);
+        if (!bind_aux_resource(slot, channel, segment, resource))
+            return 0;
+    }
+
+    slot->aux_last_frame = frame;
     return 1;
 }
 
@@ -511,7 +635,7 @@ static int bind_model(RemoteModelSlot *slot, int ch, int action)
     write_u16_at(slot->object, 0x3c, D_80204020_5BFF30[ch]);
     write_u32_at(slot->object, 0x40, (unsigned int)(unsigned long)cache->broad);
 
-    if (!bind_aux_resources(slot, entry))
+    if (!bind_initial_aux_resources(slot, entry))
         return 0;
 
     write_u32_at(slot->object, 0x2c,
@@ -520,6 +644,7 @@ static int bind_model(RemoteModelSlot *slot, int ch, int action)
     speed = *(short *)(entry + 0x04);
     slot->frame_step = (float)speed / 100.0f;
     slot->frame = 0.0f;
+    slot->aux_last_frame = 0.0f;
     write_float_at(slot->object, 0x28, 0.0f);
 
     slot->bound_ch = ch;
@@ -580,6 +705,7 @@ static float abs_float(float value)
 static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemote *remote,
                              int action_changed)
 {
+    unsigned char *entry;
     float frame_count;
     int new_remote_packet = remote->seq != slot->last_seq;
     int use_remote_anim = remote->action == slot->bound_action &&
@@ -643,6 +769,16 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
         slot->frame = 0.0f;
     }
 
+    entry = get_action_entry(slot->bound_ch, slot->bound_action);
+    if (!entry || !sync_timed_aux_resources(slot, entry, slot->frame))
+    {
+        /* Keep a model with incomplete face segments hidden so corrupt display
+         * data is never submitted while an aux load or table check fails. */
+        hide_object(slot->object);
+        slot->bound_action = -1;
+        return;
+    }
+
     write_float_at(slot->object, 0x08, (float)remote->x);
     write_float_at(slot->object, 0x0c, (float)remote->y);
     write_float_at(slot->object, 0x10, (float)remote->z);
@@ -673,6 +809,70 @@ static void update_slot_hidden_pose(RemoteModelSlot *slot, const AnchorPlayerMod
     write_float_at(slot->object, 0x10, (float)remote->z);
 }
 
+/* Apply the queued network snapshot from the cutscene-style child task's
+ * scheduled update. This matches the stock ordering: model pointers and aux
+ * face memory are finalized before the engine walks kind-2 records to build
+ * the frame's display list. The frame-end hook only publishes snapshots. */
+static void remote_model_task_update(void *task, void *object)
+{
+    RemoteModelSlot *slot = 0;
+    const AnchorPlayerModelRemote *remote;
+    int ch;
+    int action;
+    int i;
+
+    (void)object;
+    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    {
+        if (s_slots[i].active && s_slots[i].task == task)
+        {
+            slot = &s_slots[i];
+            break;
+        }
+    }
+    if (!slot || !slot->object || !slot->pending_valid)
+        return;
+
+    remote = &slot->pending_remote;
+    ch = remote->ch;
+    if (remote->cid <= 0 || ch < 0 || ch >= CHARACTER_COUNT)
+    {
+        hide_object(slot->object);
+        slot->bound_ch = -1;
+        slot->bound_action = -1;
+        return;
+    }
+
+    action = remote_action_or_idle(remote->action);
+    if (!s_char_cache[ch].ready)
+    {
+        if (slot->bound_ch != ch)
+        {
+            hide_object(slot->object);
+            slot->bound_ch = -1;
+            slot->bound_action = -1;
+        }
+        update_slot_hidden_pose(slot, remote);
+        return;
+    }
+
+    if (slot->bound_ch != ch || slot->bound_action != action)
+    {
+        if (!bind_model(slot, ch, action))
+        {
+            hide_object(slot->object);
+            slot->bound_ch = -1;
+            slot->bound_action = -1;
+            update_slot_hidden_pose(slot, remote);
+            return;
+        }
+        update_slot_pose(slot, remote, 1);
+        return;
+    }
+
+    update_slot_pose(slot, remote, 0);
+}
+
 /* ------------------------------------------------------------------ */
 /* Entry point                                                        */
 /* ------------------------------------------------------------------ */
@@ -701,9 +901,6 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
     {
         const AnchorPlayerModelRemote *remote = &remotes[i];
         RemoteModelSlot *slot;
-        int ch;
-        int action;
-        int cache_ready;
 
         if (remote->cid <= 0 || remote->ch < 0 || remote->ch >= CHARACTER_COUNT)
             continue;
@@ -717,40 +914,10 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
         slot->seen = 1;
         if (!ensure_slot_task(slot, remote, render_parent_task))
             continue;
-
-        ch = remote->ch;
-        action = remote_action_or_idle(remote->action);
-        cache_ready = s_char_cache[ch].ready;
-
-        if (!cache_ready)
-        {
-            if (slot->bound_ch != ch)
-            {
-                /* No data for the new character yet; stop showing the old
-                 * one but keep tracking position. */
-                hide_object(slot->object);
-                slot->bound_ch = -1;
-                slot->bound_action = -1;
-            }
-            update_slot_hidden_pose(slot, remote);
-            continue;
-        }
-
-        if (slot->bound_ch != ch || slot->bound_action != action)
-        {
-            if (!bind_model(slot, ch, action))
-            {
-                hide_object(slot->object);
-                slot->bound_ch = -1;
-                slot->bound_action = -1;
-                update_slot_hidden_pose(slot, remote);
-                continue;
-            }
-            update_slot_pose(slot, remote, 1);
-            continue;
-        }
-
-        update_slot_pose(slot, remote, 0);
+        /* Queue only plain network state here. The task callback consumes the
+         * newest complete snapshot at the engine's safe pre-render point. */
+        slot->pending_remote = *remote;
+        slot->pending_valid = 1;
     }
 
     for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)

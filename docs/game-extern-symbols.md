@@ -228,6 +228,14 @@ required segment base is ready.
 This is a generic display allocator used by cutscenes. It does not initialize a
 player task, controls, collision, inventory, or gameplay behavior.
 
+It also does **not** initialize display-record byte `+0x05`. Ghidra shows that
+the lower free-list allocator `func_80035D8C` clears only bit 7 of `+0x04`, so a
+reused kind-2 record can retain an unrelated `+0x05` value. The stock clothed
+player renderer corrects that in `func_801CC30C` by writing `2` to `+0x05`
+immediately after setting animation context `0xC01FC680`. Anchor reproduces
+that one render-object field assignment after its generic cutscene allocation;
+it does not call the player initializer.
+
 ### `func_8020D6BC_5C8B8C`
 
 Gameplay stage-resource dispatcher. Its return hook is the only place the
@@ -270,13 +278,43 @@ Immutable per-character file-id tables. The former selects the broad file; the
 latter selects the raw action-model file. They are indexed only with validated
 remote character ids 0 and 1.
 
-### `D_80203FF0_5BFF00` and `func_800145B4_151B4`
+### `D_80203FF0_5BFF00`, `D_80203FF8_5BFF08`, and `func_800145B4_151B4`
 
-The descriptor table identifies two auxiliary display segments. On an action
-change, the renderer reads the selected action's aux metadata, loads each
-nonzero resource into a slot-owned double buffer with `func_800145B4`, and
-binds the validated segment base. This preserves faces/parts belonging to the
-selected clothed action without borrowing the local player's buffers.
+The first descriptor table identifies the two action-start auxiliary display
+segments. The second contains the segment ids used for timed per-frame
+face/part updates. The renderer loads each nonzero resource into a slot-owned
+double buffer with `func_800145B4` and binds the validated segment base without
+borrowing the local player's buffers.
+
+Ghidra confirms that an action-start bind alone is insufficient:
+
+- `func_801DAF54` binds row zero and the action's `+0x14` row, then resets the
+  two expression cursors;
+- `func_801CBAF8` calls `func_801DABDC` every active player frame;
+- `func_801DB060` reads the current model frame and the `+4` threshold in each
+  8-byte auxiliary row;
+- `func_801DB1D4` advances the row, treats resource id `0xFF` as the sequence
+  wrap marker, and calls `func_801DC87C`;
+- `func_801DC87C` loads the changed resource into the alternate buffer and
+  rebinds the segment from `D_80203FF8`.
+
+The remote renderer reproduces the two persistent cursors and advances each by
+at most one row per rendered frame. This distinction matters when a remote
+player first appears with an animation already in progress: scanning forward
+through many rows in one update is not stock behavior and can escape the valid
+sequence, bind an unrelated resource, and send an invalid display list to
+RT64. Resource ids and stored sizes are now checked before `func_800145B4` is
+allowed to write to a buffer.
+
+The renderer does not call these playable-task functions. The buffers are
+`0x1000` bytes each, matching the four stock buffers allocated by
+`func_801DC630`.
+
+Aux loads and model-segment rebinds run from each remote model's ordinary task
+callback. They are not performed from the return hook after the selected game
+step has completed. This preserves the engine's pre-render ordering and avoids
+changing face memory after a display list using that memory may already have
+been submitted to RT64.
 
 ### `func_8001B5AC_1C1AC`
 
@@ -309,6 +347,8 @@ code runs.
 - `RECOMP_HOOK_RETURN("func_8020D6BC_5C8B8C")` stages both characters after
   normal stage resource loading.
 - `RECOMP_HOOK_RETURN("func_80002040_2C40")` publishes the final local state,
-  updates remote transforms/actions/frames, and draws nameplates.
+  queues complete remote snapshots, and draws nameplates. Each remote
+  cutscene-style child task applies its queued transform/action/frame and aux
+  resource changes during the engine's next scheduled pre-render update.
 - Overlay-local `file_18` creators are neither patched nor called while
   another overlay occupies their VRAM addresses.
