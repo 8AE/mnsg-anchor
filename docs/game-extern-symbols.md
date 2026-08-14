@@ -372,10 +372,18 @@ animation.
 
 ### `func_80034EF8_35AF8`
 
-Deletes a live remote task and its attached records when a peer leaves the
-room, changes to an unsupported character, or disconnects. During room teardown
-the engine already owns task destruction, so Anchor only discards stale
-mod-side handles.
+Ghidra shows this destructor recursively freeing child tasks and then calling
+`func_800350C4`. The latter splices the task out through its `+0x04` backlink
+without validating that link. `func_80034A10` clears the backlink when a task
+is freed, so calling the destructor again after owner teardown can follow the
+engine's `0x80000000` invalid-link sentinel and crash.
+
+Anchor therefore does not call this destructor. Each remote task remains a
+child of the current player-owner task, is hidden and reused when a peer leaves,
+and is reclaimed exactly once by the engine when the owner tree is destroyed.
+Before reusing a retained child, Anchor verifies that its backlink still points
+back to the task; otherwise it discards the stale mod-side handles without
+touching game memory.
 
 ## Corrected Opening-Resource Boundary
 

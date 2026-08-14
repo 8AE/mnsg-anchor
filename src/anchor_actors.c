@@ -168,7 +168,9 @@ static int is_rdram_pointer(const void *ptr)
     unsigned int addr = (unsigned int)(unsigned long)ptr;
     unsigned int phys = addr & 0x1fffffffu;
 
-    return addr != 0 && phys < 0x00800000u;
+    /* The engine uses 0x80000000 as an invalid-link sentinel during task
+     * teardown; it must not pass the same test as a live RDRAM object. */
+    return phys >= 0x00001000u && phys < 0x00800000u;
 }
 
 /* Gameplay uses a different overlay than file_18. This return hook runs after
@@ -559,8 +561,8 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
     {
         s_remote_count = 0;
         clear_remote_smoothing();
-        /* The owner is live here, so an empty update safely deletes all remote
-         * cutscene-style child tasks through the model module. */
+        /* An empty update hides and retires all remote objects. Their reusable
+         * child tasks remain owned by the player task until engine teardown. */
         anchor_player_models_update(0, 0, owner_task);
         for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
             anchor_nameplates_hide_slot(i);

@@ -107,10 +107,6 @@ typedef struct RemoteModelSlot
 extern void *func_80034E08_35A08(void *task_list, void (*update)(void *, void *),
                                  unsigned short flags);
 
-/* Delete a live cutscene-style task and its attached render records. The
- * remote renderer uses this when a peer leaves while the owner task is live. */
-extern void func_80034EF8_35AF8(void *task);
-
 /* Spawn a kind-2 render object under a task: sets object+0x2c (model command
  * pointer), +0x30 (anim state pointer), position/rotation/scale, the segment
  * file ids at +0x34/+0x3c, then registers segment bases via FUN_80014218.
@@ -216,7 +212,37 @@ static int is_rdram_pointer(const void *ptr)
     unsigned int addr = (unsigned int)(unsigned long)ptr;
     unsigned int phys = addr & 0x1fffffffu;
 
-    return addr != 0 && phys < 0x00800000u;
+    /* Exclude the engine's 0x80000000 invalid-link sentinel as well as null.
+     * Every task, object, and resident resource used here is above the first
+     * RDRAM page. */
+    return phys >= 0x00001000u && phys < 0x00800000u;
+}
+
+/* Ghidra: a live task's +0x04 field points to the list word that currently
+ * references that task. FUN_80034A10 clears +0x04 when a task is freed, while
+ * FUN_800350C4 assumes the backlink is live and splices through it. Validate
+ * both halves before touching a retained remote child during owner teardown. */
+static int is_linked_task(const void *task)
+{
+    void *backlink;
+
+    if (!is_rdram_pointer(task))
+        return 0;
+    backlink = *(void *const *)((const unsigned char *)task + 0x04);
+    if (!is_rdram_pointer(backlink))
+        return 0;
+    return *(void *const *)backlink == task;
+}
+
+/* A task-pool address can be reused for an unrelated task after teardown.
+ * FUN_80034B58 stores the update callback at task+0x0C, so require Anchor's
+ * callback in addition to valid list linkage before retaining a child. */
+static int is_linked_remote_task(const void *task)
+{
+    if (!is_linked_task(task))
+        return 0;
+    return *(void *const *)((const unsigned char *)task + 0x0c) ==
+           (void *)remote_model_task_update;
 }
 
 static unsigned char *alloc_aligned(unsigned int size)
@@ -444,19 +470,24 @@ static void show_object(void *object)
     write_u8_at(object, 0x65, 0);
 }
 
-static void kill_slot(RemoteModelSlot *slot, int delete_task)
+/* Retire a peer without directly destroying its engine task. Remote children
+ * belong to the live player-owner tree, so the engine reclaims them exactly
+ * once when that owner is destroyed. While the owner remains linked, keep the
+ * hidden task/object pair for reuse by the next peer assigned to this slot. */
+static void clear_slot_state(RemoteModelSlot *slot, int preserve_live_task)
 {
+    void *retained_task = 0;
+    void *retained_object = 0;
     int i;
 
-    if (delete_task && slot->task)
+    if (preserve_live_task && is_linked_remote_task(slot->task))
     {
-        /* Use the engine's normal cutscene-task destructor while the remote
-         * owner tree is known to be live, returning its render record pool. */
-        func_80034EF8_35AF8(slot->task);
-    }
-    else if (delete_task)
-    {
-        hide_object(slot->object);
+        retained_task = slot->task;
+        if (is_rdram_pointer(slot->object))
+        {
+            hide_object(slot->object);
+            retained_object = slot->object;
+        }
     }
 
     slot->active = 0;
@@ -472,8 +503,8 @@ static void kill_slot(RemoteModelSlot *slot, int delete_task)
     slot->frame_step = 1.0f;
     slot->aux_last_frame = 0.0f;
     slot->pending_valid = 0;
-    slot->task = 0;
-    slot->object = 0;
+    slot->task = retained_task;
+    slot->object = retained_object;
     for (i = 0; i < AUX_RESOURCE_COUNT; ++i)
     {
         slot->aux_resource_id[i] = 0;
@@ -487,7 +518,7 @@ void anchor_player_models_reset(void)
     int i;
 
     for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
-        kill_slot(&s_slots[i], 0);
+        clear_slot_state(&s_slots[i], 0);
     s_owner_task = 0;
 }
 
@@ -511,7 +542,9 @@ static RemoteModelSlot *alloc_slot(int cid)
     {
         if (!s_slots[i].active)
         {
-            kill_slot(&s_slots[i], 0);
+            /* Reuse a hidden task/object retained under the same live owner;
+             * this bounds the task count to the fixed remote slot count. */
+            clear_slot_state(&s_slots[i], 1);
             s_slots[i].active = 1;
             s_slots[i].cid = cid;
             return &s_slots[i];
@@ -526,11 +559,25 @@ static int ensure_slot_task(RemoteModelSlot *slot, const AnchorPlayerModelRemote
     float scale;
     void *object;
 
+    /* If the task pool reused this address across an owner transition, discard
+     * both stale handles before any object write or callback reuse. */
+    if (slot->task && !is_linked_remote_task(slot->task))
+    {
+        slot->task = 0;
+        slot->object = 0;
+        slot->bound_ch = -1;
+        slot->bound_action = -1;
+    }
     if (slot->task && slot->object)
         return 1;
 
-    /* Cutscene pattern: a plain scheduler task owning render objects. */
-    slot->task = func_80034E08_35A08(render_parent_task, remote_model_task_update, 0);
+    if (!slot->task)
+    {
+        /* Use the external cutscene task allocator only when this owner-scoped
+         * slot has no retained child task to reuse. */
+        slot->task = func_80034E08_35A08(render_parent_task,
+                                         remote_model_task_update, 0);
+    }
     if (!slot->task)
         return 0;
 
@@ -547,7 +594,8 @@ static int ensure_slot_task(RemoteModelSlot *slot, const AnchorPlayerModelRemote
                                 0, 0);
     if (!object)
     {
-        kill_slot(slot, 1);
+        /* Keep the linked task and retry object allocation next frame. The
+         * parent owner will reclaim it if the scene tears down meanwhile. */
         return 0;
     }
 
@@ -1008,7 +1056,7 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
 {
     int i;
 
-    if (!is_rdram_pointer(render_parent_task))
+    if (!is_linked_task(render_parent_task))
     {
         anchor_player_models_reset();
         return;
@@ -1049,6 +1097,6 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
     for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
     {
         if (s_slots[i].active && !s_slots[i].seen)
-            kill_slot(&s_slots[i], 1);
+            clear_slot_state(&s_slots[i], 1);
     }
 }
