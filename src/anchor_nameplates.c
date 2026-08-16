@@ -17,6 +17,9 @@
 #define NAMEPLATE_MIN_SCALE 0.45f
 #define NAMEPLATE_MAX_SCALE 1.15f
 
+/* Build-time flag for remote-player nameplates. Set to 0 to show them. */
+static const int s_nameplates_disabled = 1;
+
 static RecompuiContext s_nameplate_ctx = RECOMPUI_NULL_CONTEXT;
 static RecompuiResource s_nameplate_cards[ANCHOR_NAMEPLATE_MAX];
 static RecompuiResource s_nameplate_icons[ANCHOR_NAMEPLATE_MAX];
@@ -55,7 +58,7 @@ static void nameplates_ensure_init(void)
     int i;
     RecompuiResource root;
 
-    if (s_nameplate_initialized)
+    if (s_nameplates_disabled || s_nameplate_initialized)
         return;
     s_nameplate_initialized = 1;
 
@@ -122,6 +125,9 @@ static float nameplate_scale_from_distance_sq(float distance_sq)
 
 void anchor_nameplates_hide_slot(int slot_index)
 {
+    if (s_nameplates_disabled)
+        return;
+
     if (slot_index < 0 || slot_index >= ANCHOR_NAMEPLATE_MAX)
         return;
 
@@ -136,6 +142,9 @@ void anchor_nameplates_hide_slot(int slot_index)
 
 void anchor_nameplates_set_context_visible(int visible)
 {
+    if (s_nameplates_disabled)
+        return;
+
     nameplates_ensure_init();
     if (visible)
     {
@@ -186,6 +195,9 @@ int anchor_nameplates_render_slot(
     float card_width;
     float icon_size;
     float font_size;
+
+    if (s_nameplates_disabled)
+        return 0;
 
     nameplates_ensure_init();
     if (slot_index < 0 || slot_index >= ANCHOR_NAMEPLATE_MAX ||
