@@ -186,8 +186,9 @@ fields before entering the warp/load step.
 
 The renderer follows the opening cutscene's task architecture but does not call
 an overlay-local character creator and does not create another playable actor.
-It uses immutable Goemon/Ebisumaru/Sasuke/Yae display data on a plain child
-task.
+It uses pristine shared Goemon/Ebisumaru/Sasuke/Yae display data on a plain
+child task, with a slot-private action slice only when an appearance change
+requires the native model-replacement walker to mutate display pointers.
 
 ### `D_801FC604_5B8514`
 
@@ -356,6 +357,29 @@ larger action-model buffers. Anchor now follows that persistent-arena pattern:
 The action files remain in mod memory because they are consumed by the CPU-side
 model path. Only the auxiliary buffers whose pixels become renderer-visible
 texture addresses require original-RDRAM residency.
+
+### Sudden Impact appearance state
+
+Goemon's gold hair is not implied by action `0x82` or `0x83` alone. The stock
+activation callback `func_801F5314_5B1224` sets player-work byte `+0x84` to `1`
+at animation frame 10. `func_801DD498_5993A8` then selects
+`D_80204048_5BFF58[1]` and calls `func_8001C3E0_1CFE0`, which recursively
+replaces display pointers in the currently bound model. When the ability timer
+at player-work `+0x86` expires, `func_801E78DC_5A37EC` temporarily sets `+0x84`
+to `2`, applies the inverse table, and clears the byte.
+
+Anchor samples the authoritative `+0x84 == 1` state after the local game frame
+and sends it as `suddenImpact` in the same `MNSG_PLAYER_POS` packet as action,
+animation phase, and rotation. An appearance edge bypasses the normal movement
+rate limit. The compact C-facing snapshot exposes the value as `si`.
+
+The remote renderer never runs the ability callback or timer. Instead, it
+copies the current Goemon action range from the pristine whole-file cache into
+a slot-private buffer, binds that range with the same base arithmetic used by
+`func_801DC70C_59861C`, and applies replacement table 1 with
+`func_8001C3E0_1CFE0`. Returning to normal simply rebinds the pristine shared
+cache. Keeping the mutable range private prevents one transformed Goemon from
+changing every remote Goemon that shares the action-file cache.
 
 Aux loads and model-segment rebinds run from each remote model's ordinary task
 callback. They are not performed from the return hook after the selected game

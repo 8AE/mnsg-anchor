@@ -13,20 +13,22 @@
  *      object+0x34, position/rotation/scale, all with no player task.
  *   3. Animates through object+0x28 (frame) and object+0x30 (anim state).
  *
- * This file uses that task/object architecture, then binds immutable Goemon,
- * Ebisumaru, Sasuke, and Yae render assets and action records so the clothed
- * model and the sender's exact action clip can be displayed. It never calls a
- * playable character constructor, playable action callback, or player-manager
- * update.
- * The action files are cached whole in mod memory; the broad character files
- * are registered by the normal scene resource loader. Face/part resources are
- * different: their pixels are referenced by generated N64 display-list
- * commands, so their per-slot double buffers are carved from the stock scene
- * arena below 0x80800000 instead of the extended recomp heap.
+ * This file uses that task/object architecture, then binds Goemon, Ebisumaru,
+ * Sasuke, and Yae render assets and action records so the clothed model and the
+ * sender's exact action clip can be displayed. It never calls a playable
+ * character constructor, playable action callback, or player-manager update.
+ * The pristine action files are cached whole in mod memory. A transformed
+ * Goemon gets a slot-private copy of only the current action slice so the
+ * stock Sudden Impact display-pointer replacement cannot mutate another
+ * remote's model. The broad character files are registered by the normal scene
+ * resource loader. Face/part resources are different: their pixels are
+ * referenced by generated N64 display-list commands, so their per-slot double
+ * buffers are carved from the stock scene arena below 0x80800000 instead of
+ * the extended recomp heap.
  *
  * Object segment binding (matches the player object layout):
- *   +0x38 action file base (segment 8; action model pointers are file-
- *         relative, so the base is simply the cached file)
+ *   +0x38 action file base (segment 8; normally the cached file, or a
+ *         slot-private current-action slice rebased by its file offset)
  *   +0x3c broad file id / +0x40 broad file base (segment 9)
  *   +0x50 / +0x58 aux face/part resources (segments from D_80203FF0),
  *         loaded per action with FUN_800145B4 into double buffers
@@ -41,6 +43,7 @@
 #define REMOTE_PLAYER_ACTION_MAX 0xe8
 #define REMOTE_PLAYER_ACTION_CHARACTER_SWITCH 0xba
 #define PLAYER_MODEL_RENDER_SEGMENT 0x60000000u
+#define ACTION_MODEL_FILE_SEGMENT 0x07000000u
 #define CLOTHED_CHARACTER_ANIM_CONTEXT 0xc01fc680u
 #define CLOTHED_CHARACTER_OBJECT_MODE 2u
 #define REMOTE_YAW_SPEED_THRESHOLD_SQ 64
@@ -49,6 +52,7 @@
 #define REMOTE_PACKET_FRAME_INTERVAL 6.0f
 
 #define REMOTE_MODEL_SLOT_COUNT ANCHOR_PLAYER_MODEL_MAX
+#define CHARACTER_GOEMON 0
 #define CHARACTER_COUNT 4
 #define AUX_BUFFER_SIZE 0x1000u
 #define AUX_RESOURCE_COUNT 2
@@ -75,6 +79,7 @@ typedef struct CharacterModelCache
     unsigned char *broad;       /* resident broad file from the scene registry */
     unsigned char *action;      /* whole action-model file, raw ROM image */
     unsigned int action_size;
+    unsigned int max_action_model_size;
 } CharacterModelCache;
 
 typedef struct RemoteModelSlot
@@ -84,6 +89,7 @@ typedef struct RemoteModelSlot
     int seen;
     int bound_ch;     /* character currently bound to the object, -1 if none */
     int bound_action; /* action currently bound, -1 if none */
+    int bound_sudden_impact;
     int last_seq;
     int last_remote_frame_100;
     int last_remote_frame_count_100;
@@ -92,6 +98,8 @@ typedef struct RemoteModelSlot
     float frame_step;
     void *task;
     void *object;
+    unsigned char *private_action;
+    unsigned int private_action_size;
     unsigned char *aux_buffer[AUX_RESOURCE_COUNT][AUX_FLIP_COUNT];
     unsigned int aux_resource_id[AUX_RESOURCE_COUNT];
     int aux_flip[AUX_RESOURCE_COUNT];
@@ -172,6 +180,17 @@ extern unsigned short D_80204020_5BFF30[];
 /* Per-character raw action-model file ids. All four entries are copied into
  * mod-owned render caches for exact remote action selection. */
 extern unsigned short D_80204028_5BFF38[];
+
+/* Stock player model-replacement tables. Index 1 replaces Goemon's normal
+ * hair display pointers with the Sudden Impact variants; index 2 reverses
+ * that mutation. The remote renderer starts from a pristine private action
+ * copy, so it only needs the forward table. */
+extern void *D_80204048_5BFF58[];
+
+/* Walk a bound model tree and apply one of the stock display-pointer
+ * replacement tables. FUN_801DD498 calls this for the live player. */
+extern int func_8001C3E0_1CFE0(void *object, unsigned int model_ptr,
+                               const void *replacement_table);
 
 /* DMA mode byte the stock action copy (func_801DC70C) forces to 1 around
  * its ROM DMA and then restores; mirrored here for the whole-file copy.
@@ -279,6 +298,7 @@ static void invalidate_aux_render_arena(void)
          * face segments from the newly rebuilt external scene arena. */
         slot->bound_ch = -1;
         slot->bound_action = -1;
+        slot->bound_sudden_impact = 0;
         slot->aux_last_frame = 0.0f;
     }
 }
@@ -362,6 +382,51 @@ static unsigned char *resident_resource_base(unsigned int file_id)
     return (unsigned char *)(unsigned long)address;
 }
 
+static int action_model_range(int ch, int action, unsigned int *offset_out,
+                              unsigned int *size_out)
+{
+    CharacterModelCache *cache;
+    unsigned char *entry;
+    unsigned int start;
+    unsigned int end;
+    unsigned int offset;
+    unsigned int end_offset;
+
+    if (ch < 0 || ch >= CHARACTER_COUNT || action < 0 ||
+        action >= REMOTE_PLAYER_ACTION_MAX)
+        return 0;
+    cache = &s_char_cache[ch];
+    entry = D_80203F34_5BFE44[ch] + action * 0x1c;
+    start = *(unsigned int *)(entry + 0x0c);
+    end = *(unsigned int *)(entry + 0x10);
+    if ((start & 0xff000000u) != ACTION_MODEL_FILE_SEGMENT)
+        return 0;
+    offset = start - ACTION_MODEL_FILE_SEGMENT;
+    if (end == 0)
+        end_offset = cache->action_size;
+    else
+    {
+        if ((end & 0xff000000u) != ACTION_MODEL_FILE_SEGMENT)
+            return 0;
+        end_offset = end - ACTION_MODEL_FILE_SEGMENT;
+    }
+    if (offset >= cache->action_size || end_offset <= offset ||
+        end_offset > cache->action_size)
+        return 0;
+    *offset_out = offset;
+    *size_out = end_offset - offset;
+    return 1;
+}
+
+static void copy_bytes(unsigned char *dst, const unsigned char *src,
+                       unsigned int size)
+{
+    unsigned int i;
+
+    for (i = 0; i < size; ++i)
+        dst[i] = src[i];
+}
+
 static int cache_action_file(int ch)
 {
     CharacterModelCache *cache = &s_char_cache[ch];
@@ -397,6 +462,21 @@ static int cache_action_file(int ch)
     STOCK_DMA_MODE = 1;
     func_80001640_2240(file_start, cache->action, cache->action_size);
     STOCK_DMA_MODE = saved_dma_mode;
+
+    cache->max_action_model_size = 0;
+    {
+        int action;
+
+        for (action = 0; action < REMOTE_PLAYER_ACTION_MAX; ++action)
+        {
+            unsigned int offset;
+            unsigned int size;
+
+            if (action_model_range(ch, action, &offset, &size) &&
+                size > cache->max_action_model_size)
+                cache->max_action_model_size = size;
+        }
+    }
     return 1;
 }
 
@@ -495,6 +575,7 @@ static void clear_slot_state(RemoteModelSlot *slot, int preserve_live_task)
     slot->seen = 0;
     slot->bound_ch = -1;
     slot->bound_action = -1;
+    slot->bound_sudden_impact = 0;
     slot->last_seq = 0;
     slot->last_remote_frame_100 = 0;
     slot->last_remote_frame_count_100 = 0;
@@ -567,6 +648,7 @@ static int ensure_slot_task(RemoteModelSlot *slot, const AnchorPlayerModelRemote
         slot->object = 0;
         slot->bound_ch = -1;
         slot->bound_action = -1;
+        slot->bound_sudden_impact = 0;
     }
     if (slot->task && slot->object)
         return 1;
@@ -789,10 +871,50 @@ static int sync_timed_aux_resources(RemoteModelSlot *slot,
     return 1;
 }
 
+static int bind_action_model_data(RemoteModelSlot *slot, int ch, int action,
+                                  int sudden_impact)
+{
+    CharacterModelCache *cache = &s_char_cache[ch];
+    unsigned int offset;
+    unsigned int size;
+    unsigned int base;
+
+    if (!sudden_impact)
+    {
+        write_u32_at(slot->object, 0x38,
+                     (unsigned int)(unsigned long)cache->action);
+        return 1;
+    }
+
+    /* func_8001C3E0 mutates display pointers in the bound model tree. The
+     * ordinary raw action cache is shared by every remote slot, so applying
+     * Sudden Impact there would turn unrelated Goemon players gold. Mirror
+     * the stock player's per-action DMA into a slot-private buffer first. */
+    if (!action_model_range(ch, action, &offset, &size) ||
+        cache->max_action_model_size == 0 ||
+        size > cache->max_action_model_size)
+        return 0;
+    if (!slot->private_action)
+    {
+        slot->private_action = alloc_aligned(cache->max_action_model_size);
+        if (!slot->private_action)
+            return 0;
+        slot->private_action_size = cache->max_action_model_size;
+    }
+    if (size > slot->private_action_size)
+        return 0;
+
+    copy_bytes(slot->private_action, cache->action + offset, size);
+    base = (unsigned int)(unsigned long)slot->private_action - offset;
+    write_u32_at(slot->object, 0x38, base);
+    return 1;
+}
+
 /* Bind a character/action to the slot's render object from the character
- * cache. Pure pointer rebinding; no data is copied except aux resources on
- * their first use. */
-static int bind_model(RemoteModelSlot *slot, int ch, int action)
+ * cache. Sudden Impact uses a private mutable action slice; ordinary models
+ * keep using the shared pristine raw action file. */
+static int bind_model(RemoteModelSlot *slot, int ch, int action,
+                      int sudden_impact)
 {
     CharacterModelCache *cache = &s_char_cache[ch];
     unsigned char *entry = get_action_entry(ch, action);
@@ -801,19 +923,24 @@ static int bind_model(RemoteModelSlot *slot, int ch, int action)
     if (!entry || !cache->ready || !cache->broad || !cache->action)
         return 0;
 
-    /* Segment 8: action model file base. The stock copy sets
-     * object+0x38 = buffer - (range_start - 0x7000000); with the whole file
-     * cached, that base is simply the file itself. */
-    write_u32_at(slot->object, 0x38, (unsigned int)(unsigned long)cache->action);
+    sudden_impact = ch == CHARACTER_GOEMON && sudden_impact != 0;
+
+    /* Segment 8: action model file base. Ordinary models use the whole shared
+     * file; the mutable Sudden Impact variant uses a slot-private slice. */
+    if (!bind_action_model_data(slot, ch, action, sudden_impact))
+        return 0;
     /* Segment 9: broad character file id + base (object+0x3c/+0x40). */
     write_u16_at(slot->object, 0x3c, D_80204020_5BFF30[ch]);
     write_u32_at(slot->object, 0x40, (unsigned int)(unsigned long)cache->broad);
 
-    if (!bind_initial_aux_resources(slot, entry))
-        return 0;
-
     write_u32_at(slot->object, 0x2c,
                  *(unsigned int *)(entry + 0x00) + PLAYER_MODEL_RENDER_SEGMENT);
+    if (sudden_impact &&
+        !func_8001C3E0_1CFE0(slot->object, 0, D_80204048_5BFF58[1]))
+        return 0;
+
+    if (!bind_initial_aux_resources(slot, entry))
+        return 0;
 
     speed = *(short *)(entry + 0x04);
     slot->frame_step = (float)speed / 100.0f;
@@ -823,6 +950,7 @@ static int bind_model(RemoteModelSlot *slot, int ch, int action)
 
     slot->bound_ch = ch;
     slot->bound_action = action;
+    slot->bound_sudden_impact = sudden_impact;
     show_object(slot->object);
     return 1;
 }
@@ -950,6 +1078,7 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
          * data is never submitted while an aux load or table check fails. */
         hide_object(slot->object);
         slot->bound_action = -1;
+        slot->bound_sudden_impact = 0;
         return;
     }
 
@@ -1014,6 +1143,7 @@ static void remote_model_task_update(void *task, void *object)
         hide_object(slot->object);
         slot->bound_ch = -1;
         slot->bound_action = -1;
+        slot->bound_sudden_impact = 0;
         return;
     }
 
@@ -1025,18 +1155,22 @@ static void remote_model_task_update(void *task, void *object)
             hide_object(slot->object);
             slot->bound_ch = -1;
             slot->bound_action = -1;
+            slot->bound_sudden_impact = 0;
         }
         update_slot_hidden_pose(slot, remote);
         return;
     }
 
-    if (slot->bound_ch != ch || slot->bound_action != action)
+    if (slot->bound_ch != ch || slot->bound_action != action ||
+        slot->bound_sudden_impact !=
+            (ch == CHARACTER_GOEMON && remote->sudden_impact != 0))
     {
-        if (!bind_model(slot, ch, action))
+        if (!bind_model(slot, ch, action, remote->sudden_impact))
         {
             hide_object(slot->object);
             slot->bound_ch = -1;
             slot->bound_action = -1;
+            slot->bound_sudden_impact = 0;
             update_slot_hidden_pose(slot, remote);
             return;
         }

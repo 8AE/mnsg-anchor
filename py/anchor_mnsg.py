@@ -113,6 +113,7 @@ _last_position_sent: "tuple[int, int, int] | None" = None
 _last_position_sent_ms: int = 0
 _last_position_action: int = -2
 _last_position_frame_100: int = 0
+_last_position_sudden_impact: int = -1
 _position_seq: int = 0
 _race_status: str = ""
 _race_config_json: str = ""
@@ -385,6 +386,8 @@ def _recv_loop(sock: socket.socket) -> None:
                                 _player_states[cid]["rotY"] = int(packet.get("rotY", 0))
                             if "rotZ" in packet:
                                 _player_states[cid]["rotZ"] = int(packet.get("rotZ", 0))
+                            if "suddenImpact" in packet:
+                                _player_states[cid]["suddenImpact"] = bool(packet.get("suddenImpact", False))
                     # Movement is already coalesced into _player_states. Do not
                     # duplicate this hot path in the general game-event queue.
                     continue
@@ -442,6 +445,8 @@ def _recv_loop(sock: socket.socket) -> None:
                                     _player_states[cid]["rotY"] = int(cs["rotY"])
                                 if "rotZ" in cs:
                                     _player_states[cid]["rotZ"] = int(cs["rotZ"])
+                                if "suddenImpact" in cs:
+                                    _player_states[cid]["suddenImpact"] = bool(cs["suddenImpact"])
                                 if "currentCharacter" in cs:
                                     _player_states[cid]["character"] = str(cs["currentCharacter"])
                             else:
@@ -471,6 +476,7 @@ def _recv_loop(sock: socket.socket) -> None:
                                     "rotX": int(cs.get("rotX", 0)),
                                     "rotY": int(cs.get("rotY", 0)),
                                     "rotZ": int(cs.get("rotZ", 0)),
+                                    "suddenImpact": bool(cs.get("suddenImpact", False)),
                                     "character": str(cs.get("currentCharacter", "")),
                                 }
 
@@ -500,6 +506,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     global _sock, _connected, _local_room_id, _local_character, _local_save_loaded
     global _last_position_sent, _last_position_sent_ms
     global _last_position_action, _last_position_frame_100
+    global _last_position_sudden_impact
 
     # A receiver from an older connection must never close a newer socket.
     if expected_sock is not None and _sock is not expected_sock:
@@ -516,6 +523,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _last_position_sent_ms = 0
     _last_position_action = -2
     _last_position_frame_100 = 0
+    _last_position_sudden_impact = -1
     _connected = False
     s = _sock
     _sock = None
@@ -557,6 +565,7 @@ def connect(
     global _sock, _connected, _client_id, _room_id, _team_id, _player_name
     global _last_position_sent, _last_position_sent_ms, _position_seq, _local_character
     global _last_position_action, _last_position_frame_100
+    global _last_position_sudden_impact
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
 
     if _connected:
@@ -572,6 +581,7 @@ def connect(
     _last_position_sent_ms = 0
     _last_position_action = -2
     _last_position_frame_100 = 0
+    _last_position_sudden_impact = -1
     _position_seq = 0
     _local_character = ""
     _local_save_loaded = False
@@ -852,7 +862,7 @@ def send_custom_packet(
 
 def set_position(x: int, y: int, z: int) -> bool:
     """Backward-compatible position-only sender."""
-    return set_position_anim(x, y, z, -1, 0, 0, 0, 0, 0)
+    return set_position_anim(x, y, z, -1, 0, 0, 0, 0, 0, 0)
 
 
 def set_position_anim(
@@ -865,6 +875,7 @@ def set_position_anim(
     rot_x: int,
     rot_y: int,
     rot_z: int,
+    sudden_impact: int = 0,
 ) -> bool:
     """
     Broadcast world-space position and the live animation phase to teammates.
@@ -884,16 +895,19 @@ def set_position_anim(
         rot_x: Current model X rotation.
         rot_y: Current model Y rotation.
         rot_z: Current model Z rotation.
+        sudden_impact: Nonzero while Goemon's Sudden Impact model is active.
 
     Returns True if the packet was sent.
     """
     global _last_position_sent, _last_position_sent_ms, _position_seq
     global _last_position_action, _last_position_frame_100
+    global _last_position_sudden_impact
 
     if not _connected:
         return False
     now_ms = int(time.monotonic() * 1000)
     action_changed = int(action) != _last_position_action
+    sudden_impact_changed = int(bool(sudden_impact)) != _last_position_sudden_impact
     frame_restarted = (
         not action_changed
         and int(frame_100) + ANIMATION_RESTART_DELTA_100 < _last_position_frame_100
@@ -902,6 +916,7 @@ def set_position_anim(
         _last_position_sent_ms > 0
         and now_ms - _last_position_sent_ms < MOVEMENT_MIN_INTERVAL_MS
         and not action_changed
+        and not sudden_impact_changed
         and not frame_restarted
     ):
         return False
@@ -933,6 +948,7 @@ def set_position_anim(
         "rotX": int(rot_x),
         "rotY": int(rot_y),
         "rotZ": int(rot_z),
+        "suddenImpact": bool(sudden_impact),
         "quiet": True,
     })
     if not sent:
@@ -942,6 +958,7 @@ def set_position_anim(
     _last_position_sent_ms = now_ms
     _last_position_action = int(action)
     _last_position_frame_100 = int(frame_100)
+    _last_position_sudden_impact = int(bool(sudden_impact))
     _position_seq = next_seq
 
     if _client_id:
@@ -961,6 +978,7 @@ def set_position_anim(
             local["rotX"] = int(rot_x)
             local["rotY"] = int(rot_y)
             local["rotZ"] = int(rot_z)
+            local["suddenImpact"] = bool(sudden_impact)
     return True
 
 
@@ -1175,14 +1193,16 @@ def get_lobby_positions_json() -> str:
     Return a compact JSON array of all online non-self lobby members with their
     current room ID and world-space position, for use by the phantom actor system.
 
-    Each entry includes identity, position, velocity, animation, rotation, and
-    character fields used by the remote cutscene-model renderer.
+    Each entry includes identity, position, velocity, animation, rotation,
+    character, and appearance fields used by the remote cutscene-model
+    renderer.
 
     Fields:
       "cid"  – client ID (unique per player, stable within a session).
       "room" – raw 16-bit room ID the player last reported, -1 if unknown.
       "x","y","z" – last broadcast world-space position (0 if not yet received).
       "hp"   – 1 if the player has sent at least one position update, 0 otherwise.
+      "si"   – 1 while Goemon's Sudden Impact model is active, 0 otherwise.
 
     Unlike get_teammate_positions_json(), this function:
       - Does NOT filter by team.
@@ -1226,6 +1246,7 @@ def get_lobby_positions_json() -> str:
                 "rx": int(v.get("rotX", 0)),
                 "ry": int(v.get("rotY", 0)),
                 "rz": int(v.get("rotZ", 0)),
+                "si": 1 if v.get("suddenImpact", False) else 0,
                 "tm": 1 if v.get("teamId", "") == _team_id else 0,
             })
     return json.dumps(result, separators=(",", ":"))

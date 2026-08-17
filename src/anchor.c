@@ -262,7 +262,8 @@ int anchor_set_position(int pos_x, int pos_y, int pos_z)
 
 int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
                              int action, int frame_100, int frame_count_100,
-                             int rot_x, int rot_y, int rot_z)
+                             int rot_x, int rot_y, int rot_z,
+                             int sudden_impact)
 {
     REPY_FN_SETUP;
     REPY_FN_SET_S32("pos_x", pos_x);
@@ -274,11 +275,13 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
     REPY_FN_SET_S32("rot_x", rot_x);
     REPY_FN_SET_S32("rot_y", rot_y);
     REPY_FN_SET_S32("rot_z", rot_z);
+    REPY_FN_SET_S32("sudden_impact", sudden_impact);
     REPY_FN_EXEC_CACHE(anchor_set_position_anim_code,
                        "import anchor_mnsg\n"
                        "result = anchor_mnsg.set_position_anim(\n"
                        "    pos_x, pos_y, pos_z, action, frame_100,\n"
-                       "    frame_count_100, rot_x, rot_y, rot_z\n"
+                       "    frame_count_100, rot_x, rot_y, rot_z,\n"
+                       "    sudden_impact\n"
                        ")\n");
     int result = (int)REPY_FN_GET_BOOL("result");
     REPY_FN_CLEANUP;

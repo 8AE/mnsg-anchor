@@ -20,6 +20,7 @@ typedef struct AnchorPlayerModelRemote
     int rot_x;
     int rot_y;
     int rot_z;
+    int sudden_impact;
     int same_team;
 } AnchorPlayerModelRemote;
 
