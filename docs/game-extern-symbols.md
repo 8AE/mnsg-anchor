@@ -203,6 +203,7 @@ Current local player model/display object. Anchor reads:
 
 - `+0x08/+0x0C/+0x10`: world position;
 - `+0x14/+0x16/+0x18`: rotation;
+- `+0x1C/+0x20/+0x24`: uniform model scale, including Mini Ebisumaru;
 - `+0x28`: current animation frame.
 
 The frame count is obtained with `func_8001B5AC`. Character, action, frame,
@@ -369,9 +370,9 @@ at player-work `+0x86` expires, `func_801E78DC_5A37EC` temporarily sets `+0x84`
 to `2`, applies the inverse table, and clears the byte.
 
 Anchor samples the authoritative `+0x84 == 1` state after the local game frame
-and sends it as `suddenImpact` in the same `MNSG_PLAYER_POS` packet as action,
-animation phase, and rotation. An appearance edge bypasses the normal movement
-rate limit. The compact C-facing snapshot exposes the value as `si`.
+and sets bit 0 in the `appearanceFlags` bitmap sent with action, animation
+phase, and rotation. An appearance edge bypasses the normal movement rate
+limit. The compact C-facing snapshot exposes the bitmap as `ap`.
 
 The remote renderer never runs the ability callback or timer. Instead, it
 copies the current Goemon action range from the pristine whole-file cache into
@@ -380,6 +381,32 @@ a slot-private buffer, binds that range with the same base arithmetic used by
 `func_8001C3E0_1CFE0`. Returning to normal simply rebinds the pristine shared
 cache. Keeping the mutable range private prevents one transformed Goemon from
 changing every remote Goemon that shares the action-file cache.
+
+### Mini Ebisumaru scale state
+
+Mini Ebisumaru does not replace model display pointers. The stock activation
+path selects action `0x8E`, whose callback table entry at `D_80203B90[0x8E]`
+is `func_801F56B8_5B15C8`. That callback calls `func_801F5734_5B1644`, which
+animates all three scale fields at model object `+0x1C/+0x20/+0x24` and leaves
+them at `0.025`, one quarter of the normal `0.1` scale.
+
+While the Mini ability marker at player-work `+0x86` remains nonzero, another
+ability input takes the inverse path through `func_801E77E4_5A36F4` and action
+`0x8F`. Its callback entry is `func_801F56EC_5B15FC`, which uses the same scale
+animator to return the model to `0.1` and then clears `+0x86`.
+
+Anchor sets appearance bit 1 while Ebisumaru's player-work `+0x86` marker is
+nonzero. Sudden Impact and Mini Ebisumaru therefore cost one shared integer
+field, `appearanceFlags`, in `MNSG_PLAYER_POS`; compact field `ap` carries the
+same bitmap into C. Only bitmap edges bypass the normal movement rate limit.
+
+The receiver does not need a streamed scale. It derives Ebisumaru's scale from
+bit 1 plus the already-synchronized action and animation frame. For action
+`0x8E` it reproduces the stock quadratic curve from `0.1` at frame 12 to
+`0.025` at frame 20; action `0x8F` applies the inverse curve. Outside those
+transition actions, bit 1 selects `0.025` and a clear bit selects `0.1`. The
+derived uniform scale is written during the remote task's scheduled pre-render
+update.
 
 Aux loads and model-segment rebinds run from each remote model's ordinary task
 callback. They are not performed from the return hook after the selected game

@@ -195,13 +195,14 @@ extern "C"
     * @param rot_x            Model X rotation from object offset 0x14.
     * @param rot_y            Model Y rotation from object offset 0x16.
     * @param rot_z            Model Z rotation from object offset 0x18.
-    * @param sudden_impact    1 while Goemon's Sudden Impact model is active.
+    * @param appearance_flags Appearance bitmap: bit 0 is Goemon's Sudden
+    *                         Impact; bit 1 is Mini Ebisumaru.
     * @return 1 if sent, 0 otherwise.
     */
    int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
                                 int action, int frame_100, int frame_count_100,
                                 int rot_x, int rot_y, int rot_z,
-                                int sudden_impact);
+                                int appearance_flags);
 
    /**
     * @brief Broadcast the local player's currently selected character.

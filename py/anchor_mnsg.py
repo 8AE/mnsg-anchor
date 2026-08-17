@@ -113,7 +113,7 @@ _last_position_sent: "tuple[int, int, int] | None" = None
 _last_position_sent_ms: int = 0
 _last_position_action: int = -2
 _last_position_frame_100: int = 0
-_last_position_sudden_impact: int = -1
+_last_position_appearance_flags: int = -1
 _position_seq: int = 0
 _race_status: str = ""
 _race_config_json: str = ""
@@ -126,6 +126,28 @@ DEFAULT_HOST: str = "anchor.hm64.org"
 DEFAULT_PORT: int = 43383
 MOVEMENT_MIN_INTERVAL_MS: int = 50
 ANIMATION_RESTART_DELTA_100: int = 50
+APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
+APPEARANCE_MINI_EBISUMARU: int = 1 << 1
+APPEARANCE_MASK: int = APPEARANCE_SUDDEN_IMPACT | APPEARANCE_MINI_EBISUMARU
+
+
+def _appearance_flags_from_payload(payload: dict, current: int = 0) -> int:
+    """Read the compact bitmap, with receive-only compatibility for old peers."""
+    if "appearanceFlags" in payload:
+        return int(payload.get("appearanceFlags", 0)) & APPEARANCE_MASK
+
+    flags = int(current) & APPEARANCE_MASK
+    if "suddenImpact" in payload:
+        if payload.get("suddenImpact", False):
+            flags |= APPEARANCE_SUDDEN_IMPACT
+        else:
+            flags &= ~APPEARANCE_SUDDEN_IMPACT
+    if "modelScale100000" in payload:
+        if int(payload.get("modelScale100000", 10000)) < 10000:
+            flags |= APPEARANCE_MINI_EBISUMARU
+        else:
+            flags &= ~APPEARANCE_MINI_EBISUMARU
+    return flags
 
 ###############################################################################
 # Room ID → area name lookup table
@@ -386,8 +408,12 @@ def _recv_loop(sock: socket.socket) -> None:
                                 _player_states[cid]["rotY"] = int(packet.get("rotY", 0))
                             if "rotZ" in packet:
                                 _player_states[cid]["rotZ"] = int(packet.get("rotZ", 0))
-                            if "suddenImpact" in packet:
-                                _player_states[cid]["suddenImpact"] = bool(packet.get("suddenImpact", False))
+                            if ("appearanceFlags" in packet or
+                                    "suddenImpact" in packet or
+                                    "modelScale100000" in packet):
+                                current = int(_player_states[cid].get("appearanceFlags", 0))
+                                _player_states[cid]["appearanceFlags"] = \
+                                    _appearance_flags_from_payload(packet, current)
                     # Movement is already coalesced into _player_states. Do not
                     # duplicate this hot path in the general game-event queue.
                     continue
@@ -445,8 +471,12 @@ def _recv_loop(sock: socket.socket) -> None:
                                     _player_states[cid]["rotY"] = int(cs["rotY"])
                                 if "rotZ" in cs:
                                     _player_states[cid]["rotZ"] = int(cs["rotZ"])
-                                if "suddenImpact" in cs:
-                                    _player_states[cid]["suddenImpact"] = bool(cs["suddenImpact"])
+                                if ("appearanceFlags" in cs or
+                                        "suddenImpact" in cs or
+                                        "modelScale100000" in cs):
+                                    current = int(_player_states[cid].get("appearanceFlags", 0))
+                                    _player_states[cid]["appearanceFlags"] = \
+                                        _appearance_flags_from_payload(cs, current)
                                 if "currentCharacter" in cs:
                                     _player_states[cid]["character"] = str(cs["currentCharacter"])
                             else:
@@ -476,7 +506,7 @@ def _recv_loop(sock: socket.socket) -> None:
                                     "rotX": int(cs.get("rotX", 0)),
                                     "rotY": int(cs.get("rotY", 0)),
                                     "rotZ": int(cs.get("rotZ", 0)),
-                                    "suddenImpact": bool(cs.get("suddenImpact", False)),
+                                    "appearanceFlags": _appearance_flags_from_payload(cs),
                                     "character": str(cs.get("currentCharacter", "")),
                                 }
 
@@ -506,7 +536,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     global _sock, _connected, _local_room_id, _local_character, _local_save_loaded
     global _last_position_sent, _last_position_sent_ms
     global _last_position_action, _last_position_frame_100
-    global _last_position_sudden_impact
+    global _last_position_appearance_flags
 
     # A receiver from an older connection must never close a newer socket.
     if expected_sock is not None and _sock is not expected_sock:
@@ -523,7 +553,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _last_position_sent_ms = 0
     _last_position_action = -2
     _last_position_frame_100 = 0
-    _last_position_sudden_impact = -1
+    _last_position_appearance_flags = -1
     _connected = False
     s = _sock
     _sock = None
@@ -565,7 +595,7 @@ def connect(
     global _sock, _connected, _client_id, _room_id, _team_id, _player_name
     global _last_position_sent, _last_position_sent_ms, _position_seq, _local_character
     global _last_position_action, _last_position_frame_100
-    global _last_position_sudden_impact
+    global _last_position_appearance_flags
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
 
     if _connected:
@@ -581,7 +611,7 @@ def connect(
     _last_position_sent_ms = 0
     _last_position_action = -2
     _last_position_frame_100 = 0
-    _last_position_sudden_impact = -1
+    _last_position_appearance_flags = -1
     _position_seq = 0
     _local_character = ""
     _local_save_loaded = False
@@ -875,7 +905,7 @@ def set_position_anim(
     rot_x: int,
     rot_y: int,
     rot_z: int,
-    sudden_impact: int = 0,
+    appearance_flags: int = 0,
 ) -> bool:
     """
     Broadcast world-space position and the live animation phase to teammates.
@@ -895,19 +925,21 @@ def set_position_anim(
         rot_x: Current model X rotation.
         rot_y: Current model Y rotation.
         rot_z: Current model Z rotation.
-        sudden_impact: Nonzero while Goemon's Sudden Impact model is active.
+        appearance_flags: Bitmap containing Sudden Impact (bit 0) and Mini
+            Ebisumaru (bit 1).
 
     Returns True if the packet was sent.
     """
     global _last_position_sent, _last_position_sent_ms, _position_seq
     global _last_position_action, _last_position_frame_100
-    global _last_position_sudden_impact
+    global _last_position_appearance_flags
 
     if not _connected:
         return False
     now_ms = int(time.monotonic() * 1000)
     action_changed = int(action) != _last_position_action
-    sudden_impact_changed = int(bool(sudden_impact)) != _last_position_sudden_impact
+    appearance_flags = int(appearance_flags) & APPEARANCE_MASK
+    appearance_changed = appearance_flags != _last_position_appearance_flags
     frame_restarted = (
         not action_changed
         and int(frame_100) + ANIMATION_RESTART_DELTA_100 < _last_position_frame_100
@@ -916,7 +948,7 @@ def set_position_anim(
         _last_position_sent_ms > 0
         and now_ms - _last_position_sent_ms < MOVEMENT_MIN_INTERVAL_MS
         and not action_changed
-        and not sudden_impact_changed
+        and not appearance_changed
         and not frame_restarted
     ):
         return False
@@ -948,7 +980,7 @@ def set_position_anim(
         "rotX": int(rot_x),
         "rotY": int(rot_y),
         "rotZ": int(rot_z),
-        "suddenImpact": bool(sudden_impact),
+        "appearanceFlags": appearance_flags,
         "quiet": True,
     })
     if not sent:
@@ -958,7 +990,7 @@ def set_position_anim(
     _last_position_sent_ms = now_ms
     _last_position_action = int(action)
     _last_position_frame_100 = int(frame_100)
-    _last_position_sudden_impact = int(bool(sudden_impact))
+    _last_position_appearance_flags = appearance_flags
     _position_seq = next_seq
 
     if _client_id:
@@ -978,7 +1010,7 @@ def set_position_anim(
             local["rotX"] = int(rot_x)
             local["rotY"] = int(rot_y)
             local["rotZ"] = int(rot_z)
-            local["suddenImpact"] = bool(sudden_impact)
+            local["appearanceFlags"] = appearance_flags
     return True
 
 
@@ -1202,7 +1234,7 @@ def get_lobby_positions_json() -> str:
       "room" – raw 16-bit room ID the player last reported, -1 if unknown.
       "x","y","z" – last broadcast world-space position (0 if not yet received).
       "hp"   – 1 if the player has sent at least one position update, 0 otherwise.
-      "si"   – 1 while Goemon's Sudden Impact model is active, 0 otherwise.
+      "ap"   – appearance bitmap: Sudden Impact bit 0, Mini Ebisumaru bit 1.
 
     Unlike get_teammate_positions_json(), this function:
       - Does NOT filter by team.
@@ -1246,7 +1278,7 @@ def get_lobby_positions_json() -> str:
                 "rx": int(v.get("rotX", 0)),
                 "ry": int(v.get("rotY", 0)),
                 "rz": int(v.get("rotZ", 0)),
-                "si": 1 if v.get("suddenImpact", False) else 0,
+                "ap": int(v.get("appearanceFlags", 0)) & APPEARANCE_MASK,
                 "tm": 1 if v.get("teamId", "") == _team_id else 0,
             })
     return json.dumps(result, separators=(",", ":"))

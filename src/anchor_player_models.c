@@ -42,6 +42,8 @@
 #define REMOTE_PLAYER_ACTION_IDLE 0
 #define REMOTE_PLAYER_ACTION_MAX 0xe8
 #define REMOTE_PLAYER_ACTION_CHARACTER_SWITCH 0xba
+#define REMOTE_PLAYER_ACTION_MINI_SHRINK 0x8e
+#define REMOTE_PLAYER_ACTION_MINI_GROW 0x8f
 #define PLAYER_MODEL_RENDER_SEGMENT 0x60000000u
 #define ACTION_MODEL_FILE_SEGMENT 0x07000000u
 #define CLOTHED_CHARACTER_ANIM_CONTEXT 0xc01fc680u
@@ -53,7 +55,12 @@
 
 #define REMOTE_MODEL_SLOT_COUNT ANCHOR_PLAYER_MODEL_MAX
 #define CHARACTER_GOEMON 0
+#define CHARACTER_EBISUMARU 1
 #define CHARACTER_COUNT 4
+#define MINI_MODEL_SCALE 0.025f
+#define MINI_SCALE_START_FRAME 12.0f
+#define MINI_SCALE_END_FRAME 20.0f
+#define MINI_SCALE_CURVE 0.001171875f
 #define AUX_BUFFER_SIZE 0x1000u
 #define AUX_RESOURCE_COUNT 2
 #define AUX_FLIP_COUNT 2
@@ -1004,6 +1011,42 @@ static float abs_float(float value)
     return value < 0.0f ? -value : value;
 }
 
+static float remote_model_scale(const AnchorPlayerModelRemote *remote,
+                                float frame)
+{
+    float delta;
+
+    /* Derive Mini Ebisumaru's live scale locally from one appearance bit plus
+     * the synchronized stock action/frame. FUN_801F5734 uses these same
+     * thresholds and quadratic coefficient for actions 0x8E and 0x8F. */
+    if (!remote || remote->ch != CHARACTER_EBISUMARU ||
+        !(remote->appearance_flags & ANCHOR_APPEARANCE_MINI_EBISUMARU))
+        return REMOTE_MODEL_SCALE;
+
+    if (remote->action == REMOTE_PLAYER_ACTION_MINI_SHRINK)
+    {
+        if (frame <= MINI_SCALE_START_FRAME)
+            return REMOTE_MODEL_SCALE;
+        if (frame < MINI_SCALE_END_FRAME)
+        {
+            delta = frame - MINI_SCALE_END_FRAME;
+            return delta * delta * MINI_SCALE_CURVE + MINI_MODEL_SCALE;
+        }
+    }
+    else if (remote->action == REMOTE_PLAYER_ACTION_MINI_GROW)
+    {
+        if (frame <= MINI_SCALE_START_FRAME)
+            return MINI_MODEL_SCALE;
+        if (frame < MINI_SCALE_END_FRAME)
+        {
+            delta = frame - MINI_SCALE_START_FRAME;
+            return delta * delta * MINI_SCALE_CURVE + MINI_MODEL_SCALE;
+        }
+        return REMOTE_MODEL_SCALE;
+    }
+    return MINI_MODEL_SCALE;
+}
+
 static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemote *remote,
                              int action_changed)
 {
@@ -1085,6 +1128,13 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
     write_float_at(slot->object, 0x08, (float)remote->x);
     write_float_at(slot->object, 0x0c, (float)remote->y);
     write_float_at(slot->object, 0x10, (float)remote->z);
+    {
+        float scale = remote_model_scale(remote, slot->frame);
+
+        write_float_at(slot->object, 0x1c, scale);
+        write_float_at(slot->object, 0x20, scale);
+        write_float_at(slot->object, 0x24, scale);
+    }
     if (use_remote_anim)
     {
         write_u16_at(slot->object, 0x14, (unsigned short)remote->rot_x);
@@ -1110,6 +1160,14 @@ static void update_slot_hidden_pose(RemoteModelSlot *slot, const AnchorPlayerMod
     write_float_at(slot->object, 0x08, (float)remote->x);
     write_float_at(slot->object, 0x0c, (float)remote->y);
     write_float_at(slot->object, 0x10, (float)remote->z);
+    {
+        float scale = remote_model_scale(
+            remote, (float)remote->anim_frame_100 / 100.0f);
+
+        write_float_at(slot->object, 0x1c, scale);
+        write_float_at(slot->object, 0x20, scale);
+        write_float_at(slot->object, 0x24, scale);
+    }
 }
 
 /* Apply the queued network snapshot from the cutscene-style child task's
@@ -1163,9 +1221,13 @@ static void remote_model_task_update(void *task, void *object)
 
     if (slot->bound_ch != ch || slot->bound_action != action ||
         slot->bound_sudden_impact !=
-            (ch == CHARACTER_GOEMON && remote->sudden_impact != 0))
+            (ch == CHARACTER_GOEMON &&
+             (remote->appearance_flags &
+              ANCHOR_APPEARANCE_SUDDEN_IMPACT) != 0))
     {
-        if (!bind_model(slot, ch, action, remote->sudden_impact))
+        if (!bind_model(slot, ch, action,
+                        remote->appearance_flags &
+                            ANCHOR_APPEARANCE_SUDDEN_IMPACT))
         {
             hide_object(slot->object);
             slot->bound_ch = -1;

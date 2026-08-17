@@ -64,7 +64,7 @@ typedef struct RemotePlayer
     int rot_x;
     int rot_y;
     int rot_z;
-    int sudden_impact;
+    int appearance_flags;
     int same_team;
     char name[32];
 } RemotePlayer;
@@ -122,7 +122,7 @@ static int s_last_sent_frame_count_100;
 static int s_last_sent_rot_x;
 static int s_last_sent_rot_y;
 static int s_last_sent_rot_z;
-static int s_last_sent_sudden_impact = -1;
+static int s_last_sent_appearance_flags = -1;
 static unsigned int s_last_sent_room = 0xffffffffu;
 static int s_lobby_refresh_timer;
 
@@ -158,6 +158,11 @@ static unsigned char read_u8_at(const void *obj, unsigned int offset)
 static short read_s16_at(const void *obj, unsigned int offset)
 {
     return *(const short *)((const unsigned char *)obj + offset);
+}
+
+static unsigned short read_u16_at(const void *obj, unsigned int offset)
+{
+    return *(const unsigned short *)((const unsigned char *)obj + offset);
 }
 
 static float read_float_at(const void *obj, unsigned int offset)
@@ -273,8 +278,8 @@ static int parse_lobby_positions(const char *json)
         s_remote_players[count].rot_x = parse_int_after(p, "\"rx\"", 0);
         s_remote_players[count].rot_y = parse_int_after(p, "\"ry\"", 0);
         s_remote_players[count].rot_z = parse_int_after(p, "\"rz\"", 0);
-        s_remote_players[count].sudden_impact =
-            parse_int_after(p, "\"si\"", 0) != 0;
+        s_remote_players[count].appearance_flags =
+            parse_int_after(p, "\"ap\"", 0);
         s_remote_players[count].same_team = parse_int_after(p, "\"tm\"", 1);
         parse_string_after(p, "\"n\"", s_remote_players[count].name,
                            (int)sizeof(s_remote_players[count].name));
@@ -373,7 +378,7 @@ static void reset_last_sent_state(void)
     s_last_sent_action = -2;
     s_last_sent_frame_100 = 0;
     s_last_sent_frame_count_100 = 0;
-    s_last_sent_sudden_impact = -1;
+    s_last_sent_appearance_flags = -1;
     s_last_sent_room = 0xffffffffu;
 }
 
@@ -393,7 +398,7 @@ static void publish_local_state(PlayerObject *local_obj)
     int rot_x;
     int rot_y;
     int rot_z;
-    int sudden_impact;
+    int appearance_flags;
     int anim_delta;
     int frame_restarted;
     int should_send_position = 0;
@@ -446,17 +451,25 @@ static void publish_local_state(PlayerObject *local_obj)
     rot_x = (int)read_s16_at(local_obj, 0x14);
     rot_y = (int)read_s16_at(local_obj, 0x16);
     rot_z = (int)read_s16_at(local_obj, 0x18);
-    /* FUN_801F5314 sets player-work +0x84 to 1 at the exact frame the
-     * Sudden Impact replacement table turns Goemon's hair gold. The timer
-     * expiry path applies table 2 and clears this byte in the same frame. */
-    sudden_impact = 0;
-    if (char_idx == CHARACTER_GOEMON)
+    /* Pack remote appearance state into one byte-sized bitmap. FUN_801F5314
+     * sets work +0x84 when Sudden Impact actually turns gold. Ebisumaru's
+     * work +0x86 marker remains nonzero from the shrink action until the grow
+     * action completes; peers derive the live scale locally from that bit and
+     * the already-synchronized action frame. */
+    appearance_flags = 0;
     {
         void *player_work =
             *(void **)((unsigned char *)D_801FC604_5B8514 + 0x5c);
 
         if (is_rdram_pointer(player_work))
-            sudden_impact = read_u8_at(player_work, 0x84) == 1;
+        {
+            if (char_idx == CHARACTER_GOEMON &&
+                read_u8_at(player_work, 0x84) == 1)
+                appearance_flags |= ANCHOR_APPEARANCE_SUDDEN_IMPACT;
+            if (char_idx == CHARACTER_EBISUMARU &&
+                read_u16_at(player_work, 0x86) != 0)
+                appearance_flags |= ANCHOR_APPEARANCE_MINI_EBISUMARU;
+        }
     }
 
     if (!s_have_sent_position)
@@ -481,7 +494,7 @@ static void publish_local_state(PlayerObject *local_obj)
         frame_100 + ANIMATION_RESTART_DELTA_100 < s_last_sent_frame_100;
     should_send_animation =
         action != s_last_sent_action ||
-        sudden_impact != s_last_sent_sudden_impact ||
+        appearance_flags != s_last_sent_appearance_flags ||
         frame_restarted ||
         (s_state_send_timer <= 0 &&
          (anim_delta >= ANIMATION_SEND_DELTA_100 ||
@@ -494,7 +507,7 @@ static void publish_local_state(PlayerObject *local_obj)
 
     if (anchor_set_position_anim(x, y, z, action, frame_100,
                                  frame_count_100, rot_x, rot_y, rot_z,
-                                 sudden_impact))
+                                 appearance_flags))
     {
         s_have_sent_position = 1;
         s_last_sent_x = x;
@@ -506,7 +519,7 @@ static void publish_local_state(PlayerObject *local_obj)
         s_last_sent_rot_x = rot_x;
         s_last_sent_rot_y = rot_y;
         s_last_sent_rot_z = rot_z;
-        s_last_sent_sudden_impact = sudden_impact;
+        s_last_sent_appearance_flags = appearance_flags;
         s_state_send_timer = POSITION_SEND_FRAMES;
         s_position_keepalive_timer = POSITION_KEEPALIVE_FRAMES;
     }
@@ -624,7 +637,7 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
             model->rot_x = smoothed_remote.rot_x;
             model->rot_y = smoothed_remote.rot_y;
             model->rot_z = smoothed_remote.rot_z;
-            model->sudden_impact = smoothed_remote.sudden_impact;
+            model->appearance_flags = smoothed_remote.appearance_flags;
             model->same_team = smoothed_remote.same_team;
         }
 

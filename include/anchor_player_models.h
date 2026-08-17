@@ -2,6 +2,8 @@
 #define ANCHOR_PLAYER_MODELS_H
 
 #define ANCHOR_PLAYER_MODEL_MAX 25
+#define ANCHOR_APPEARANCE_SUDDEN_IMPACT (1 << 0)
+#define ANCHOR_APPEARANCE_MINI_EBISUMARU (1 << 1)
 
 typedef struct AnchorPlayerModelRemote
 {
@@ -20,7 +22,7 @@ typedef struct AnchorPlayerModelRemote
     int rot_x;
     int rot_y;
     int rot_z;
-    int sudden_impact;
+    int appearance_flags;
     int same_team;
 } AnchorPlayerModelRemote;
 
