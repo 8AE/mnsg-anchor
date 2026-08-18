@@ -3,8 +3,8 @@
  * @brief Randomizer item / flag synchronisation for Anchor multiplayer.
  *
  * Every game frame (RECOMP_HOOK_RETURN on func_80002040_2C40) this module:
- *   1. Drains the Anchor packet queue, applying any incoming SET_FLAG and
- *      REQUEST_TEAM_STATE packets to the local save data.
+ *   1. Drains the Anchor packet queue, applying incoming item updates and
+ *      dispatching live MNSG_BOSS_DEFEAT events before durable boss flags.
  *   2. Compares the current save data against a cached snapshot; whenever
  *      a tracked item is newly gained, broadcasts a SET_FLAG packet with
  *      addToQueue=1 so offline teammates receive it upon joining.
@@ -34,6 +34,7 @@
 #include "anchor.h"
 #include "anchor_runtime.h"
 #include "anchor_flag_catalog.h"
+#include "boss_sync.h"
 
 void anchor_race_on_flag_synced(const char *flag_name, int flag_value);
 void anchor_race_on_remote_flag_synced(const char *flag_name, int flag_value);
@@ -402,7 +403,9 @@ static SyncFlagBit s_flag_bits[] = {
     {0x040, 0, "fl_tsurami"},
     /* FLAG_DEFEATED_BENKEI    0x033  Byte 0x06 Bit 3                   */
     {0x033, 0, "fl_benkei"},
-    /* FLAG_BEAT_CONGO         0x12D  Byte 0x25 Bit 5 (Oedo Castle)     */
+    /* Congo's health-zero handler sets 0x1A1 before disabling the boss. */
+    {0x1A1, 0, "fl_congo_killed"},
+    /* FLAG_BEAT_CONGO 0x12D is the later reward-spawn/cutscene flag.    */
     {0x12D, 0, "fl_congo"},
 
     /* ── Character / ability acquisition flags ──────────────────────── */
@@ -701,6 +704,16 @@ static int s_team_state_request_pending = 0;
 static int s_team_snapshot_broadcast_timer = -1;
 #define TEAM_SNAPSHOT_BROADCAST_DELAY_FRAMES 90
 
+/* A boss progression bit received during the corresponding live encounter is
+ * held until the native encounter has ended.  This also protects compact team
+ * snapshots, not just individual SET_FLAG packets. */
+static unsigned char s_pending_boss_flags[NUM_FLAGS];
+/* A live defeat event has applied lethal damage to the local boss.  In that case the
+ * durable flag must wait for the game's native death task, even after the
+ * actor's active bit is cleared during its death animation. */
+static unsigned char s_pending_native_boss_defeat[NUM_FLAGS];
+static unsigned char s_boss_defeat_announced[NUM_FLAGS];
+
 /* =========================================================================
    Damage sync state
    =========================================================================
@@ -761,10 +774,17 @@ static void schedule_team_state_response(void)
 static void reset_caches(void)
 {
     int i;
+
+    boss_sync_reset();
     for (i = 0; i < NUM_FIELDS; ++i)
         s_fields[i].cached = 0;
     for (i = 0; i < NUM_FLAGS; ++i)
+    {
         s_flag_bits[i].cached = 0;
+        s_boss_defeat_announced[i] = 0;
+        s_pending_boss_flags[i] = 0;
+        s_pending_native_boss_defeat[i] = 0;
+    }
 }
 
 /* Capture the loaded save as the local baseline without broadcasting it. */
@@ -775,7 +795,10 @@ static void capture_caches(void)
     for (i = 0; i < NUM_FIELDS; ++i)
         s_fields[i].cached = SAVE_READ32(s_fields[i].off);
     for (i = 0; i < NUM_FLAGS; ++i)
+    {
         s_flag_bits[i].cached = (unsigned char)FLAG_IS_SET(s_flag_bits[i].id);
+        s_boss_defeat_announced[i] = s_flag_bits[i].cached;
+    }
 }
 
 /* =========================================================================
@@ -1039,6 +1062,8 @@ static const char *apply_flag(const char *flag_name, signed int val)
         {
             FLAG_SET_BIT(s_flag_bits[i].id);
             s_flag_bits[i].cached = 1;
+            if (boss_sync_is_completion_flag(flag_name))
+                s_boss_defeat_announced[i] = 1;
             recomp_printf("[ItemSync] Applied flag '%s' (id=0x%X)\n",
                           flag_name, s_flag_bits[i].id);
             return get_flag_display_name(flag_name);
@@ -1047,6 +1072,103 @@ static const char *apply_flag(const char *flag_name, signed int val)
     }
     /* Unknown flag name – ignore (could be from a later version). */
     return 0;
+}
+
+static int sync_flag_index(const char *flag_name)
+{
+    int i;
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        if (streq(s_flag_bits[i].name, flag_name))
+            return i;
+    }
+    return -1;
+}
+
+/* Apply a received progression value unless doing so would inject a boss flag
+ * into the middle of that client's still-live encounter. */
+static const char *apply_incoming_flag(const char *flag_name, signed int val)
+{
+    int index = sync_flag_index(flag_name);
+
+    /* Congo's true kill bit may arrive from a durable SET_FLAG or compact
+     * team snapshot after the original live event has passed.  Queue the same
+     * native final hit, but do not write 0x1A1 ahead of the native health-zero
+     * handler.  The handler sets it itself after the damage pipeline runs. */
+    if (index >= 0 && val &&
+        boss_sync_is_completion_flag(flag_name) &&
+        boss_sync_apply_remote_defeat(flag_name))
+    {
+        if (!s_pending_boss_flags[index])
+        {
+            recomp_printf("[BossSync] Deferred '%s' to Congo's native health-zero handler.\n",
+                          flag_name);
+        }
+        s_pending_boss_flags[index] = 1;
+        s_pending_native_boss_defeat[index] = 1;
+        s_boss_defeat_announced[index] = 1;
+        return 0;
+    }
+
+    if (index >= 0 && val && !FLAG_IS_SET(s_flag_bits[index].id) &&
+        boss_sync_should_defer_flag(flag_name) &&
+        (s_pending_native_boss_defeat[index] ||
+         boss_sync_has_active_encounter(flag_name)))
+    {
+        if (!s_pending_boss_flags[index])
+        {
+            recomp_printf("[BossSync] Deferred '%s' until the local death path finishes.\n",
+                          flag_name);
+        }
+        s_pending_boss_flags[index] = 1;
+        return 0;
+    }
+
+    if (index >= 0)
+    {
+        s_pending_boss_flags[index] = 0;
+        s_pending_native_boss_defeat[index] = 0;
+    }
+    return apply_flag(flag_name, val);
+}
+
+static void apply_pending_boss_flags(void)
+{
+    int i;
+
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        const char *display;
+
+        if (!s_pending_boss_flags[i])
+            continue;
+        if (FLAG_IS_SET(s_flag_bits[i].id))
+        {
+            s_pending_boss_flags[i] = 0;
+            s_pending_native_boss_defeat[i] = 0;
+            s_flag_bits[i].cached = 1;
+            s_boss_defeat_announced[i] = 1;
+            continue;
+        }
+        /* The boss update clears its active bit before its scheduled victory
+         * task sets the flag.  Keep waiting while that actor still belongs to
+         * this room so SET_FLAG cannot jump ahead of the death animation. */
+        if (s_pending_native_boss_defeat[i] &&
+            boss_sync_has_local_encounter(s_flag_bits[i].name))
+            continue;
+
+        s_pending_native_boss_defeat[i] = 0;
+        if (boss_sync_has_active_encounter(s_flag_bits[i].name))
+            continue;
+
+        s_pending_boss_flags[i] = 0;
+        display = apply_flag(s_flag_bits[i].name, 1);
+        anchor_race_on_remote_flag_synced(s_flag_bits[i].name, 1);
+        if (display)
+            item_notif_push("Received from team", display);
+        recomp_printf("[BossSync] Applied deferred progression '%s'.\n",
+                      s_flag_bits[i].name);
+    }
 }
 
 static int get_team_state_value(const char *json, const char *name, signed int *out)
@@ -1094,7 +1216,7 @@ static void apply_team_state(const char *json)
     {
         if (get_team_state_value(json, s_flag_bits[i].name, &value))
         {
-            if (apply_flag(s_flag_bits[i].name, value))
+            if (apply_incoming_flag(s_flag_bits[i].name, value))
                 applied++;
         }
     }
@@ -1154,10 +1276,43 @@ static void process_incoming_packets(void)
             if (get_flag_name(pkt, fname, (int)sizeof(fname)) &&
                 get_flag_value(pkt, &fval))
             {
-                const char *display = apply_flag(fname, fval);
-                anchor_race_on_remote_flag_synced(fname, (int)fval);
+                int index = sync_flag_index(fname);
+                const char *display = apply_incoming_flag(fname, fval);
+                if (index < 0 || !s_pending_boss_flags[index])
+                    anchor_race_on_remote_flag_synced(fname, (int)fval);
                 if (display)
                     item_notif_push("Received from team", display);
+            }
+        }
+        else if (is_packet_type(pkt, "MNSG_BOSS_DEFEAT"))
+        {
+            char fname[32];
+            unsigned int sender = get_packet_client_id(pkt);
+
+            /* Some Anchor servers echo team packets to the sender.  Never run
+             * the native transition twice on the client that won the fight. */
+            if ((own_id == 0 || sender == 0 || sender != own_id) &&
+                get_flag_name(pkt, fname, (int)sizeof(fname)))
+            {
+                int index = sync_flag_index(fname);
+                /* Do not gate the live transition on 0x1A1.  A save produced
+                 * by an older broken sync may already contain that bit while
+                 * its in-room Congo actor is still alive. */
+                if (index >= 0 && !s_pending_native_boss_defeat[index] &&
+                    boss_sync_apply_remote_defeat(fname))
+                {
+                    const char *display = get_flag_display_name(fname);
+
+                    /* The actual 0x1A1 write belongs to Congo's zero-health
+                     * handler.  Holding it here guarantees the native damage,
+                     * kill state, and later 0x12D callback remain ordered. */
+                    anchor_race_on_remote_flag_synced(fname, 1);
+                    if (display)
+                        item_notif_push("Received from team", display);
+                    s_pending_boss_flags[index] = 1;
+                    s_pending_native_boss_defeat[index] = 1;
+                    s_boss_defeat_announced[index] = 1;
+                }
             }
         }
         else if (is_packet_type(pkt, "UPDATE_TEAM_STATE"))
@@ -1423,6 +1578,23 @@ static void monitor_and_send_changes(void)
 
         if (cur)
         { /* only broadcast when flag becomes set, not when cleared */
+            /* Tell teammates in this encounter to run the native boss finish
+             * first.  Leave the cache untouched so the durable SET_FLAG is
+             * sent on a later frame, after this transient event is ordered. */
+            if (boss_sync_is_completion_flag(s_flag_bits[i].name) &&
+                !s_boss_defeat_announced[i])
+            {
+                if (sends >= MAX_SENDS_PER_FRAME)
+                    continue;
+                if (!boss_sync_send_defeat(s_flag_bits[i].name))
+                    continue;
+                s_boss_defeat_announced[i] = 1;
+                ++sends;
+                recomp_printf("[BossSync] Sent native defeat event '%s'.\n",
+                              s_flag_bits[i].name);
+                continue;
+            }
+
             if (sends >= MAX_SENDS_PER_FRAME || s_set_flag_send_timer > 0)
                 continue; /* defer to next frame */
 
@@ -1436,6 +1608,10 @@ static void monitor_and_send_changes(void)
             const char *display = get_flag_display_name(s_flag_bits[i].name);
             if (display)
                 item_notif_push("Item found!", display);
+        }
+        else
+        {
+            s_boss_defeat_announced[i] = 0;
         }
         s_flag_bits[i].cached = cur;
     }
@@ -1494,6 +1670,7 @@ void item_sync_update(void)
         s_set_flag_send_timer = 0;
         s_team_state_request_pending = 0;
         s_team_snapshot_broadcast_timer = -1;
+        boss_sync_reset();
         s_save_was_valid = 0;
         s_ds_initialized = 0;  /* reset damage-sync baseline on disconnect */
         s_ryo_initialized = 0; /* reset ryo-sync baseline on disconnect   */
@@ -1540,6 +1717,7 @@ void item_sync_update(void)
 
     /* ── Process incoming packets ─────────────────────────────────────── */
     process_incoming_packets();
+    apply_pending_boss_flags();
 
     if (s_team_snapshot_broadcast_timer == 0 &&
         !s_team_state_request_pending && anchor_get_client_id() != 0)

@@ -18,6 +18,7 @@ Key packet types sent by the client:
   GAME_COMPLETE      - Signal that you finished the game.
   SET_FLAG           - Broadcast a single item/flag acquisition to the team.
                        With addToQueue=true the server queues it for offline players.
+  MNSG_BOSS_DEFEAT   - Transient, ordered live-encounter boss finish event.
   <custom type>      - Any other type is broadcast to your room or team.
 
 Key packet types received from the server:
@@ -28,6 +29,7 @@ Key packet types received from the server:
   SERVER_MESSAGE     - Text message from the server operator.
   DISABLE_ANCHOR     - Server is kicking this client; disconnect.
   SET_FLAG           - An item/flag acquired by a teammate (queued by the server).
+  MNSG_BOSS_DEFEAT   - Sync the native boss kill state before reward flags.
   REQUEST_TEAM_STATE - A teammate is requesting the full team state.
   <custom type>      - Custom packet broadcast by another client.
 
@@ -38,7 +40,8 @@ Item-sync protocol (implemented in src/item_sync.c):
     2. One loaded teammate is elected to answer with a single
        UPDATE_TEAM_STATE packet, avoiding duplicate join-time floods.
   Each frame:
-    - Incoming SET_FLAG packets are applied to the local save data.
+    - Incoming Congo defeat events sync kill flag 0x1A1 before reward 0x12D.
+    - Boss flags are deferred while the matching local encounter is active.
     - Incoming REQUEST_TEAM_STATE packets schedule one compact snapshot.
     - Newly obtained items are broadcast immediately as SET_FLAG packets.
 
