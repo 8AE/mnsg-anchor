@@ -713,6 +713,10 @@ static unsigned char s_pending_boss_flags[NUM_FLAGS];
  * actor's active bit is cleared during its death animation. */
 static unsigned char s_pending_native_boss_defeat[NUM_FLAGS];
 static unsigned char s_boss_defeat_announced[NUM_FLAGS];
+/* The transient live event reports a remote race finish immediately.  A
+ * durable-only receipt defers that report with its flag until native teardown.
+ * Remember the first report so the terminal path cannot duplicate its toast. */
+static unsigned char s_remote_boss_completion_notified[NUM_FLAGS];
 
 /* =========================================================================
    Damage sync state
@@ -780,10 +784,16 @@ static void reset_caches(void)
         s_fields[i].cached = 0;
     for (i = 0; i < NUM_FLAGS; ++i)
     {
+        int preserve_remote_notification =
+            s_remote_boss_completion_notified[i] &&
+            boss_sync_has_active_encounter(s_flag_bits[i].name);
+
         s_flag_bits[i].cached = 0;
         s_boss_defeat_announced[i] = 0;
         s_pending_boss_flags[i] = 0;
         s_pending_native_boss_defeat[i] = 0;
+        if (!preserve_remote_notification)
+            s_remote_boss_completion_notified[i] = 0;
     }
 }
 
@@ -798,6 +808,9 @@ static void capture_caches(void)
     {
         s_flag_bits[i].cached = (unsigned char)FLAG_IS_SET(s_flag_bits[i].id);
         s_boss_defeat_announced[i] = s_flag_bits[i].cached;
+        if (s_flag_bits[i].cached &&
+            boss_sync_is_completion_flag(s_flag_bits[i].name))
+            s_remote_boss_completion_notified[i] = 1;
     }
 }
 
@@ -1085,23 +1098,68 @@ static int sync_flag_index(const char *flag_name)
     return -1;
 }
 
+/* Native boss hooks can announce the live defeat before the durable save bit
+ * changes.  Remember that send so the ordinary flag monitor does not emit the
+ * same transient event again when the later progression bit rises. */
+void item_sync_mark_boss_defeat_announced(const char *flag_name)
+{
+    int index = sync_flag_index(flag_name);
+
+    if (index >= 0 && boss_sync_is_completion_flag(flag_name))
+        s_boss_defeat_announced[index] = 1;
+}
+
+static void notify_remote_boss_completion(int index)
+{
+    const char *display;
+
+    if (index < 0 || index >= NUM_FLAGS ||
+        s_remote_boss_completion_notified[index])
+        return;
+
+    anchor_race_on_remote_flag_synced(s_flag_bits[index].name, 1);
+    display = get_flag_display_name(s_flag_bits[index].name);
+    if (display)
+        item_notif_push("Received from team", display);
+    s_remote_boss_completion_notified[index] = 1;
+}
+
+/* Commit remote progression only after the boss-specific native terminal has
+ * proved that the local death path completed.  Align the cache with the write
+ * so it is not mistaken for a new local victory and echoed back to the team. */
+void item_sync_commit_boss_completion(const char *flag_name)
+{
+    int index = sync_flag_index(flag_name);
+
+    if (index < 0 || !boss_sync_is_completion_flag(flag_name))
+        return;
+
+    apply_flag(flag_name, 1);
+    notify_remote_boss_completion(index);
+    s_flag_bits[index].cached = 1;
+    s_boss_defeat_announced[index] = 1;
+    s_pending_boss_flags[index] = 0;
+    s_pending_native_boss_defeat[index] = 0;
+    recomp_printf("[BossSync] Committed progression '%s' at native completion.\n",
+                  flag_name);
+}
+
 /* Apply a received progression value unless doing so would inject a boss flag
  * into the middle of that client's still-live encounter. */
 static const char *apply_incoming_flag(const char *flag_name, signed int val)
 {
     int index = sync_flag_index(flag_name);
 
-    /* Congo's true kill bit may arrive from a durable SET_FLAG or compact
-     * team snapshot after the original live event has passed.  Queue the same
-     * native final hit, but do not write 0x1A1 ahead of the native health-zero
-     * handler.  The handler sets it itself after the damage pipeline runs. */
+    /* A boss completion may arrive from a durable SET_FLAG or compact team
+     * snapshot after the transient live event has passed.  If that boss has a
+     * validated local native-death path, queue it before writing progression. */
     if (index >= 0 && val &&
         boss_sync_is_completion_flag(flag_name) &&
         boss_sync_apply_remote_defeat(flag_name))
     {
         if (!s_pending_boss_flags[index])
         {
-            recomp_printf("[BossSync] Deferred '%s' to Congo's native health-zero handler.\n",
+            recomp_printf("[BossSync] Deferred '%s' to the native boss defeat handler.\n",
                           flag_name);
         }
         s_pending_boss_flags[index] = 1;
@@ -1128,6 +1186,8 @@ static const char *apply_incoming_flag(const char *flag_name, signed int val)
     {
         s_pending_boss_flags[index] = 0;
         s_pending_native_boss_defeat[index] = 0;
+        if (!val)
+            s_remote_boss_completion_notified[index] = 0;
     }
     return apply_flag(flag_name, val);
 }
@@ -1138,12 +1198,11 @@ static void apply_pending_boss_flags(void)
 
     for (i = 0; i < NUM_FLAGS; ++i)
     {
-        const char *display;
-
         if (!s_pending_boss_flags[i])
             continue;
         if (FLAG_IS_SET(s_flag_bits[i].id))
         {
+            notify_remote_boss_completion(i);
             s_pending_boss_flags[i] = 0;
             s_pending_native_boss_defeat[i] = 0;
             s_flag_bits[i].cached = 1;
@@ -1162,10 +1221,8 @@ static void apply_pending_boss_flags(void)
             continue;
 
         s_pending_boss_flags[i] = 0;
-        display = apply_flag(s_flag_bits[i].name, 1);
-        anchor_race_on_remote_flag_synced(s_flag_bits[i].name, 1);
-        if (display)
-            item_notif_push("Received from team", display);
+        apply_flag(s_flag_bits[i].name, 1);
+        notify_remote_boss_completion(i);
         recomp_printf("[BossSync] Applied deferred progression '%s'.\n",
                       s_flag_bits[i].name);
     }
@@ -1216,8 +1273,19 @@ static void apply_team_state(const char *json)
     {
         if (get_team_state_value(json, s_flag_bits[i].name, &value))
         {
-            if (apply_incoming_flag(s_flag_bits[i].name, value))
+            const char *display =
+                apply_incoming_flag(s_flag_bits[i].name, value);
+
+            if (display)
+            {
                 applied++;
+                /* Compact snapshots are remote progression too.  A direct
+                 * boss application must be acknowledged before the baseline
+                 * capture below marks its now-set bit as already seen. */
+                if (value &&
+                    boss_sync_is_completion_flag(s_flag_bits[i].name))
+                    notify_remote_boss_completion(i);
+            }
         }
     }
     capture_caches();
@@ -1279,7 +1347,18 @@ static void process_incoming_packets(void)
                 int index = sync_flag_index(fname);
                 const char *display = apply_incoming_flag(fname, fval);
                 if (index < 0 || !s_pending_boss_flags[index])
-                    anchor_race_on_remote_flag_synced(fname, (int)fval);
+                {
+                    int acknowledged_boss_completion =
+                        index >= 0 && fval &&
+                        boss_sync_is_completion_flag(fname) &&
+                        s_remote_boss_completion_notified[index];
+
+                    if (!acknowledged_boss_completion)
+                        anchor_race_on_remote_flag_synced(fname, (int)fval);
+                    if (index >= 0 && fval &&
+                        boss_sync_is_completion_flag(fname))
+                        s_remote_boss_completion_notified[index] = 1;
+                }
                 if (display)
                     item_notif_push("Received from team", display);
             }
@@ -1295,20 +1374,15 @@ static void process_incoming_packets(void)
                 get_flag_name(pkt, fname, (int)sizeof(fname)))
             {
                 int index = sync_flag_index(fname);
-                /* Do not gate the live transition on 0x1A1.  A save produced
-                 * by an older broken sync may already contain that bit while
-                 * its in-room Congo actor is still alive. */
+                /* Do not gate the live transition on the durable bit.  A save
+                 * produced by an older flag-only sync may contain it while
+                 * the corresponding in-room boss is still alive. */
                 if (index >= 0 && !s_pending_native_boss_defeat[index] &&
                     boss_sync_apply_remote_defeat(fname))
                 {
-                    const char *display = get_flag_display_name(fname);
-
-                    /* The actual 0x1A1 write belongs to Congo's zero-health
-                     * handler.  Holding it here guarantees the native damage,
-                     * kill state, and later 0x12D callback remain ordered. */
-                    anchor_race_on_remote_flag_synced(fname, 1);
-                    if (display)
-                        item_notif_push("Received from team", display);
+                    /* Hold progression until the boss-specific native damage,
+                     * death state, and completion callback remain ordered. */
+                    notify_remote_boss_completion(index);
                     s_pending_boss_flags[index] = 1;
                     s_pending_native_boss_defeat[index] = 1;
                     s_boss_defeat_announced[index] = 1;
@@ -1612,6 +1686,9 @@ static void monitor_and_send_changes(void)
         else
         {
             s_boss_defeat_announced[i] = 0;
+            if (boss_sync_is_completion_flag(s_flag_bits[i].name) &&
+                !boss_sync_has_active_encounter(s_flag_bits[i].name))
+                s_remote_boss_completion_notified[i] = 0;
         }
         s_flag_bits[i].cached = cur;
     }
@@ -1671,14 +1748,22 @@ void item_sync_update(void)
         s_team_state_request_pending = 0;
         s_team_snapshot_broadcast_timer = -1;
         boss_sync_reset();
-        s_save_was_valid = 0;
         s_ds_initialized = 0;  /* reset damage-sync baseline on disconnect */
         s_ryo_initialized = 0; /* reset ryo-sync baseline on disconnect   */
     }
     s_was_connected = is_connected;
 
     if (!is_connected)
+    {
+        /* Keep watching save unload while offline.  An accepted native boss
+         * transition may intentionally survive a same-save disconnect, but it
+         * must be force-cleared before another file can be loaded. */
+        int offline_valid = save_is_loaded();
+        if (!offline_valid)
+            boss_sync_reset();
+        s_save_was_valid = offline_valid;
         return;
+    }
 
     /* ── Wait for a loaded save file ─────────────────────────────────── */
     int valid = save_is_loaded();
