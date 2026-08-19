@@ -471,6 +471,7 @@ static const AnchorFlagEntry s_entries[] = {
     {"ki_traindoor", "Key (Gold, Silver or Diamond)", 0},
     {"ki_cucumber", "Cucumber", 0},
     {"ki_map_jpn", "Map of Japan", 0},
+    {"sasuke_body", "Dead Sasuke Recovery Progress", 0},
 
     /* ── Warp Points ─────────────────────────────────────────────────── */
     {0, "Warp Points", 0},
@@ -660,6 +661,7 @@ static const AnchorFlagEntry s_entries[] = {
     {"fl_ushi_ben", "Ushiwaka: Can Talk Benkei", 0},
     {"fl_ushi_id", "Asked Ushiwaka Who Benkei Is ", 0},
     {"fl_ushi_gt", "Ushiwaka Went to Golden Temple", 0},
+    {"fl_achilles", "Ushiwaka Gave Achilles Heel", 0},
 
     /* ── Kihachi Food Quest ───────────────────────────────────────────── */
     {0, "Kihachi Food Quest", 0},

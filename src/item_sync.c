@@ -323,6 +323,12 @@ static SyncField s_fields[] = {
     {0x258, 0, 0, "mi_flower"},
     {0x25C, 0, 0, "mi_snow"},
 
+    /* ── Sasuke recovery quest state ───────────────────────────────── */
+    /* The Benkei reward script increments this profile immediately
+       before setting FLAG_DEFEATED_BENKEI.  It is separate from both the
+       playable-character field and the later battery acquisition flags. */
+    {0x260, 0, 1, "sasuke_body"},
+
     /* NOTE: Dungeon keys are tracked via individual per-room pickup flags
        (KEY_SILVER_*, KEY_GOLD_*, KEY_DIAMOND_* in save_data_tool.h) in the
        rando, not via the vanilla SAVE_KEY_RELATED_1-5 counters.  Those flag
@@ -538,6 +544,9 @@ static SyncFlagBit s_flag_bits[] = {
     {0x02D, 0, "fl_ushi_id"},
     /* 0x028  Ushiwaka Went to Golden Temple – world state               */
     {0x028, 0, "fl_ushi_gt"},
+    /* 0x029  Ushiwaka handed over the Achilles' Heel.  The item field at
+       0x104 alone does not advance his dialogue past the fishing reward. */
+    {0x029, 0, "fl_achilles"},
 
     /* ── Kihachi's Favorite Food quest ──────────────────────────────── */
     /* 0x023  Heard about Kihachi from Benkei                            */
@@ -717,6 +726,13 @@ static unsigned char s_boss_defeat_announced[NUM_FLAGS];
  * durable-only receipt defers that report with its flag until native teardown.
  * Remember the first report so the terminal path cannot duplicate its toast. */
 static unsigned char s_remote_boss_completion_notified[NUM_FLAGS];
+/* Benkei's reward script increments the dead-Sasuke profile before it sets
+ * fl_benkei.  Hold a teammate's profile delta while the local native fight is
+ * still finishing so the script cannot increment an already-applied value and
+ * accidentally skip a recovery stage. */
+/* Use -1 as the empty sentinel because zero is a valid profile value and
+ * therefore must remain representable while a remote update is pending. */
+static signed int s_pending_benkei_sasuke_profile = -1;
 
 /* =========================================================================
    Damage sync state
@@ -780,6 +796,8 @@ static void reset_caches(void)
     int i;
 
     boss_sync_reset();
+    if (!boss_sync_has_active_encounter("fl_benkei"))
+        s_pending_benkei_sasuke_profile = -1;
     for (i = 0; i < NUM_FIELDS; ++i)
         s_fields[i].cached = 0;
     for (i = 0; i < NUM_FLAGS; ++i)
@@ -1087,6 +1105,23 @@ static const char *apply_flag(const char *flag_name, signed int val)
     return 0;
 }
 
+/* Apply ordinary incoming values immediately, except for the save counter
+ * mutated by Benkei's own reward scene.  The exact native fl_benkei write
+ * commits this deferred value after the scene has performed its increment. */
+static const char *apply_incoming_value(const char *flag_name, signed int val)
+{
+    if (streq(flag_name, "sasuke_body") && val > SAVE_READ32(0x260) &&
+        boss_sync_has_active_encounter("fl_benkei"))
+    {
+        if (val > s_pending_benkei_sasuke_profile)
+            s_pending_benkei_sasuke_profile = val;
+        recomp_printf("[BossSync] Deferred Sasuke body profile until Benkei's reward script.\n");
+        return 0;
+    }
+
+    return apply_flag(flag_name, val);
+}
+
 static int sync_flag_index(const char *flag_name)
 {
     int i;
@@ -1130,11 +1165,20 @@ static void notify_remote_boss_completion(int index)
 void item_sync_commit_boss_completion(const char *flag_name)
 {
     int index = sync_flag_index(flag_name);
+    const char *profile_display = 0;
 
     if (index < 0 || !boss_sync_is_completion_flag(flag_name))
         return;
 
     apply_flag(flag_name, 1);
+    if (streq(flag_name, "fl_benkei") && s_pending_benkei_sasuke_profile >= 0)
+    {
+        profile_display = apply_flag("sasuke_body",
+                                     s_pending_benkei_sasuke_profile);
+        s_pending_benkei_sasuke_profile = -1;
+        if (profile_display)
+            item_notif_push("Received from team", profile_display);
+    }
     notify_remote_boss_completion(index);
     s_flag_bits[index].cached = 1;
     s_boss_defeat_announced[index] = 1;
@@ -1189,7 +1233,7 @@ static const char *apply_incoming_flag(const char *flag_name, signed int val)
         if (!val)
             s_remote_boss_completion_notified[index] = 0;
     }
-    return apply_flag(flag_name, val);
+    return apply_incoming_value(flag_name, val);
 }
 
 static void apply_pending_boss_flags(void)
@@ -1265,7 +1309,7 @@ static void apply_team_state(const char *json)
     {
         if (get_team_state_value(json, s_fields[i].name, &value))
         {
-            if (apply_flag(s_fields[i].name, value))
+            if (apply_incoming_value(s_fields[i].name, value))
                 applied++;
         }
     }

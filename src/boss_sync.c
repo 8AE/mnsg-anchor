@@ -1214,13 +1214,20 @@ void boss_sync_check_benkei_native_hit(void)
     }
 }
 
-/* Benkei's controller calls 01410 only while waiting in victory state 0x12;
- * D2==5 is written by the actor after the native fall animation completes. */
-RECOMP_HOOK("func_08001410_70B450")
-void boss_sync_finish_benkei_native_death(void *actor)
+/* The fall-animation acknowledgement is not the end of Benkei's quest.  His
+ * scenario still has to present Sasuke's body, increment the recovery profile,
+ * and finally set 0x033.  Committing 0x033 at D2==5 makes that scenario see an
+ * already-completed fight and skip the reward event.
+ *
+ * Hook the scenario's own flag write instead.  item_sync_commit_boss_completion
+ * writes the same bit directly (so this pre-hook cannot recurse), aligns the
+ * network caches, and releases the durable hold at the exact native commit. */
+RECOMP_HOOK("func_80024038_24C38")
+void boss_sync_finish_benkei_reward_script(int flag_id)
 {
-    if (actor != s_benkei.actor || !benkei_is_local() ||
-        BENKEI_COMMAND(actor) != 5)
+    if (flag_id != (int)BENKEI_KILL_FLAG ||
+        !s_benkei_state.local_defeat_started ||
+        !native_remote_defeat_is_current(&s_benkei_state))
         return;
 
     s_benkei_state.victory_complete = 1;
@@ -1231,6 +1238,6 @@ void boss_sync_finish_benkei_native_death(void *actor)
         item_sync_commit_boss_completion("fl_benkei");
         s_benkei_state.remote_defeat_in_progress = 0;
         s_benkei_state.remote_defeat_needs_rearm = 0;
-        recomp_printf("[BossSync] Benkei fall animation completed; progression sync released.\n");
+        recomp_printf("[BossSync] Benkei reward script committed Sasuke body progression.\n");
     }
 }
