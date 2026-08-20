@@ -50,6 +50,7 @@ void anchor_race_on_forced_disconnect(void);
    therefore treats it as the authoritative packed flag/item backing store.
    ========================================================================= */
 extern unsigned char D_8015C608_15D208[];
+extern unsigned short D_800C7AB2;
 
 /* ─── Helpers ──────────────────────────────────────────────────────────── */
 
@@ -701,6 +702,209 @@ static SyncFlagBit s_flag_bits[] = {
 #define NUM_FLAGS ((int)(sizeof(s_flag_bits) / sizeof(s_flag_bits[0])))
 
 /* =========================================================================
+   Live collectible despawn
+
+   SET_FLAG updates the durable save state, but an overworld pickup that was
+   already instantiated does not re-run its initializer.  Remember only
+   remotely-applied visual checks in the receiver's current room, then let the
+   common actor finalizer retire the matching live pickup with the same
+   remove-pending bit used by the native pickup initializers.
+
+   This is deliberately an allowlist.  Miracle items use boss/cutscene actors
+   and never enter this path.
+   ========================================================================= */
+
+#define ENTITY_MR_ELLY_FANT 0x0086u
+#define ENTITY_MR_ARROW 0x0087u
+#define ENTITY_SILVER_DOLL 0x0088u
+#define ENTITY_GOLD_DOLL 0x0089u
+#define ENTITY_DUNGEON_KEY 0x0193u
+
+#define ACTOR_ENTITY_ID(actor) \
+    (*(volatile unsigned short *)((char *)(actor) + 0x5C))
+#define ACTOR_STATUS(actor) \
+    (*(volatile unsigned int *)((char *)(actor) + 0x68))
+#define ACTOR_FLAG_PARAM(actor) \
+    (*(volatile unsigned short *)((char *)(actor) + 0xD0))
+#define ACTOR_KEY_FLAG_PARAM(actor) \
+    (*(volatile unsigned short *)((char *)(actor) + 0xD4))
+#define ACTOR_STATUS_REMOVE_PENDING 0x00000002u
+
+static unsigned char s_visual_pending_fields[NUM_FIELDS];
+static unsigned char s_visual_pending_flags[NUM_FLAGS];
+static unsigned short s_visual_pending_room;
+static unsigned char s_visual_pending_room_valid;
+
+static int visual_name_has_prefix(const char *name, const char *prefix)
+{
+    while (*prefix)
+    {
+        if (*name++ != *prefix++)
+            return 0;
+    }
+    return 1;
+}
+
+static int is_visual_collectible_field(int index)
+{
+    const char *name = s_fields[index].name;
+    return visual_name_has_prefix(name, "mr_ely_") ||
+           visual_name_has_prefix(name, "mr_arr_");
+}
+
+static int is_visual_collectible_flag(int index)
+{
+    const char *name = s_flag_bits[index].name;
+    return visual_name_has_prefix(name, "ky_") ||
+           visual_name_has_prefix(name, "sd_") ||
+           visual_name_has_prefix(name, "gd_");
+}
+
+static void clear_visual_collectible_pending(void)
+{
+    int i;
+
+    for (i = 0; i < NUM_FIELDS; ++i)
+        s_visual_pending_fields[i] = 0;
+    for (i = 0; i < NUM_FLAGS; ++i)
+        s_visual_pending_flags[i] = 0;
+    s_visual_pending_room_valid = 0;
+}
+
+static void prepare_visual_collectible_room(void)
+{
+    if (s_visual_pending_room_valid &&
+        s_visual_pending_room != D_800C7AB2)
+        clear_visual_collectible_pending();
+
+    s_visual_pending_room = D_800C7AB2;
+    s_visual_pending_room_valid = 1;
+}
+
+static void arm_visual_collectible_field(int index)
+{
+    if (!is_visual_collectible_field(index))
+        return;
+
+    prepare_visual_collectible_room();
+    s_visual_pending_fields[index] = 1;
+}
+
+static void arm_visual_collectible_flag(int index)
+{
+    if (!is_visual_collectible_flag(index))
+        return;
+
+    prepare_visual_collectible_room();
+    s_visual_pending_flags[index] = 1;
+}
+
+static int consume_visual_collectible_flag(unsigned short flag_id,
+                                           const char *prefix)
+{
+    int i;
+
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        if (!s_visual_pending_flags[i] ||
+            s_flag_bits[i].id != flag_id ||
+            !visual_name_has_prefix(s_flag_bits[i].name, prefix))
+            continue;
+
+        s_visual_pending_flags[i] = 0;
+        return FLAG_IS_SET(flag_id) != 0;
+    }
+    return 0;
+}
+
+static int mr_collectible_field_offset(unsigned short entity_id,
+                                       unsigned short location_flag)
+{
+    if (entity_id == ENTITY_MR_ELLY_FANT &&
+        location_flag >= 0x00FFu && location_flag <= 0x0103u)
+        return 0x26C + (int)(location_flag - 0x00FFu) * 4;
+
+    if (entity_id == ENTITY_MR_ARROW &&
+        location_flag >= 0x0104u && location_flag <= 0x0108u)
+        return 0x280 + (int)(location_flag - 0x0104u) * 4;
+
+    return -1;
+}
+
+static int consume_visual_collectible_field(int field_offset)
+{
+    int i;
+
+    for (i = 0; i < NUM_FIELDS; ++i)
+    {
+        if (!s_visual_pending_fields[i] ||
+            s_fields[i].off != field_offset ||
+            !is_visual_collectible_field(i))
+            continue;
+
+        s_visual_pending_fields[i] = 0;
+        return SAVE_READ32(field_offset) != 0;
+    }
+    return 0;
+}
+
+/* func_80218F30 runs the common actor finalizer and immediately consumes
+ * status bit 1 (0x2) through the game's normal task-removal path. */
+RECOMP_HOOK("func_80218F30_5D4400")
+void item_sync_despawn_remote_collectible(void *actor, void *unused)
+{
+    unsigned short entity_id;
+    unsigned short check_id;
+    int field_offset;
+    int should_remove = 0;
+
+    (void)unused;
+
+    if (!actor || !s_visual_pending_room_valid || !save_is_loaded())
+        return;
+    if (s_visual_pending_room != D_800C7AB2)
+    {
+        clear_visual_collectible_pending();
+        return;
+    }
+    entity_id = ACTOR_ENTITY_ID(actor);
+    switch (entity_id)
+    {
+    case ENTITY_SILVER_DOLL:
+        check_id = ACTOR_FLAG_PARAM(actor);
+        should_remove = consume_visual_collectible_flag(check_id, "sd_");
+        break;
+    case ENTITY_GOLD_DOLL:
+        check_id = ACTOR_FLAG_PARAM(actor);
+        should_remove = consume_visual_collectible_flag(check_id, "gd_");
+        break;
+    case ENTITY_DUNGEON_KEY:
+        check_id = ACTOR_KEY_FLAG_PARAM(actor);
+        should_remove = consume_visual_collectible_flag(check_id, "ky_");
+        break;
+    case ENTITY_MR_ELLY_FANT:
+    case ENTITY_MR_ARROW:
+        check_id = ACTOR_FLAG_PARAM(actor);
+        field_offset = mr_collectible_field_offset(entity_id, check_id);
+        if (field_offset >= 0)
+            should_remove = consume_visual_collectible_field(field_offset);
+        break;
+    default:
+        break;
+    }
+
+    /* Consume an exact marker even when native pickup code has already armed
+       removal.  This prevents the one-shot from leaking to another actor. */
+    if (!should_remove ||
+        (ACTOR_STATUS(actor) & ACTOR_STATUS_REMOVE_PENDING) != 0)
+        return;
+
+    ACTOR_STATUS(actor) |= ACTOR_STATUS_REMOVE_PENDING;
+    recomp_printf("[ItemSync] Despawned remote collectible entity=0x%X check=0x%X room=0x%X.\n",
+                  entity_id, check_id, D_800C7AB2);
+}
+
+/* =========================================================================
    State machine
    ========================================================================= */
 
@@ -1106,6 +1310,12 @@ static const char *apply_flag(const char *flag_name, signed int val)
         else
             should_apply = (cur == 0 && val != 0);
 
+        /* Positive incoming snapshots/deltas are authoritative even if this
+           save already contains the value.  Arming on a no-op also repairs an
+           already-instantiated stale actor after replay or reconnect. */
+        if (val > 0)
+            arm_visual_collectible_field(i);
+
         if (should_apply)
         {
             SAVE_WRITE32(s_fields[i].off, val);
@@ -1137,6 +1347,9 @@ static const char *apply_flag(const char *flag_name, signed int val)
          * save produced by an older build even when 0x033 is already set. */
         if (val && streq(flag_name, "fl_benkei"))
             item_sync_apply_benkei_postfight_state();
+
+        if (val)
+            arm_visual_collectible_flag(i);
 
         if (val && !FLAG_IS_SET(s_flag_bits[i].id))
         {
@@ -1802,6 +2015,13 @@ void item_sync_update(void)
 {
     int is_connected = anchor_is_connected() && !anchor_is_disabled();
 
+    /* A pending visual check is meaningful only in the room where its remote
+       save update arrived.  Dropping it on transition prevents a later visit
+       to the same numeric room from consuming a stale one-shot marker. */
+    if (s_visual_pending_room_valid &&
+        s_visual_pending_room != D_800C7AB2)
+        clear_visual_collectible_pending();
+
     /* ── Tick notification timers (runs even when disconnected so in-flight
        toasts from a just-dropped connection still expire gracefully). ────── */
     item_notif_tick();
@@ -1840,6 +2060,7 @@ void item_sync_update(void)
         s_set_flag_send_timer = 0;
         s_team_state_request_pending = 0;
         s_team_snapshot_broadcast_timer = -1;
+        clear_visual_collectible_pending();
         boss_sync_reset();
         s_ds_initialized = 0;  /* reset damage-sync baseline on disconnect */
         s_ryo_initialized = 0; /* reset ryo-sync baseline on disconnect   */
@@ -1873,6 +2094,7 @@ void item_sync_update(void)
         else
         {
             reset_caches();
+            clear_visual_collectible_pending();
             s_push_cursor = PUSH_IDLE;
             s_team_snapshot_broadcast_timer = -1;
         }
