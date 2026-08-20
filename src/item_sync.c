@@ -62,6 +62,13 @@ extern unsigned char D_8015C608_15D208[];
 #define FLAG_IS_SET(id) ((D_8015C608_15D208[(unsigned)(id) >> 3] >> ((id) & 7u)) & 1u)
 #define FLAG_SET_BIT(id) (D_8015C608_15D208[(unsigned)(id) >> 3] |= (unsigned char)(1u << ((id) & 7u)))
 
+/* Benkei's durable defeat bit controls dialogue, while these native companion
+ * bits select the already-met/post-fight bridge layout.  They are derived
+ * locally from fl_benkei instead of being independently published: 0x069 is
+ * set before the reward scene finishes during an ordinary local victory. */
+#define BENKEI_MET_FLAG 0x034u
+#define BENKEI_WON_FLAG 0x069u
+
 /* True when a save file is loaded (hp_max lives just before the flag array). */
 #define SAVE_HP_MAX_OFFSET (-0x28) /* SAVE_TOTAL_HEALTH – see save_data_tool.h */
 static int save_is_loaded(void)
@@ -1034,6 +1041,40 @@ static void item_notif_tick(void)
    Apply helpers  (incoming packet → local save)
    ========================================================================= */
 
+/* Benkei's native controller does not use the durable 0x033 dialogue gate to
+ * choose its bridge layout.  Keep the implied prerequisite and post-victory
+ * selector aligned without publishing the transient 0x069 bit separately.
+ * Mark fl_met_benkei cached as well so a remotely-derived prerequisite is not
+ * echoed back to the team as a new local event. */
+void item_sync_apply_benkei_postfight_state(void)
+{
+    int i;
+    int changed = 0;
+
+    if (!FLAG_IS_SET(BENKEI_MET_FLAG))
+    {
+        FLAG_SET_BIT(BENKEI_MET_FLAG);
+        changed = 1;
+    }
+    if (!FLAG_IS_SET(BENKEI_WON_FLAG))
+    {
+        FLAG_SET_BIT(BENKEI_WON_FLAG);
+        changed = 1;
+    }
+
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        if (s_flag_bits[i].id == BENKEI_MET_FLAG)
+        {
+            s_flag_bits[i].cached = 1;
+            break;
+        }
+    }
+
+    if (changed)
+        recomp_printf("[ItemSync] Applied Benkei's post-fight bridge state.\n");
+}
+
 /**
  * @brief Apply an incoming item flag to the local save.
  *
@@ -1088,6 +1129,14 @@ static const char *apply_flag(const char *flag_name, signed int val)
     {
         if (!streq(s_flag_bits[i].name, flag_name))
             continue;
+
+        /* 0x033 alone only changes scenario 0x30C's dialogue.  Pair the
+         * native world-state prerequisites before applying it so a remote
+         * completion builds the interaction at Benkei rather than leaving
+         * the challenge trigger at the bridge entrance.  This also heals a
+         * save produced by an older build even when 0x033 is already set. */
+        if (val && streq(flag_name, "fl_benkei"))
+            item_sync_apply_benkei_postfight_state();
 
         if (val && !FLAG_IS_SET(s_flag_bits[i].id))
         {

@@ -23,7 +23,9 @@
 extern unsigned short D_800C7AB2;
 extern void func_80024088_24C88(int flag_id);
 extern int func_800240DC_24CDC(int flag_id);
+extern void func_80034EF8_35AF8(void *actor);
 extern int item_sync_save_is_loaded(void);
+extern void item_sync_apply_benkei_postfight_state(void);
 extern void item_sync_mark_boss_defeat_announced(const char *flag_name);
 extern void item_sync_commit_boss_completion(const char *flag_name);
 
@@ -47,6 +49,12 @@ extern void item_sync_commit_boss_completion(const char *flag_name);
     (*(volatile unsigned char *)((char *)(actor) + 0xD2))
 #define BENKEI_HEALTH(actor) \
     (*(volatile signed char *)((char *)(actor) + 0xD3))
+#define BENKEI_CONTROLLER_DATA(actor) \
+    (*(void **)((char *)(actor) + 0xD0))
+#define BENKEI_CONTROLLER_PHASE(data) \
+    (*(volatile unsigned char *)((char *)(data) + 0x08))
+#define BENKEI_CONTROLLER_CHILD(data) \
+    (*(void **)((char *)(data) + 0x2C))
 #define ACTOR_STATUS_ACTIVE 0x00000001u
 /* Actor initializers set status bit 1 when a persistent completion flag says
  * the actor should be removed instead of entering its normal update. */
@@ -58,9 +66,16 @@ extern void item_sync_commit_boss_completion(const char *flag_name);
 #define DARUMANYO_KILL_FLAG 0x018u
 #define TSURAMI_KILL_FLAG 0x040u
 #define BENKEI_KILL_FLAG 0x033u
+#define BENKEI_MET_FLAG 0x034u
+#define BENKEI_WON_FLAG 0x069u
+/* Set by the interaction script when the local Benkei minigame is launched.
+ * The entity 0x1C0 actor also exists while Benkei is merely an idle NPC, so
+ * actor health alone is not proof of a live fight. */
+#define BENKEI_FIGHT_ACTIVE_FLAG 0x07Au
 #define CONGO_KILL_FLAG 0x1A1u
 #define CONGO_REWARD_FLAG 0x12Du
 #define DARUMANYO_ROOM 0x049u
+#define BENKEI_ROOM 0x171u
 #define DARUMANYO_NATIVE_DEATH_FLAG 0x16Bu
 #define DARUMANYO_NATIVE_COMPLETE_FLAG 0x16Du
 
@@ -263,7 +278,9 @@ static int darumanyo_can_accept_hit(void)
 
 static int benkei_can_take_damage(void)
 {
-    return benkei_is_local() && BENKEI_HEALTH(s_benkei.actor) > 0 &&
+    return benkei_is_local() &&
+           func_800240DC_24CDC(BENKEI_FIGHT_ACTIVE_FLAG) &&
+           BENKEI_HEALTH(s_benkei.actor) > 0 &&
            (ACTOR_STATUS(s_benkei.actor) & ACTOR_STATUS_REMOVE_PENDING) == 0;
 }
 
@@ -344,7 +361,11 @@ int boss_sync_has_local_encounter(const char *flag_name)
                darumanyo_is_local();
     }
     if (streq(flag_name, "fl_benkei"))
-        return !s_benkei_state.victory_complete && benkei_is_local();
+    {
+        if (native_remote_defeat_is_current(&s_benkei_state))
+            return 1;
+        return !s_benkei_state.victory_complete && benkei_can_take_damage();
+    }
     return boss && tracked_boss_is_local(boss);
 }
 
@@ -504,6 +525,14 @@ int boss_sync_apply_remote_defeat(const char *flag_name)
         if (!benkei_is_local())
         {
             recomp_printf("[BossSync] Benkei defeat received before the combat actor was tracked.\n");
+            return 0;
+        }
+        if (!func_800240DC_24CDC(BENKEI_FIGHT_ACTIVE_FLAG))
+        {
+            /* Benkei's healthy actor is also his ordinary bridge NPC.  With
+             * no accepted local challenge there is no native combat sequence
+             * to finish, so let item_sync apply the durable 0x033 gate now. */
+            recomp_printf("[BossSync] Benkei defeat received with no local challenge active; applying durable progression directly.\n");
             return 0;
         }
         if (!benkei_can_take_damage())
@@ -1081,6 +1110,59 @@ void boss_sync_finish_darumanyo_native_death(void *actor)
     recomp_printf("[BossSync] Dharmanyo terminal callback reached; progression sync released.\n");
 }
 
+/* Benkei's controller uses 0x069, rather than the durable 0x033 dialogue bit,
+ * to choose between the bridge-entrance challenge trigger and the post-fight
+ * interaction at Benkei.  Older remote completions can therefore have the
+ * right dialogue attached to the wrong actor.
+ *
+ * Phase 2 is the idle entrance-trigger topology.  Replace only its owned
+ * child, then let the original phase-0 update see 0x069 and construct the
+ * stock func_0800078C post-fight actor in the same frame.  Phase 3 and later
+ * are event/fight states and must finish through their native paths. */
+RECOMP_HOOK("func_08001464_70B4A4")
+void boss_sync_fix_benkei_postfight_controller(void *actor)
+{
+    void *controller;
+    void *child;
+
+    if (!actor || !item_sync_save_is_loaded() ||
+        D_800C7AB2 != BENKEI_ROOM)
+        return;
+
+    controller = BENKEI_CONTROLLER_DATA(actor);
+    if (!controller || !func_800240DC_24CDC(BENKEI_KILL_FLAG))
+        return;
+
+    /* Heal saves made by builds which synchronized only 0x033. */
+    if (!func_800240DC_24CDC(BENKEI_MET_FLAG) ||
+        !func_800240DC_24CDC(BENKEI_WON_FLAG))
+        item_sync_apply_benkei_postfight_state();
+
+    if (func_800240DC_24CDC(BENKEI_FIGHT_ACTIVE_FLAG) ||
+        BENKEI_CONTROLLER_PHASE(controller) != 2)
+        return;
+
+    child = BENKEI_CONTROLLER_CHILD(controller);
+    if (child)
+        func_80034EF8_35AF8(child);
+    BENKEI_CONTROLLER_CHILD(controller) = 0;
+    BENKEI_CONTROLLER_PHASE(controller) = 0;
+
+    /* The phase-2 child may not have reached its first tracker callback yet,
+     * so discard any same-room Benkei handle rather than retaining a stale
+     * actor-pool pointer after the owned child is destroyed. */
+    if (s_benkei.room == BENKEI_ROOM)
+    {
+        s_benkei.actor = 0;
+        s_benkei.room = 0;
+        s_benkei.entity_id = 0;
+        s_benkei_update_actor = 0;
+        s_benkei_setup_actor_changed = 0;
+    }
+
+    recomp_printf("[BossSync] Rebuilt Benkei's bridge controller in post-fight state.\n");
+}
+
 /* Benkei is a scripted fight rather than a common +0x8D health actor.  Its
  * own update consumes status bit 0x80 in AI states 2/5/6 and decrements the
  * signed lives byte at +0xD3. */
@@ -1214,14 +1296,11 @@ void boss_sync_check_benkei_native_hit(void)
     }
 }
 
-/* The fall-animation acknowledgement is not the end of Benkei's quest.  His
- * scenario still has to present Sasuke's body, increment the recovery profile,
- * and finally set 0x033.  Committing 0x033 at D2==5 makes that scenario see an
- * already-completed fight and skip the reward event.
- *
- * Hook the scenario's own flag write instead.  item_sync_commit_boss_completion
- * writes the same bit directly (so this pre-hook cannot recurse), aligns the
- * network caches, and releases the durable hold at the exact native commit. */
+/* An actually active remote fight follows Benkei's complete native victory
+ * chain: controller flag 0x069, scenarios 0x30C/0x30D/0x30E, Sasuke profile,
+ * then 0x033.  Commit only on that final native write so the transient win
+ * selector and reward/profile ordering remain local and intact.  In
+ * particular, D2==5/func_08001410 belongs to the loss path, not victory. */
 RECOMP_HOOK("func_80024038_24C38")
 void boss_sync_finish_benkei_reward_script(int flag_id)
 {
@@ -1233,11 +1312,8 @@ void boss_sync_finish_benkei_reward_script(int flag_id)
     s_benkei_state.victory_complete = 1;
     s_benkei_state.lethal_hit_pending = 0;
     s_benkei_state.lethal_hit_armed = 0;
-    if (native_remote_defeat_is_current(&s_benkei_state))
-    {
-        item_sync_commit_boss_completion("fl_benkei");
-        s_benkei_state.remote_defeat_in_progress = 0;
-        s_benkei_state.remote_defeat_needs_rearm = 0;
-        recomp_printf("[BossSync] Benkei reward script committed Sasuke body progression.\n");
-    }
+    item_sync_commit_boss_completion("fl_benkei");
+    s_benkei_state.remote_defeat_in_progress = 0;
+    s_benkei_state.remote_defeat_needs_rearm = 0;
+    recomp_printf("[BossSync] Benkei reward script committed Sasuke body progression.\n");
 }
