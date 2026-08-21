@@ -178,6 +178,24 @@ static int get_flag_value(const char *json, signed int *out)
     return parse_int(&pos, out);
 }
 
+/** Extract and validate the raw 16-bit game room in a live door event. */
+static int get_door_room_id(const char *json, unsigned short *out)
+{
+    const char *pos = sfind(json, "\"roomId\":");
+    signed int value;
+
+    if (!pos)
+        return 0;
+    pos += 9;
+    while (*pos == ' ')
+        ++pos;
+    if (!parse_int(&pos, &value) || value < 0 || value > 0xFFFF)
+        return 0;
+
+    *out = (unsigned short)value;
+    return 1;
+}
+
 /**
  * Extract the integer value of `"damage":N` from a DAMAGE_SYNC packet string.
  * Returns 1 on success.
@@ -506,6 +524,53 @@ static SyncFlagBit s_flag_bits[] = {
     {0x0191, 0, "ky_d_mc_cube"}, /* KEY_DIAMOND_MUSICAL_CASTLE_1_CUBE       */
     {0x0193, 0, "ky_d_mc2"},     /* KEY_DIAMOND_MUSICAL_CASTLE_2            */
 
+    /* ── Dungeon door unlock flags ──────────────────────────────────────
+       These are the LOCK_* bits consumed by the rando key manager.  They are
+       deliberately separate from the adjacent KEY_* pickup bits above: a
+       shared lock consumes the team's corresponding shared key credit.       */
+
+    /* Oedo Castle */
+    {0x0109, 0, "lk_s_oc_tile"}, /* LOCK_SILVER_OEDO_CASTLE_1F_TILE          */
+    {0x010B, 0, "lk_s_oc_turt"}, /* LOCK_SILVER_OEDO_CASTLE_1F_TURTLE        */
+    {0x010D, 0, "lk_g_oc_fork"}, /* LOCK_GOLD_OEDO_CASTLE_1F_FORK            */
+    {0x010F, 0, "lk_s_oc_pipe"}, /* LOCK_SILVER_OEDO_CASTLE_1F_CHAIN_PIPE    */
+    {0x0111, 0, "lk_s_oc_crsh"}, /* LOCK_SILVER_OEDO_CASTLE_2F_CRUSHER       */
+    {0x0113, 0, "lk_s_oc_spk"},  /* LOCK_SILVER_OEDO_CASTLE_2F_SPIKE         */
+
+    /* Ghost Toys Castle */
+    {0x01AC, 0, "lk_s_gt_flwr"}, /* LOCK_SILVER_GHOST_TOYS_1F_FLOWER         */
+    {0x01AE, 0, "lk_s_gt_shgi"}, /* LOCK_SILVER_GHOST_TOYS_1F_SHOGI          */
+    {0x01B0, 0, "lk_s_gt_spdar"}, /* LOCK_SILVER_GHOST_TOYS_1F_SPIKE_DAR      */
+    {0x01B2, 0, "lk_s_gt_elv"},  /* LOCK_SILVER_GHOST_TOYS_1F_2F_ELEVATOR    */
+    {0x01B4, 0, "lk_s_gt_spk2"}, /* LOCK_SILVER_GHOST_TOYS_2F_BIG_SPIKE_2    */
+    {0x01B6, 0, "lk_g_gt_spk1"}, /* LOCK_GOLD_GHOST_TOYS_2F_BIG_SPIKE_1      */
+    {0x01B8, 0, "lk_d_gt_2f"},   /* LOCK_DIAMOND_GHOST_TOYS_2F               */
+    {0x01BA, 0, "lk_s_gt_bill"}, /* LOCK_SILVER_GHOST_TOYS_2F_BILLIARDS      */
+
+    /* Festival Temple Castle */
+    {0x016F, 0, "lk_g_ft"},      /* LOCK_GOLD_FESTIVAL_TEMPLE                */
+    {0x0170, 0, "lk_s_ft_fork"}, /* LOCK_SILVER_FESTIVAL_TEMPLE_FORK         */
+
+    /* Gourmet Submarine */
+    {0x017A, 0, "lk_s_gs_jet2"}, /* LOCK_SILVER_GOURMET_SUB_2F_JETPACK_2     */
+    {0x017C, 0, "lk_g_gs_jet1"}, /* LOCK_GOLD_GOURMET_SUB_2F_JETPACK_1       */
+    {0x017E, 0, "lk_s_gs_lava"}, /* LOCK_SILVER_GOURMET_SUB_2F_LAVA          */
+    {0x0180, 0, "lk_s_gs_uw"},   /* LOCK_SILVER_GOURMET_SUB_2F_UNDERWATER    */
+    {0x0182, 0, "lk_s_gs_fox2"}, /* LOCK_SILVER_GOURMET_SUB_3F_FOX_2         */
+    {0x0184, 0, "lk_d_gs_fox1"}, /* LOCK_DIAMOND_GOURMET_SUB_3F_FOX_1        */
+    {0x0186, 0, "lk_s_gs_tofu"}, /* LOCK_SILVER_GOURMET_SUB_3F_TOFU          */
+
+    /* Gorgeous Musical Castle */
+    {0x0188, 0, "lk_g_mc_ent"},  /* LOCK_GOLD_MUSICAL_CASTLE_1_ENTRANCE      */
+    {0x018A, 0, "lk_s_mc_tall"}, /* LOCK_SILVER_MUSICAL_CASTLE_1_TALL        */
+    {0x018D, 0, "lk_g_mc_fan"},  /* LOCK_GOLD_MUSICAL_CASTLE_1_FAN           */
+    {0x018E, 0, "lk_g_mc_mul1"}, /* LOCK_GOLD_MUSICAL_CASTLE_1_MULTI_1       */
+    {0x0190, 0, "lk_d_mc_mul2"}, /* LOCK_DIAMOND_MUSICAL_CASTLE_1_MULTI_2    */
+    {0x0192, 0, "lk_d_mc2_ent"}, /* LOCK_DIAMOND_MUSICAL_CASTLE_2_ENTRANCE   */
+
+    /* Special training-key door */
+    {0x0196, 0, "lk_sp_bizen"},  /* LOCK_SPECIAL_BIZEN                        */
+
     /* ── Fishing quest event flags ──────────────────────────────────── */
     /* Set when a fish-collecting quest is opened / limits reached.     */
     /* flag_id source: parser_config_en.yaml prettify section           */
@@ -730,10 +795,24 @@ static SyncFlagBit s_flag_bits[] = {
     (*(volatile unsigned short *)((char *)(actor) + 0xD4))
 #define ACTOR_STATUS_REMOVE_PENDING 0x00000002u
 
+#define ACTOR_DOOR_LOCK_FLAG(actor) \
+    (*(volatile unsigned short *)((char *)(actor) + 0xD4))
+#define ACTOR_DOOR_INTERACTION(actor) \
+    (*(volatile unsigned short *)((char *)(actor) + 0xDA))
+#define ACTOR_DOOR_STATE(actor) \
+    (*(volatile unsigned int *)((char *)(actor) + 0xEC))
+#define DOOR_STATE_UNLOCKING 0x00000001u
+#define DOOR_STATE_UNLOCKED 0x00000002u
+#define DOOR_STATE_INTERACTION 0x00000004u
+
 static unsigned char s_visual_pending_fields[NUM_FIELDS];
 static unsigned char s_visual_pending_flags[NUM_FLAGS];
 static unsigned short s_visual_pending_room;
 static unsigned char s_visual_pending_room_valid;
+
+static unsigned char s_door_pending_flags[NUM_FLAGS];
+static unsigned short s_door_pending_room;
+static unsigned char s_door_pending_room_valid;
 
 static int visual_name_has_prefix(const char *name, const char *prefix)
 {
@@ -743,6 +822,17 @@ static int visual_name_has_prefix(const char *name, const char *prefix)
             return 0;
     }
     return 1;
+}
+
+static int is_door_unlock_flag(int index)
+{
+    return index >= 0 && index < NUM_FLAGS &&
+           visual_name_has_prefix(s_flag_bits[index].name, "lk_");
+}
+
+static int is_door_unlock_name(const char *name)
+{
+    return name && visual_name_has_prefix(name, "lk_");
 }
 
 static int is_visual_collectible_field(int index)
@@ -905,6 +995,175 @@ void item_sync_despawn_remote_collectible(void *actor, void *unused)
 }
 
 /* =========================================================================
+   Live locked-door transition
+
+   A LOCK_* save bit prevents a padlock child from being spawned when a room
+   is built, but changing that bit does not refresh a door already in memory.
+   Arm only newly-applied remote unlocks in the receiver's current room.  If
+   the packet wins the race with actor construction, the initializer consumes
+   the marker and builds the already-unlocked door normally.  Otherwise the
+   active door update starts the native padlock-removal state machine.
+   ========================================================================= */
+
+static void clear_door_unlock_pending(void)
+{
+    int i;
+
+    for (i = 0; i < NUM_FLAGS; ++i)
+        s_door_pending_flags[i] = 0;
+    s_door_pending_room_valid = 0;
+}
+
+static void arm_door_unlock_flag(int index)
+{
+    if (!is_door_unlock_flag(index))
+        return;
+
+    if (s_door_pending_room_valid &&
+        s_door_pending_room != D_800C7AB2)
+        clear_door_unlock_pending();
+
+    s_door_pending_room = D_800C7AB2;
+    s_door_pending_room_valid = 1;
+    s_door_pending_flags[index] = 1;
+}
+
+static int consume_door_unlock_flag(unsigned short flag_id)
+{
+    int i;
+
+    if (!s_door_pending_room_valid)
+        return 0;
+    if (s_door_pending_room != D_800C7AB2)
+    {
+        clear_door_unlock_pending();
+        return 0;
+    }
+
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        if (!s_door_pending_flags[i] ||
+            s_flag_bits[i].id != flag_id ||
+            !is_door_unlock_flag(i))
+            continue;
+
+        s_door_pending_flags[i] = 0;
+        return FLAG_IS_SET(flag_id) != 0;
+    }
+    return 0;
+}
+
+/* A packet received before this actor exists already changed the save bit.
+ * Consume its one-shot now and let the native initializer skip spawning the
+ * padlock child.  Do not enter the live animation path: there is no child to
+ * signal completion back to the parent in this ordering. */
+RECOMP_HOOK("func_08000AA8_6F3F88")
+void item_sync_prepare_remote_unlocked_door(void *actor, void *unused)
+{
+    unsigned short lock_flag;
+
+    (void)unused;
+
+    if (!actor || !save_is_loaded())
+        return;
+
+    lock_flag = ACTOR_DOOR_LOCK_FLAG(actor);
+    if (consume_door_unlock_flag(lock_flag))
+    {
+        recomp_printf("[DoorSync] Initialized remote-unlocked door flag=0x%X room=0x%X.\n",
+                      lock_flag, D_800C7AB2);
+    }
+}
+
+/* Arm the same lock-child state used by a local successful key use, after the
+ * key has already been accounted for by the synchronized LOCK_* bit.  Clearing
+ * the interaction latch prevents the original callback from also entering its
+ * key-use/already-open branch during this frame.  The child observes bit 0x1,
+ * plays its native disappearance, and sets bit 0x2 on completion.  Leave the
+ * parent callback alone so a remote unlock never pulls this player through the
+ * doorway; their next normal interaction uses the now-set flag without a key. */
+RECOMP_HOOK("func_08001020_6F4500")
+void item_sync_unlock_remote_door(void *actor, void *unused)
+{
+    unsigned short lock_flag;
+    unsigned int state;
+
+    (void)unused;
+
+    if (!actor || !save_is_loaded())
+        return;
+
+    lock_flag = ACTOR_DOOR_LOCK_FLAG(actor);
+    if (!consume_door_unlock_flag(lock_flag))
+        return;
+
+    state = ACTOR_DOOR_STATE(actor);
+    if ((state & (DOOR_STATE_UNLOCKING | DOOR_STATE_UNLOCKED)) != 0)
+        return;
+
+    ACTOR_DOOR_INTERACTION(actor) = 0;
+    ACTOR_DOOR_STATE(actor) =
+        (state & ~DOOR_STATE_INTERACTION) | DOOR_STATE_UNLOCKING;
+
+    recomp_printf("[DoorSync] Started remote unlock flag=0x%X room=0x%X.\n",
+                  lock_flag, D_800C7AB2);
+}
+
+static int send_door_unlock_event(const char *flag_name,
+                                  unsigned short source_room)
+{
+    char payload[80];
+    char *wp = payload;
+    char *team_id;
+    int sent;
+    const char *name = flag_name;
+
+    if (!is_door_unlock_name(flag_name))
+        return 0;
+
+    *wp++ = '{';
+    *wp++ = '"';
+    *wp++ = 'f';
+    *wp++ = 'l';
+    *wp++ = 'a';
+    *wp++ = 'g';
+    *wp++ = '"';
+    *wp++ = ':';
+    *wp++ = '"';
+    while (*name && wp < payload + sizeof(payload) - 24)
+        *wp++ = *name++;
+    *wp++ = '"';
+    *wp++ = ',';
+    *wp++ = '"';
+    *wp++ = 'r';
+    *wp++ = 'o';
+    *wp++ = 'o';
+    *wp++ = 'm';
+    *wp++ = 'I';
+    *wp++ = 'd';
+    *wp++ = '"';
+    *wp++ = ':';
+    wp = append_signed_decimal(wp, (signed int)source_room);
+    *wp++ = '}';
+    *wp = '\0';
+
+    team_id = anchor_get_team_id();
+    if (!team_id || !team_id[0])
+    {
+        if (team_id)
+            recomp_free(team_id);
+        return 0;
+    }
+
+    /* Live room animation is transient.  The queued SET_FLAG sent next is
+     * the durable/offline authority for this same lock. */
+    sent = anchor_send_custom_packet("MNSG_DOOR_UNLOCK", payload,
+                                     team_id, 0, 0);
+    recomp_free(team_id);
+    return sent;
+}
+
+/* =========================================================================
    State machine
    ========================================================================= */
 
@@ -933,6 +1192,10 @@ static unsigned char s_pending_boss_flags[NUM_FLAGS];
  * actor's active bit is cleared during its death animation. */
 static unsigned char s_pending_native_boss_defeat[NUM_FLAGS];
 static unsigned char s_boss_defeat_announced[NUM_FLAGS];
+/* Live room-scoped door events are sent before their queued durable bit. */
+static unsigned char s_door_unlock_announced[NUM_FLAGS];
+static unsigned short s_door_unlock_source_room[NUM_FLAGS];
+static unsigned char s_door_unlock_source_room_valid[NUM_FLAGS];
 /* The transient live event reports a remote race finish immediately.  A
  * durable-only receipt defers that report with its flag until native teardown.
  * Remember the first report so the terminal path cannot duplicate its toast. */
@@ -1019,6 +1282,9 @@ static void reset_caches(void)
 
         s_flag_bits[i].cached = 0;
         s_boss_defeat_announced[i] = 0;
+        s_door_unlock_announced[i] = 0;
+        s_door_unlock_source_room[i] = 0;
+        s_door_unlock_source_room_valid[i] = 0;
         s_pending_boss_flags[i] = 0;
         s_pending_native_boss_defeat[i] = 0;
         if (!preserve_remote_notification)
@@ -1355,6 +1621,11 @@ static const char *apply_flag(const char *flag_name, signed int val)
         {
             FLAG_SET_BIT(s_flag_bits[i].id);
             s_flag_bits[i].cached = 1;
+            /* A queued delta or compact snapshot can arrive after this room
+             * already instantiated the locked door.  Arm only the real 0->1
+             * write: the initializer hook safely consumes pre-init arrivals,
+             * while a positive no-op may have no lock child to animate. */
+            arm_door_unlock_flag(i);
             if (boss_sync_is_completion_flag(flag_name))
                 s_boss_defeat_announced[i] = 1;
             recomp_printf("[ItemSync] Applied flag '%s' (id=0x%X)\n",
@@ -1659,14 +1930,44 @@ static void process_incoming_packets(void)
                         boss_sync_is_completion_flag(fname) &&
                         s_remote_boss_completion_notified[index];
 
-                    if (!acknowledged_boss_completion)
+                    if (!acknowledged_boss_completion &&
+                        !is_door_unlock_name(fname))
                         anchor_race_on_remote_flag_synced(fname, (int)fval);
                     if (index >= 0 && fval &&
                         boss_sync_is_completion_flag(fname))
                         s_remote_boss_completion_notified[index] = 1;
                 }
-                if (display)
+                /* Door transitions are world state, not item checks. */
+                if (display && !is_door_unlock_name(fname))
                     item_notif_push("Received from team", display);
+            }
+        }
+        else if (is_packet_type(pkt, "MNSG_DOOR_UNLOCK"))
+        {
+            char fname[32];
+            unsigned short source_room;
+            unsigned int sender = get_packet_client_id(pkt);
+
+            /* The queued SET_FLAG remains authoritative for clients outside
+             * this room.  Only a live event with the exact source room may
+             * animate an already-instantiated lock on this client. */
+            if ((own_id == 0 || sender == 0 || sender != own_id) &&
+                get_flag_name(pkt, fname, (int)sizeof(fname)) &&
+                get_door_room_id(pkt, &source_room) &&
+                source_room == D_800C7AB2)
+            {
+                int index = sync_flag_index(fname);
+                if (is_door_unlock_flag(index) &&
+                    !FLAG_IS_SET(s_flag_bits[index].id))
+                {
+                    apply_incoming_flag(fname, 1);
+                    if (FLAG_IS_SET(s_flag_bits[index].id))
+                    {
+                        arm_door_unlock_flag(index);
+                        recomp_printf("[DoorSync] Accepted live unlock '%s' room=0x%X.\n",
+                                      fname, source_room);
+                    }
+                }
             }
         }
         else if (is_packet_type(pkt, "MNSG_BOSS_DEFEAT"))
@@ -1958,6 +2259,16 @@ static void monitor_and_send_changes(void)
 
         if (cur)
         { /* only broadcast when flag becomes set, not when cleared */
+            /* Capture the room on the first frame that observes the native
+             * 0->1 transition.  Keep it stable across send-budget deferrals
+             * and transient transport failures. */
+            if (is_door_unlock_flag(i) &&
+                !s_door_unlock_source_room_valid[i])
+            {
+                s_door_unlock_source_room[i] = D_800C7AB2;
+                s_door_unlock_source_room_valid[i] = 1;
+            }
+
             /* Tell teammates in this encounter to run the native boss finish
              * first.  Leave the cache untouched so the durable SET_FLAG is
              * sent on a later frame, after this transient event is ordered. */
@@ -1975,23 +2286,59 @@ static void monitor_and_send_changes(void)
                 continue;
             }
 
+            /* Carry the exact source room in a nonqueued live event before
+             * publishing the durable lock bit.  Receivers outside this room
+             * ignore the animation event and still inherit the unlocked state
+             * through SET_FLAG/snapshots. */
+            if (is_door_unlock_flag(i) && !s_door_unlock_announced[i])
+            {
+                if (sends >= MAX_SENDS_PER_FRAME)
+                    continue;
+                if (send_door_unlock_event(
+                        s_flag_bits[i].name,
+                        s_door_unlock_source_room[i]))
+                {
+                    s_door_unlock_announced[i] = 1;
+                    ++sends;
+                    recomp_printf("[DoorSync] Sent live unlock '%s' room=0x%X.\n",
+                                  s_flag_bits[i].name,
+                                  s_door_unlock_source_room[i]);
+                    continue;
+                }
+                /* A transient visual send must never starve the queued save
+                 * update.  Fall through and attempt the durable SET_FLAG. */
+            }
+
             if (sends >= MAX_SENDS_PER_FRAME || s_set_flag_send_timer > 0)
                 continue; /* defer to next frame */
 
             if (!anchor_send_flag(s_flag_bits[i].name, 1, 1))
                 continue;
-            anchor_race_on_flag_synced(s_flag_bits[i].name, 1);
+            if (!is_door_unlock_flag(i))
+                anchor_race_on_flag_synced(s_flag_bits[i].name, 1);
             ++sends;
             s_set_flag_send_timer = SET_FLAG_SEND_INTERVAL_FRAMES;
             recomp_printf("[ItemSync] Sent flag '%s' (id=0x%X)\n",
                           s_flag_bits[i].name, s_flag_bits[i].id);
-            const char *display = get_flag_display_name(s_flag_bits[i].name);
-            if (display)
-                item_notif_push("Item found!", display);
+            if (is_door_unlock_flag(i))
+            {
+                s_door_unlock_source_room[i] = 0;
+                s_door_unlock_source_room_valid[i] = 0;
+            }
+            if (!is_door_unlock_flag(i))
+            {
+                const char *display =
+                    get_flag_display_name(s_flag_bits[i].name);
+                if (display)
+                    item_notif_push("Item found!", display);
+            }
         }
         else
         {
             s_boss_defeat_announced[i] = 0;
+            s_door_unlock_announced[i] = 0;
+            s_door_unlock_source_room[i] = 0;
+            s_door_unlock_source_room_valid[i] = 0;
             if (boss_sync_is_completion_flag(s_flag_bits[i].name) &&
                 !boss_sync_has_active_encounter(s_flag_bits[i].name))
                 s_remote_boss_completion_notified[i] = 0;
@@ -2021,6 +2368,9 @@ void item_sync_update(void)
     if (s_visual_pending_room_valid &&
         s_visual_pending_room != D_800C7AB2)
         clear_visual_collectible_pending();
+    if (s_door_pending_room_valid &&
+        s_door_pending_room != D_800C7AB2)
+        clear_door_unlock_pending();
 
     /* ── Tick notification timers (runs even when disconnected so in-flight
        toasts from a just-dropped connection still expire gracefully). ────── */
@@ -2061,6 +2411,7 @@ void item_sync_update(void)
         s_team_state_request_pending = 0;
         s_team_snapshot_broadcast_timer = -1;
         clear_visual_collectible_pending();
+        clear_door_unlock_pending();
         boss_sync_reset();
         s_ds_initialized = 0;  /* reset damage-sync baseline on disconnect */
         s_ryo_initialized = 0; /* reset ryo-sync baseline on disconnect   */
@@ -2095,6 +2446,7 @@ void item_sync_update(void)
         {
             reset_caches();
             clear_visual_collectible_pending();
+            clear_door_unlock_pending();
             s_push_cursor = PUSH_IDLE;
             s_team_snapshot_broadcast_timer = -1;
         }
