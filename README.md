@@ -92,7 +92,9 @@ You'll also need a build of the `RecompModTool` utility from the releases of [N6
 * Run the `RecompModTool` utility with `mod.toml` as the first argument and the build directory (`build`) as the second argument.
   * This produces the `mnsg_multiplayer_anchor.nrm` file in the build folder.
   * On MacOS, you may need to specify the paths to the `clang` and `ld.lld` binaries using the `CC` and `LD` environment variables.
-* Alternatively, run `./build_mod.sh` to execute both steps in one command.
+* Alternatively, run `./build_mod.sh` to produce both package variants in one command:
+  * `build/mnsg_multiplayer_anchor.nrm` is the release build with the debug button disabled.
+  * `build/debug_mnsg_multiplayer_anchor.nrm` is the same mod with the debug button enabled.
 
 ### Updating the Mystical Ninja Starring Goemon Decompilation Submodule
 

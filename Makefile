@@ -1,4 +1,9 @@
 BUILD_DIR := build
+DEBUG_BUTTON_ENABLED ?= 0
+
+ifneq ($(filter $(DEBUG_BUTTON_ENABLED),0 1),$(DEBUG_BUTTON_ENABLED))
+    $(error DEBUG_BUTTON_ENABLED must be 0 or 1)
+endif
 
 # Allow the user to specify the compiler and linker on macOS
 # as Apple Clang does not support MIPS architecture
@@ -22,7 +27,8 @@ CFLAGS   := -target mips -mips2 -mabi=32 -O2 -G0 -mno-abicalls -mno-odd-spreg -m
 			-Wno-missing-braces -Wno-unsupported-floating-point-opt -Werror=section
 ASFLAGS  := -target mips -mips2 -mabi=32 -G0 -mno-abicalls -mno-check-zero-division -x assembler-with-cpp -modd-spreg
 CPPFLAGS := -nostdinc -D_LANGUAGE_C -DMIPS -DF3DEX_GBI -I include -I include/dummy_headers \
-			-I mnsg/include -I mnsg/include/libultra -I mnsg/src
+			-I mnsg/include -I mnsg/include/libultra -I mnsg/src \
+			-DDEBUG_BUTTON_ENABLED=$(DEBUG_BUTTON_ENABLED)
 LDFLAGS  := -nostdlib -T $(LDSCRIPT) -Map $(BUILD_DIR)/mod.map --unresolved-symbols=ignore-all --emit-relocs -e 0 --no-nmagic
 
 C_SRCS := $(shell find src -name '*.c' | sort)

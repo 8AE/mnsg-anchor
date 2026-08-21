@@ -34,8 +34,14 @@
 #include "anchor_runtime.h"
 #include "anchor_flag_catalog.h"
 
-/* Set to 1 to show the DBG button in the bottom-right corner. */
-static int DEBUG_BUTTON_ENABLED = 1;
+/* build_mod.sh produces release (0) and debug (1) variants automatically. */
+#ifndef DEBUG_BUTTON_ENABLED
+#define DEBUG_BUTTON_ENABLED 0
+#endif
+
+#if DEBUG_BUTTON_ENABLED != 0 && DEBUG_BUTTON_ENABLED != 1
+#error "DEBUG_BUTTON_ENABLED must be 0 or 1"
+#endif
 
 /* NET toggle button callback provided by anchor_connect_ui.c */
 extern void anchor_connect_ui_net_btn_callback(RecompuiResource res,
