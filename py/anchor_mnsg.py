@@ -112,6 +112,9 @@ _rx_thread: "threading.Thread | None" = None
 _local_room_id: int = -1
 _local_character: str = ""
 _local_save_loaded: bool = False
+_local_enemy_room: int = -1
+_local_enemy_sig: int = 0
+_local_enemy_bits: str = ""
 _last_position_sent: "tuple[int, int, int] | None" = None
 _last_position_sent_ms: int = 0
 _last_position_action: int = -2
@@ -134,6 +137,7 @@ ANIMATION_RESTART_DELTA_100: int = 50
 APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
 APPEARANCE_MINI_EBISUMARU: int = 1 << 1
 APPEARANCE_MASK: int = APPEARANCE_SUDDEN_IMPACT | APPEARANCE_MINI_EBISUMARU
+ENEMY_BITMAP_HEX_MAX: int = 64
 
 
 def normalize_room_id(room_id: str) -> str:
@@ -163,6 +167,32 @@ def _appearance_flags_from_payload(payload: dict, current: int = 0) -> int:
         else:
             flags &= ~APPEARANCE_MINI_EBISUMARU
     return flags
+
+
+def _bounded_int(value: object, minimum: int, maximum: int, default: int) -> int:
+    """Coerce untrusted client-state integers without letting bad peers break recv."""
+    try:
+        result = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return result if minimum <= result <= maximum else default
+
+
+def _normalize_enemy_bits(bits: object) -> "str | None":
+    """Normalize the low-index-first 256-bit byte string used by enemy sync."""
+    if not isinstance(bits, str):
+        return None
+    value = bits.strip().lower()
+    if len(value) > ENEMY_BITMAP_HEX_MAX or (len(value) & 1) != 0:
+        return None
+    if any(ch not in "0123456789abcdef" for ch in value):
+        return None
+    # C serializes bitmap bytes from the lowest actor indices upward and omits
+    # only zero bytes at the high-index end.  Leading zero bytes are therefore
+    # meaningful and must never be stripped.
+    while value.endswith("00"):
+        value = value[:-2]
+    return value
 
 ###############################################################################
 # Room ID → area name lookup table
@@ -311,6 +341,29 @@ def _should_handle_team_state_request(packet: dict) -> bool:
     return not candidates or _client_id == min(candidates)
 
 
+def _should_handle_enemy_state_request(packet: dict) -> bool:
+    """Elect one matching room occupant to answer a compact enemy request."""
+    requester = _bounded_int(packet.get("clientId", 0), 0, 0xFFFFFFFF, 0)
+    room = _bounded_int(packet.get("r", -1), 0, 0xFFFF, -1)
+    signature = _bounded_int(packet.get("s", -1), 0, 0xFFFF, -1)
+    if _client_id <= 0 or room < 0 or signature < 0:
+        return True
+
+    with _player_states_lock:
+        candidates = [
+            cid
+            for cid, state in _player_states.items()
+            if cid != requester
+            and bool(state.get("online", False))
+            and bool(state.get("isSaveLoaded", False))
+            and state.get("teamId", "") == _team_id
+            and _bounded_int(state.get("roomId", -1), -1, 0xFFFF, -1) == room
+            and _bounded_int(state.get("er", -1), -1, 0xFFFF, -1) == room
+            and _bounded_int(state.get("es", -1), 0, 0xFFFF, -1) == signature
+        ]
+    return not candidates or _client_id == min(candidates)
+
+
 def _recv_loop(sock: socket.socket) -> None:
     """Background thread: read null-terminated packets and push to _recv_queue."""
     global _connected, _client_id, _server_message, _disabled, _local_room_id, _local_character
@@ -377,6 +430,9 @@ def _recv_loop(sock: socket.socket) -> None:
                                 "roomId": int(cs.get("currentRoomId", -1)),
                                 "mnsgRace": str(cs.get("mnsgRace", "")),
                                 "mnsgRaceConfig": str(cs.get("mnsgRaceConfig", "")),
+                                "er": _bounded_int(cs.get("er", -1), -1, 0xFFFF, -1),
+                                "es": _bounded_int(cs.get("es", -1), 0, 0xFFFFFFFF, -1),
+                                "eb": _normalize_enemy_bits(cs.get("eb")),
                             }
                     with _player_states_lock:
                         _player_states.clear()
@@ -454,6 +510,15 @@ def _recv_loop(sock: socket.socket) -> None:
                                     _player_states[cid]["mnsgRace"] = str(cs["mnsgRace"])
                                 if "mnsgRaceConfig" in cs:
                                     _player_states[cid]["mnsgRaceConfig"] = str(cs["mnsgRaceConfig"])
+                                if "er" in cs:
+                                    _player_states[cid]["er"] = \
+                                        _bounded_int(cs["er"], -1, 0xFFFF, -1)
+                                if "es" in cs:
+                                    _player_states[cid]["es"] = \
+                                        _bounded_int(cs["es"], 0, 0xFFFFFFFF, -1)
+                                if "eb" in cs:
+                                    _player_states[cid]["eb"] = \
+                                        _normalize_enemy_bits(cs["eb"])
                                 if "currentRoom" in cs:
                                     _player_states[cid]["location"] = cs["currentRoom"]
                                 if "currentRoomId" in cs:
@@ -507,6 +572,9 @@ def _recv_loop(sock: socket.socket) -> None:
                                     "roomId": int(cs.get("currentRoomId", -1)),
                                     "mnsgRace": str(cs.get("mnsgRace", "")),
                                     "mnsgRaceConfig": str(cs.get("mnsgRaceConfig", "")),
+                                    "er": _bounded_int(cs.get("er", -1), -1, 0xFFFF, -1),
+                                    "es": _bounded_int(cs.get("es", -1), 0, 0xFFFFFFFF, -1),
+                                    "eb": _normalize_enemy_bits(cs.get("eb")),
                                     "posX": int(cs.get("posX", 0)),
                                     "posY": int(cs.get("posY", 0)),
                                     "posZ": int(cs.get("posZ", 0)),
@@ -526,6 +594,8 @@ def _recv_loop(sock: socket.socket) -> None:
                                 }
 
                 if ptype == "REQUEST_TEAM_STATE" and not _should_handle_team_state_request(packet):
+                    continue
+                if ptype == "MNSG_ER" and not _should_handle_enemy_state_request(packet):
                     continue
 
                 # Enqueue durable/gameplay packets for C-side polling. For a
@@ -549,6 +619,7 @@ def _recv_loop(sock: socket.socket) -> None:
 def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     """Close the socket and mark as disconnected (idempotent)."""
     global _sock, _connected, _local_room_id, _local_character, _local_save_loaded
+    global _local_enemy_room, _local_enemy_sig, _local_enemy_bits
     global _last_position_sent, _last_position_sent_ms
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags
@@ -564,6 +635,9 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _local_room_id = -1
     _local_character = ""
     _local_save_loaded = False
+    _local_enemy_room = -1
+    _local_enemy_sig = 0
+    _local_enemy_bits = ""
     _last_position_sent = None
     _last_position_sent_ms = 0
     _last_position_action = -2
@@ -612,6 +686,7 @@ def connect(
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
+    global _local_enemy_room, _local_enemy_sig, _local_enemy_bits
 
     normalized_room_id = normalize_room_id(room_id)
     if not normalized_room_id:
@@ -637,6 +712,9 @@ def connect(
     _position_seq = 0
     _local_character = ""
     _local_save_loaded = False
+    _local_enemy_room = -1
+    _local_enemy_sig = 0
+    _local_enemy_bits = ""
     _race_status = ""
     _race_config_json = ""
 
@@ -677,6 +755,9 @@ def connect(
             "name": _player_name,
             "online": True,
             "isSaveLoaded": False,
+            "er": _local_enemy_room,
+            "es": _local_enemy_sig,
+            "eb": _local_enemy_bits,
         },
         "roomState": {},
     }
@@ -786,6 +867,12 @@ def update_client_state(state_json: str) -> bool:
     # Server requires these fields.
     state.setdefault("teamId", _team_id)
     state.setdefault("isSaveLoaded", _local_save_loaded)
+    # Anchor replaces rather than merges client state.  Carry the compact
+    # enemy-room snapshot through every metadata update so room/character/race
+    # changes cannot erase the state needed by a late room entrant.
+    state["er"] = _local_enemy_room
+    state["es"] = _local_enemy_sig
+    state["eb"] = _local_enemy_bits
     if _local_room_id >= 0:
         state.setdefault("currentRoomId", _local_room_id)
         state.setdefault("currentRoom", _ROOM_NAMES.get(_local_room_id, ""))
@@ -806,6 +893,66 @@ def update_client_state(state_json: str) -> bool:
             local.update(state)
             local["self"] = True
     return sent
+
+
+def set_enemy_room_state(room_id: int, signature: int, bits: str) -> bool:
+    """Publish this client's compact dead-enemy bitmap for one raw game room."""
+    global _local_enemy_room, _local_enemy_sig, _local_enemy_bits
+
+    room = _bounded_int(room_id, 0, 0xFFFF, -1)
+    sig = _bounded_int(signature, 0, 0xFFFFFFFF, -1)
+    normalized_bits = _normalize_enemy_bits(bits)
+    if room < 0 or sig < 0 or normalized_bits is None:
+        logger.warning(
+            "anchor_mnsg: rejected enemy state room=%r sig=%r bits=%r",
+            room_id, signature, bits,
+        )
+        return False
+
+    _local_enemy_room = room
+    _local_enemy_sig = sig
+    _local_enemy_bits = normalized_bits
+    return update_client_state("{}")
+
+
+def get_enemy_room_state(room_id: int, signature: int) -> str:
+    """OR matching online teammates' dead-enemy bitmaps for a raw game room."""
+    room = _bounded_int(room_id, 0, 0xFFFF, -1)
+    sig = _bounded_int(signature, 0, 0xFFFFFFFF, -1)
+    if room < 0 or sig < 0:
+        return ""
+
+    combined = bytearray(ENEMY_BITMAP_HEX_MAX // 2)
+    matched = False
+    with _player_states_lock:
+        for cid, state in _player_states.items():
+            if cid == _client_id or bool(state.get("self", False)):
+                continue
+            if not bool(state.get("online", False)):
+                continue
+            if not bool(state.get("isSaveLoaded", False)):
+                continue
+            if state.get("teamId", "") != _team_id:
+                continue
+            if _bounded_int(state.get("roomId", -1), -1, 0xFFFF, -1) != room:
+                continue
+            if _bounded_int(state.get("er", -1), -1, 0xFFFF, -1) != room:
+                continue
+            if _bounded_int(state.get("es", -1), 0, 0xFFFFFFFF, -1) != sig:
+                continue
+            peer_bits = _normalize_enemy_bits(state.get("eb"))
+            if peer_bits is None:
+                continue
+            for offset in range(0, len(peer_bits), 2):
+                combined[offset // 2] |= int(peer_bits[offset:offset + 2], 16)
+            matched = True
+
+    if not matched:
+        return ""
+    last = len(combined) - 1
+    while last >= 0 and combined[last] == 0:
+        last -= 1
+    return "".join(f"{value:02x}" for value in combined[:last + 1])
 
 
 def set_save_loaded(is_loaded: bool) -> bool:

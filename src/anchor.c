@@ -246,6 +246,36 @@ int anchor_set_local_room(unsigned int room_id)
     return result;
 }
 
+int anchor_set_enemy_room_state(unsigned int room_id, unsigned int signature,
+                                const char *bits)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_U32("room_id", room_id);
+    REPY_FN_SET_U32("signature", signature);
+    REPY_FN_SET_STR("bits", bits ? bits : "");
+    REPY_FN_EXEC_CACHE(anchor_set_enemy_room_state_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.set_enemy_room_state(\n"
+                       "    room_id, signature, bits\n"
+                       ")\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+char *anchor_get_enemy_room_state(unsigned int room_id, unsigned int signature)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_U32("room_id", room_id);
+    REPY_FN_SET_U32("signature", signature);
+    REPY_FN_EXEC_CACHE(anchor_get_enemy_room_state_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.get_enemy_room_state(room_id, signature)\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result; /* caller must recomp_free() */
+}
+
 int anchor_set_position(int pos_x, int pos_y, int pos_z)
 {
     REPY_FN_SETUP;

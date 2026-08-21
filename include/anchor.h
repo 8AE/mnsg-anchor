@@ -159,6 +159,34 @@ extern "C"
    int anchor_set_local_room(unsigned int room_id);
 
    /**
+    * @brief Publish the local dead-enemy bitmap for one raw game room.
+    *
+    * The compact state is retained in every UPDATE_CLIENT_STATE packet so a
+    * teammate entering an already-occupied room can query it before spawning
+    * actors.  @p bits is a hexadecimal value of at most 64 characters (256
+    * bits); it is normalized to lowercase and an empty value means zero.
+    *
+    * @param room_id    Raw 16-bit room ID from D_800C7AB2.
+    * @param signature  Enemy-roster signature used to reject mismatched layouts.
+    * @param bits       Compact dead-enemy bitmap as hexadecimal text.
+    * @return 1 if the state update was sent, 0 on validation/send failure.
+    */
+   int anchor_set_enemy_room_state(unsigned int room_id, unsigned int signature,
+                                   const char *bits);
+
+   /**
+    * @brief Query matching online teammates' dead-enemy state for one room.
+    *
+    * Only same-team, non-self peers whose current raw room, enemy room, and
+    * roster signature all match are included.  Their bitmaps are ORed.
+    *
+    * @return Newly allocated lowercase hexadecimal text, or an empty string
+    *         when no matching peer state exists.  Caller must recomp_free().
+    */
+   char *anchor_get_enemy_room_state(unsigned int room_id,
+                                     unsigned int signature);
+
+   /**
     * @brief Broadcast the local player's world-space position to teammates.
     *
     * Sends a compact MNSG_PLAYER_POS custom packet containing posX/posY/posZ,
