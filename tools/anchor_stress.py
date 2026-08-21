@@ -7,7 +7,7 @@
 Spawn many synthetic MNSG Anchor clients for multiplayer stress testing.
 
 Run with uv:
-    uv run tools/anchor_stress.py --clients 25 --room mnsg-recomp
+    uv run tools/anchor_stress.py --clients 25 --room stress-test
 
 Once running, type `help` for interactive commands.
 """
@@ -35,10 +35,14 @@ try:
 
     DEFAULT_HOST = anchor_mnsg.DEFAULT_HOST
     DEFAULT_PORT = anchor_mnsg.DEFAULT_PORT
+    ROOM_ID_PREFIX = anchor_mnsg.ROOM_ID_PREFIX
+    ROOM_ID_TRIM_CHARS = anchor_mnsg.ROOM_ID_TRIM_CHARS
     ROOM_NAMES = dict(getattr(anchor_mnsg, "_ROOM_NAMES", {}))
 except Exception:
     DEFAULT_HOST = "anchor.hm64.org"
     DEFAULT_PORT = 43383
+    ROOM_ID_PREFIX = "mnsg-"
+    ROOM_ID_TRIM_CHARS = " \t\n\r\v\f"
     ROOM_NAMES: dict[int, str] = {}
 
 
@@ -554,7 +558,14 @@ class StressController:
 
 
 def normalized_room_id(room_id: str) -> str:
-    return room_id if room_id.startswith("mnsg_") else f"mnsg_{room_id}"
+    visible_room_id = room_id.strip(ROOM_ID_TRIM_CHARS)
+    if not visible_room_id:
+        raise ValueError("room id is required")
+    if visible_room_id.startswith(ROOM_ID_PREFIX):
+        if len(visible_room_id) == len(ROOM_ID_PREFIX):
+            raise ValueError("room id must include a value after the namespace prefix")
+        return visible_room_id
+    return f"{ROOM_ID_PREFIX}{visible_room_id}"
 
 
 def normalize_character(value: str) -> str:
@@ -601,7 +612,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-n", "--clients", type=int, required=True, help="number of synthetic clients to spawn")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--room", default="mnsg-recomp")
+    parser.add_argument("--room", required=True, help="private room id for this test run")
     parser.add_argument("--team", default="default")
     parser.add_argument("--name-prefix", default="Stress")
     parser.add_argument("--x", type=int, default=0)

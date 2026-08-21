@@ -3,12 +3,9 @@
 #include "recompui.h"
 #include "anchor.h"
 #include "anchor_runtime.h"
+#include "item_sync.h"
 #include "anchor_flag_catalog.h"
 
-void item_sync_force_flag(const char *name);
-void item_sync_force_flag_val(const char *name, int val);
-int item_sync_save_is_loaded(void);
-int item_sync_write_local_flag_val(const char *name, int val);
 void anchor_set_current_character_if_needed(void);
 
 /* D_8015C608_15D208:

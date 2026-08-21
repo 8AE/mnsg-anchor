@@ -7,7 +7,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 * **Item / flag sync** — every tracked item or flag gained by a player is broadcast to the team in real time.  Players who join late automatically receive the team's accumulated progress.
 * **Race challenges** — race hosts can optionally sync team damage and healing, or sync both ryo earnings and spending, alongside the No Hit, 1 Life, and enemy-multiplier challenges. These rules do not run in standard multiplayer.
 * **In-game HUD** — a notification banner confirms connection success or failure; a persistent player-list panel (top-left) shows every player currently in the room, their character, and their position.
-* **Teams** — players can be grouped into teams within a room so that flag queues and save-state syncs are scoped to the team.
+* **Teams** — players can be grouped by Team Name within a room so that flag queues and save-state syncs are scoped to that team.
 * **Reconnect support** — client IDs are preserved across sessions so the server can deliver queued packets on reconnect.
 
 ### What is synced
@@ -52,6 +52,8 @@ Join-time item synchronization uses one compact team-state snapshot followed by 
 
 The public default server is **anchor.hm64.org:43383**.
 
+Room IDs are required and have no shared default. Choose a unique private value and share it only with the people you want in the session. The client adds the hidden `mnsg-` game namespace when connecting. Players must use both the same Room ID and the same Team Name to share and sync game progression.
+
 ### Configuration
 
 All options are available in the mod settings menu inside the game:
@@ -60,9 +62,9 @@ All options are available in the mod settings menu inside the game:
 | ----------------------- | ----------------- | ------------------------------------------------------------------------------ |
 | Server Address          | `anchor.hm64.org` | Hostname or IP of the Anchor server                                            |
 | Server Port             | `43383`           | TCP port of the Anchor server                                                  |
-| Room ID                 | `mnsg-recomp`     | Room to join (shared by all teammates)                                         |
+| Room ID                 | *(blank)*         | Required private code that keeps multiplayer sessions separate                 |
 | Player Name             | `Player`          | Display name shown to other players                                            |
-| Team ID                 | `default`         | Team within the room (shared save-state queue)                                 |
+| Team Name               | `default`         | Players with the same Team Name share and sync game progression                |
 | Show NET Button         | Enabled           | Show the NET button in the bottom-left corner                                  |
 | Show Item Notifications | Enabled           | Show a toast when items or flags are received or found                         |
 | Show Room ID (Hex)      | Disabled          | Display the raw hexadecimal room ID next to the area name in the player list   |
@@ -88,7 +90,7 @@ You'll also need a build of the `RecompModTool` utility from the releases of [N6
 
 * Run `make` (with an optional job count) to compile the mod code.
 * Run the `RecompModTool` utility with `mod.toml` as the first argument and the build directory (`build`) as the second argument.
-  * This produces the `mnsg_anchor_client.nrm` file in the build folder.
+  * This produces the `mnsg_multiplayer_anchor.nrm` file in the build folder.
   * On MacOS, you may need to specify the paths to the `clang` and `ld.lld` binaries using the `CC` and `LD` environment variables.
 * Alternatively, run `./build_mod.sh` to execute both steps in one command.
 

@@ -9,4 +9,4 @@ python3 tools/gen_icon_headers.py
 make clean && make "$@"
 ./RecompModTool mod.toml build
 
-echo "Done: build/mnsg_recomp_mod_template.nrm"
+echo "Done: build/mnsg_multiplayer_anchor.nrm"

@@ -19,15 +19,14 @@
 #include "recomputils.h"
 #include "anchor.h"
 #include "boss_sync.h"
+#include "item_sync.h"
+#include "utils/json_utils.h"
+#include "utils/string_utils.h"
 
 extern unsigned short D_800C7AB2;
 extern void func_80024088_24C88(int flag_id);
 extern int func_800240DC_24CDC(int flag_id);
 extern void func_80034EF8_35AF8(void *actor);
-extern int item_sync_save_is_loaded(void);
-extern void item_sync_apply_benkei_postfight_state(void);
-extern void item_sync_mark_boss_defeat_announced(const char *flag_name);
-extern void item_sync_commit_boss_completion(const char *flag_name);
 
 #define ENTITY_DARUMANYO 0x00CCu
 #define ENTITY_BENKEI 0x01C0u
@@ -188,16 +187,6 @@ void boss_sync_reset(void)
     s_congo_local_defeat_started = 0;
 }
 
-static int streq(const char *a, const char *b)
-{
-    while (*a && *a == *b)
-    {
-        ++a;
-        ++b;
-    }
-    return *a == *b;
-}
-
 static void track_boss(TrackedBoss *boss, void *actor, unsigned short entity_id)
 {
     if (!actor)
@@ -286,58 +275,58 @@ static int benkei_can_take_damage(void)
 
 static TrackedBoss *boss_for_flag(const char *flag_name)
 {
-    if (streq(flag_name, "fl_congo_killed") || streq(flag_name, "fl_congo"))
+    if (mnsg_string_equal(flag_name, "fl_congo_killed") || mnsg_string_equal(flag_name, "fl_congo"))
         return &s_congo;
-    if (streq(flag_name, "fl_tsurami"))
+    if (mnsg_string_equal(flag_name, "fl_tsurami"))
         return &s_tsurami;
-    if (streq(flag_name, "fl_dharmanyo"))
+    if (mnsg_string_equal(flag_name, "fl_dharmanyo"))
         return &s_darumanyo;
-    if (streq(flag_name, "fl_benkei"))
+    if (mnsg_string_equal(flag_name, "fl_benkei"))
         return &s_benkei;
     return 0;
 }
 
 int boss_sync_is_completion_flag(const char *flag_name)
 {
-    return streq(flag_name, "fl_dharmanyo") ||
-           streq(flag_name, "fl_thaisamba") ||
-           streq(flag_name, "fl_tsurami") ||
-           streq(flag_name, "fl_benkei") ||
-           streq(flag_name, "fl_congo_killed");
+    return mnsg_string_equal(flag_name, "fl_dharmanyo") ||
+           mnsg_string_equal(flag_name, "fl_thaisamba") ||
+           mnsg_string_equal(flag_name, "fl_tsurami") ||
+           mnsg_string_equal(flag_name, "fl_benkei") ||
+           mnsg_string_equal(flag_name, "fl_congo_killed");
 }
 
 int boss_sync_should_defer_flag(const char *flag_name)
 {
     /* 0x12D/fl_congo is Congo's later reward/cutscene bit.  It is not the
      * live defeat trigger, but it must still be held while Congo is active. */
-    return boss_sync_is_completion_flag(flag_name) || streq(flag_name, "fl_congo");
+    return boss_sync_is_completion_flag(flag_name) || mnsg_string_equal(flag_name, "fl_congo");
 }
 
 int boss_sync_has_active_encounter(const char *flag_name)
 {
     TrackedBoss *boss = boss_for_flag(flag_name);
 
-    if ((streq(flag_name, "fl_congo_killed") || streq(flag_name, "fl_congo")) &&
+    if ((mnsg_string_equal(flag_name, "fl_congo_killed") || mnsg_string_equal(flag_name, "fl_congo")) &&
         congo_remote_defeat_is_current())
         return 1;
-    if ((streq(flag_name, "fl_congo_killed") || streq(flag_name, "fl_congo")) &&
+    if ((mnsg_string_equal(flag_name, "fl_congo_killed") || mnsg_string_equal(flag_name, "fl_congo")) &&
         boss == &s_congo && !s_congo_victory_complete)
         return tracked_boss_can_take_damage(&s_congo);
-    if (streq(flag_name, "fl_tsurami"))
+    if (mnsg_string_equal(flag_name, "fl_tsurami"))
     {
         if (native_remote_defeat_is_current(&s_tsurami_state))
             return 1;
         return !s_tsurami_state.victory_complete &&
                tracked_boss_can_take_damage(&s_tsurami);
     }
-    if (streq(flag_name, "fl_dharmanyo"))
+    if (mnsg_string_equal(flag_name, "fl_dharmanyo"))
     {
         if (native_remote_defeat_is_current(&s_darumanyo_state))
             return 1;
         return !s_darumanyo_state.victory_complete &&
                darumanyo_can_take_damage();
     }
-    if (streq(flag_name, "fl_benkei"))
+    if (mnsg_string_equal(flag_name, "fl_benkei"))
     {
         if (native_remote_defeat_is_current(&s_benkei_state))
             return 1;
@@ -350,17 +339,17 @@ int boss_sync_has_local_encounter(const char *flag_name)
 {
     TrackedBoss *boss = boss_for_flag(flag_name);
 
-    if (streq(flag_name, "fl_tsurami"))
+    if (mnsg_string_equal(flag_name, "fl_tsurami"))
         return !s_tsurami_state.victory_complete &&
                tracked_boss_is_local(&s_tsurami);
-    if (streq(flag_name, "fl_dharmanyo"))
+    if (mnsg_string_equal(flag_name, "fl_dharmanyo"))
     {
         if (native_remote_defeat_is_current(&s_darumanyo_state))
             return 1;
         return !s_darumanyo_state.victory_complete &&
                darumanyo_is_local();
     }
-    if (streq(flag_name, "fl_benkei"))
+    if (mnsg_string_equal(flag_name, "fl_benkei"))
     {
         if (native_remote_defeat_is_current(&s_benkei_state))
             return 1;
@@ -372,28 +361,17 @@ int boss_sync_has_local_encounter(const char *flag_name)
 int boss_sync_send_defeat(const char *flag_name)
 {
     char payload[64];
-    char *wp = payload;
+    MnsgJsonObjectWriter writer;
     char *team_id;
     int sent;
-    const char *name = flag_name;
 
     if (!boss_sync_is_completion_flag(flag_name))
         return 0;
 
-    *wp++ = '{';
-    *wp++ = '"';
-    *wp++ = 'f';
-    *wp++ = 'l';
-    *wp++ = 'a';
-    *wp++ = 'g';
-    *wp++ = '"';
-    *wp++ = ':';
-    *wp++ = '"';
-    while (*name && wp < payload + sizeof(payload) - 3)
-        *wp++ = *name++;
-    *wp++ = '"';
-    *wp++ = '}';
-    *wp = '\0';
+    mnsg_json_writer_begin(&writer, payload, (unsigned int)sizeof(payload));
+    if (!mnsg_json_writer_add_string(&writer, "flag", flag_name) ||
+        !mnsg_json_writer_finish(&writer))
+        return 0;
 
     team_id = anchor_get_team_id();
     if (!team_id || !team_id[0])
@@ -419,7 +397,7 @@ int boss_sync_apply_remote_defeat(const char *flag_name)
     TrackedBoss *boss;
     unsigned int flag_id;
 
-    if (streq(flag_name, "fl_dharmanyo"))
+    if (mnsg_string_equal(flag_name, "fl_dharmanyo"))
     {
         state = &s_darumanyo_state;
         flag_id = DARUMANYO_KILL_FLAG;
@@ -474,7 +452,7 @@ int boss_sync_apply_remote_defeat(const char *flag_name)
         return 1;
     }
 
-    if (streq(flag_name, "fl_tsurami"))
+    if (mnsg_string_equal(flag_name, "fl_tsurami"))
     {
         state = &s_tsurami_state;
         boss = &s_tsurami;
@@ -512,7 +490,7 @@ int boss_sync_apply_remote_defeat(const char *flag_name)
         return 1;
     }
 
-    if (streq(flag_name, "fl_benkei"))
+    if (mnsg_string_equal(flag_name, "fl_benkei"))
     {
         state = &s_benkei_state;
         flag_id = BENKEI_KILL_FLAG;
@@ -557,7 +535,7 @@ int boss_sync_apply_remote_defeat(const char *flag_name)
         return 1;
     }
 
-    if (!streq(flag_name, "fl_congo_killed"))
+    if (!mnsg_string_equal(flag_name, "fl_congo_killed"))
         return 0;
     if (congo_remote_defeat_is_current())
         return 1;

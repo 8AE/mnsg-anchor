@@ -127,11 +127,23 @@ _race_config_json: str = ""
 
 DEFAULT_HOST: str = "anchor.hm64.org"
 DEFAULT_PORT: int = 43383
+ROOM_ID_PREFIX: str = "mnsg-"
+ROOM_ID_TRIM_CHARS: str = " \t\n\r\v\f"
 MOVEMENT_MIN_INTERVAL_MS: int = 50
 ANIMATION_RESTART_DELTA_100: int = 50
 APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
 APPEARANCE_MINI_EBISUMARU: int = 1 << 1
 APPEARANCE_MASK: int = APPEARANCE_SUDDEN_IMPACT | APPEARANCE_MINI_EBISUMARU
+
+
+def normalize_room_id(room_id: str) -> str:
+    """Return the private server room name for a user-facing MNSG room ID."""
+    visible_room_id = (room_id or "").strip(ROOM_ID_TRIM_CHARS)
+    if not visible_room_id:
+        return ""
+    if visible_room_id.startswith(ROOM_ID_PREFIX):
+        return visible_room_id if len(visible_room_id) > len(ROOM_ID_PREFIX) else ""
+    return ROOM_ID_PREFIX + visible_room_id
 
 
 def _appearance_flags_from_payload(payload: dict, current: int = 0) -> int:
@@ -588,7 +600,7 @@ def connect(
     Args:
         host:        Server hostname or IP. Use '' for the public default.
         port:        Server port. Use 0 for the public default (43383).
-        room_id:     The room to join (creates it if it doesn't exist).
+        room_id:     User-facing room name (creates it if it doesn't exist).
         player_name: Display name for this player.
         client_id:   Previous client ID for session resumption (0 = new session).
         team_id:     Team identifier within the room (default: "default").
@@ -601,11 +613,18 @@ def connect(
     global _last_position_appearance_flags
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
 
+    normalized_room_id = normalize_room_id(room_id)
+    if not normalized_room_id:
+        logger.warning("anchor_mnsg: room id is required; connection cancelled.")
+        return False
+
     if _connected:
         logger.info("anchor_mnsg: already connected.")
         return True
 
-    _room_id = room_id if room_id.startswith("mnsg_") else "mnsg_" + room_id
+    # The MNSG namespace is deliberately added only at the protocol boundary;
+    # connection screens and config continue to show the player's own value.
+    _room_id = normalized_room_id
     _team_id = team_id or "default"
     _player_name = player_name
     _client_id = client_id

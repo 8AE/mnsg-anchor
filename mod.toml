@@ -90,11 +90,11 @@ percent = false
 default = 43383
 
 [[manifest.config_options]]
-id = "anchor_room_id"
+id = "anchor_room_id_new"
 name = "Room ID (default)"
-description = "Default room ID pre-filled in the startup connection screen."
+description = "Private room name pre-filled in the connection screens. Share it only with the people you want to join."
 type = "String"
-default = "mnsg-recomp"
+default = ""
 
 [[manifest.config_options]]
 id = "anchor_player_name"
@@ -105,8 +105,8 @@ default = "Player"
 
 [[manifest.config_options]]
 id = "anchor_team_id"
-name = "Team ID (default)"
-description = "Default team ID pre-filled in the startup connection screen."
+name = "Team Name (default)"
+description = "Team name pre-filled in the connection screens. Players with the same team share and sync progression."
 type = "String"
 default = "default"
 

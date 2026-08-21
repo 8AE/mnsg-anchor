@@ -55,7 +55,7 @@ REPY_PREINIT_ADD_NRM_TO_ALL_INTERPRETERS;
      anchor_auto_connect  Enum  index 0 = "Enabled", 1 = "Disabled"
      anchor_host          String  server hostname / IP
      anchor_port          Number  TCP port (stored as double)
-     anchor_room_id       String  room to join
+     anchor_room_id_new       String  room to join
      anchor_player_name   String  display name
      anchor_team_id       String  team within the room
    ========================================================================= */

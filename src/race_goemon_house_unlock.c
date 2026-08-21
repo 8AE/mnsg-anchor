@@ -1,4 +1,5 @@
 #include "modding.h"
+#include "item_sync.h"
 
 /* Save-data base used by the race unlock check. SAVE_WARP_GOEMON_HOUSE at
  * +0x2a4 is the randomizer warp/unlock flag for Goemon's house. */
@@ -9,8 +10,6 @@ extern unsigned char D_8015C608_15D208[];
 extern signed short D_800C7AB2;
 
 int anchor_race_is_active(void);
-int item_sync_save_is_loaded(void);
-int item_sync_write_local_flag_val(const char *name, int val);
 void anchor_set_current_character_if_needed(void);
 
 #define SAVE_READ32(off) (*(int *)((char *)D_8015C608_15D208 + (off)))

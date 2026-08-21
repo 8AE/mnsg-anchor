@@ -4,6 +4,8 @@
 #include "recompui.h"
 #include "anchor.h"
 #include "anchor_runtime.h"
+#include "utils/room_utils.h"
+#include "utils/string_utils.h"
 
 static const RecompuiColor MP_BG = {8, 8, 12, 232};
 static const RecompuiColor MP_PANEL = {14, 14, 22, 255};
@@ -36,47 +38,6 @@ static int s_pending_back = 0;
 static int s_pending_connect = 0;
 static int s_launches_race = 0;
 
-static void int_to_str(int value, char *out)
-{
-    char tmp[12];
-    int len = 0;
-    if (value == 0)
-    {
-        out[0] = '0';
-        out[1] = '\0';
-        return;
-    }
-    if (value < 0)
-    {
-        *out++ = '-';
-        value = -value;
-    }
-    while (value)
-    {
-        tmp[len++] = '0' + (value % 10);
-        value /= 10;
-    }
-    for (int i = len - 1; i >= 0; i--)
-        *out++ = tmp[i];
-    *out = '\0';
-}
-
-static int str_to_int(const char *s, int fallback)
-{
-    if (!s || !*s)
-        return fallback;
-    int val = 0;
-    int neg = 0;
-    if (*s == '-')
-    {
-        neg = 1;
-        s++;
-    }
-    while (*s >= '0' && *s <= '9')
-        val = val * 10 + (*s++ - '0');
-    return neg ? -val : val;
-}
-
 static void make_field(RecompuiContext ctx, RecompuiResource parent,
                        const char *label_text, const char *default_text,
                        RecompuiResource *out)
@@ -89,6 +50,16 @@ static void make_field(RecompuiContext ctx, RecompuiResource parent,
     recompui_set_font_size(*out, 18.0f, UNIT_DP);
     recompui_set_max_width(*out, 100.0f, UNIT_PERCENT);
     recompui_set_input_text(*out, default_text);
+}
+
+static void make_field_hint(RecompuiContext ctx, RecompuiResource parent,
+                            const char *text)
+{
+    RecompuiResource hint = recompui_create_label(
+        ctx, parent, text, LABELSTYLE_SMALL);
+    recompui_set_color(hint, &MP_DIM);
+    recompui_set_font_size(hint, 13.0f, UNIT_DP);
+    recompui_set_max_width(hint, 100.0f, UNIT_PERCENT);
 }
 
 static void on_back_clicked(RecompuiResource res,
@@ -130,9 +101,17 @@ static void try_connect_from_ui(void)
     char *team_str = recompui_get_input_text(s_in_team);
     recompui_close_context(s_ctx);
 
-    int port = str_to_int(port_str, 43383);
+    int port = mnsg_string_to_s32(port_str, 43383);
     if (port <= 0 || port > 65535)
         port = 43383;
+
+    /* Keep an invalid submission local to this screen and preserve any live
+     * connection.  A blank room must never become a shared default. */
+    if (!mnsg_room_id_is_valid(room_str))
+    {
+        set_status_text("Enter a Room ID before connecting.", 0);
+        goto connect_cleanup;
+    }
 
     if (anchor_is_connected())
         anchor_disconnect();
@@ -140,7 +119,7 @@ static void try_connect_from_ui(void)
     int ok = anchor_connect(
         (host_str && host_str[0]) ? host_str : "anchor.hm64.org",
         port,
-        (room_str && room_str[0]) ? room_str : "mnsg-recomp",
+        room_str,
         (name_str && name_str[0]) ? name_str : "Player",
         0,
         (team_str && team_str[0]) ? team_str : "default");
@@ -162,6 +141,7 @@ static void try_connect_from_ui(void)
         set_status_text("Connection failed. Check address and port.", 0);
     }
 
+connect_cleanup:
     if (host_str)
         recomp_free(host_str);
     if (port_str)
@@ -181,7 +161,7 @@ static void multiplayer_ui_init(void)
     s_ui_built = 1;
 
     char *cfg_host = recomp_get_config_string("anchor_host");
-    char *cfg_room = recomp_get_config_string("anchor_room_id");
+    char *cfg_room = recomp_get_config_string("anchor_room_id_new");
     char *cfg_name = recomp_get_config_string("anchor_player_name");
     char *cfg_team = recomp_get_config_string("anchor_team_id");
 
@@ -190,7 +170,7 @@ static void multiplayer_ui_init(void)
         cfg_port = 43383;
 
     static char port_str[8];
-    int_to_str(cfg_port, port_str);
+    mnsg_string_write_s32(port_str, cfg_port);
     s_ctx = recompui_create_context();
     recompui_set_context_captures_input(s_ctx, 1);
     recompui_set_context_captures_mouse(s_ctx, 1);
@@ -264,7 +244,7 @@ static void multiplayer_ui_init(void)
         recompui_set_flex_grow(host_col, 1.0f);
         recompui_set_gap(host_col, 5.0f, UNIT_DP);
         make_field(s_ctx, host_col, "Server Address",
-                   (cfg_host && cfg_host[0]) ? cfg_host : "localhost", &s_in_host);
+                   (cfg_host && cfg_host[0]) ? cfg_host : "anchor.hm64.org", &s_in_host);
 
         RecompuiResource port_col = recompui_create_element(s_ctx, addr_row);
         recompui_set_display(port_col, DISPLAY_FLEX);
@@ -278,13 +258,17 @@ static void multiplayer_ui_init(void)
         recompui_set_flex_direction(room_col, FLEX_DIRECTION_COLUMN);
         recompui_set_gap(room_col, 5.0f, UNIT_DP);
         make_field(s_ctx, room_col, "Room ID",
-                   (cfg_room && cfg_room[0]) ? cfg_room : "mnsg-recomp", &s_in_room);
+                   cfg_room ? cfg_room : "", &s_in_room);
+        make_field_hint(
+            s_ctx, room_col,
+            "A private code for this session. Use a unique Room ID and share "
+            "it only with people you want to join.");
 
         RecompuiResource nt_row = recompui_create_element(s_ctx, body);
         recompui_set_display(nt_row, DISPLAY_FLEX);
         recompui_set_flex_direction(nt_row, FLEX_DIRECTION_ROW);
         recompui_set_gap(nt_row, 12.0f, UNIT_DP);
-        recompui_set_align_items(nt_row, ALIGN_ITEMS_FLEX_END);
+        recompui_set_align_items(nt_row, ALIGN_ITEMS_FLEX_START);
 
         RecompuiResource name_col = recompui_create_element(s_ctx, nt_row);
         recompui_set_display(name_col, DISPLAY_FLEX);
@@ -299,8 +283,11 @@ static void multiplayer_ui_init(void)
         recompui_set_flex_direction(team_col, FLEX_DIRECTION_COLUMN);
         recompui_set_flex_grow(team_col, 1.0f);
         recompui_set_gap(team_col, 5.0f, UNIT_DP);
-        make_field(s_ctx, team_col, "Team ID",
+        make_field(s_ctx, team_col, "Team Name",
                    (cfg_team && cfg_team[0]) ? cfg_team : "default", &s_in_team);
+        make_field_hint(
+            s_ctx, team_col,
+            "Players with the same Team Name share and sync game progression.");
 
         RecompuiResource status_row = recompui_create_element(s_ctx, body);
         recompui_set_padding(status_row, 12.0f, UNIT_DP);
@@ -309,7 +296,7 @@ static void multiplayer_ui_init(void)
         recompui_set_border_radius(status_row, 5.0f, UNIT_DP);
 
         s_status_lbl = recompui_create_label(
-            s_ctx, status_row, "Ready to connect.", LABELSTYLE_SMALL);
+            s_ctx, status_row, "Enter a Room ID to connect.", LABELSTYLE_SMALL);
         recompui_set_color(s_status_lbl, &MP_DIM);
         recompui_set_font_size(s_status_lbl, 15.0f, UNIT_DP);
 
@@ -374,7 +361,9 @@ void anchor_startup_multiplayer_frame_hook(void)
             recompui_set_text(s_title_lbl,
                               s_launches_race ? "Race: Connect Online" : "Multiplayer");
             recompui_set_text(s_status_lbl,
-                              s_launches_race ? "Connect before configuring the race." : "Ready to connect.");
+                              s_launches_race
+                                  ? "Enter a Room ID and connect before configuring the race."
+                                  : "Enter a Room ID to connect.");
             recompui_set_color(s_status_lbl, &MP_DIM);
             recompui_close_context(s_ctx);
             recompui_show_context(s_ctx);

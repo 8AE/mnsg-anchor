@@ -12,6 +12,7 @@
 #include "anchor.h"
 #include "anchor_nameplates.h"
 #include "anchor_player_models.h"
+#include "utils/string_utils.h"
 
 #define ANCHOR_REMOTE_MAX 25
 #define POSITION_SEND_FRAMES 6
@@ -129,27 +130,6 @@ static int s_lobby_refresh_timer;
 static const char *const s_char_names[4] = {
     "Goemon", "Ebisumaru", "Sasuke", "Yae"};
 
-static const char *sfind(const char *hay, const char *needle)
-{
-    if (!hay || !needle || !*needle)
-        return hay;
-
-    for (; *hay; ++hay)
-    {
-        const char *h = hay;
-        const char *n = needle;
-
-        while (*n && *h == *n)
-        {
-            ++h;
-            ++n;
-        }
-        if (!*n)
-            return hay;
-    }
-    return 0;
-}
-
 static unsigned char read_u8_at(const void *obj, unsigned int offset)
 {
     return *(const unsigned char *)((const unsigned char *)obj + offset);
@@ -193,7 +173,7 @@ void anchor_load_remote_cutscene_resources(void)
 
 static int parse_int_after(const char *obj, const char *key, int fallback)
 {
-    const char *p = sfind(obj, key);
+    const char *p = mnsg_string_find(obj, key);
     int sign = 1;
     int value = 0;
     int saw_digit = 0;
@@ -222,7 +202,7 @@ static int parse_int_after(const char *obj, const char *key, int fallback)
 
 static void parse_string_after(const char *obj, const char *key, char *out, int out_size)
 {
-    const char *p = sfind(obj, key);
+    const char *p = mnsg_string_find(obj, key);
     int n = 0;
 
     if (out_size <= 0)
@@ -257,7 +237,7 @@ static int parse_lobby_positions(const char *json)
     {
         int ch;
 
-        p = sfind(p, "{");
+        p = mnsg_string_find(p, "{");
         if (!p)
             break;
         s_remote_players[count].cid = parse_int_after(p, "\"cid\"", 0);
@@ -290,7 +270,7 @@ static int parse_lobby_positions(const char *json)
         }
         if (s_remote_players[count].cid > 0)
             count++;
-        p = sfind(p, "}");
+        p = mnsg_string_find(p, "}");
         if (p)
             ++p;
     }

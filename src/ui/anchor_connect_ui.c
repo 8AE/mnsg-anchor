@@ -24,6 +24,8 @@
 #include "recompui.h"
 #include "recompconfig.h"
 #include "anchor.h"
+#include "utils/room_utils.h"
+#include "utils/string_utils.h"
 
 /* =========================================================================
    Colour palette
@@ -81,52 +83,6 @@ static int s_pending_disconnect = 0;
 /* Pending status text and its colour indication (1=green / 0=red). */
 static const char *s_pending_status = 0;
 static int s_pending_status_ok = 0;
-
-/* =========================================================================
-   Utility: integer → decimal string (no stdlib required)
-   ========================================================================= */
-
-/** Write the decimal representation of @p value into @p out (max 10 chars + NUL). */
-static void int_to_str(int value, char *out)
-{
-    char tmp[12];
-    int len = 0;
-    if (value == 0)
-    {
-        out[0] = '0';
-        out[1] = '\0';
-        return;
-    }
-    if (value < 0)
-    {
-        *out++ = '-';
-        value = -value;
-    }
-    while (value)
-    {
-        tmp[len++] = '0' + (value % 10);
-        value /= 10;
-    }
-    for (int i = len - 1; i >= 0; i--)
-        *out++ = tmp[i];
-    *out = '\0';
-}
-
-/** Parse a decimal string to int; returns @p fallback on empty/invalid input. */
-static int str_to_int(const char *s, int fallback)
-{
-    if (!s || !*s)
-        return fallback;
-    int val = 0, neg = 0;
-    if (*s == '-')
-    {
-        neg = 1;
-        s++;
-    }
-    while (*s >= '0' && *s <= '9')
-        val = val * 10 + (*s++ - '0');
-    return neg ? -val : val;
-}
 
 /* =========================================================================
    Callbacks  (flag-setters only – no context API calls inside)
@@ -206,11 +162,21 @@ static void make_field(RecompuiContext ctx, RecompuiResource parent,
     recompui_set_input_text(*out, default_text);
 }
 
+static void make_field_hint(RecompuiContext ctx, RecompuiResource parent,
+                            const char *text)
+{
+    RecompuiResource hint = recompui_create_label(
+        ctx, parent, text, LABELSTYLE_SMALL);
+    recompui_set_color(hint, &CC_DIM);
+    recompui_set_font_size(hint, 13.0f, UNIT_DP);
+    recompui_set_max_width(hint, 100.0f, UNIT_PERCENT);
+}
+
 static void connect_ui_init(void)
 {
     /* ── Read mod-config defaults for input pre-population ─────────── */
     char *cfg_host = recomp_get_config_string("anchor_host");
-    char *cfg_room = recomp_get_config_string("anchor_room_id");
+    char *cfg_room = recomp_get_config_string("anchor_room_id_new");
     char *cfg_name = recomp_get_config_string("anchor_player_name");
     char *cfg_team = recomp_get_config_string("anchor_team_id");
 
@@ -219,7 +185,7 @@ static void connect_ui_init(void)
         cfg_port = 43383;
 
     static char port_str[8];
-    int_to_str(cfg_port, port_str);
+    mnsg_string_write_s32(port_str, cfg_port);
 
     /* ── Connection-setup modal ─────────────────────────────────────── */
     s_modal_ctx = recompui_create_context();
@@ -306,7 +272,7 @@ static void connect_ui_init(void)
         RecompuiResource desc = recompui_create_label(
             s_modal_ctx, body,
             "Connect to an Anchor server to sync items & flags with teammates.\n"
-            "Leave fields at their defaults or enter your own server details.",
+            "Enter a private Room ID, then review the remaining settings.",
             LABELSTYLE_SMALL);
         recompui_set_color(desc, &CC_DIM);
         recompui_set_font_size(desc, 15.0f, UNIT_DP);
@@ -332,7 +298,7 @@ static void connect_ui_init(void)
         recompui_set_flex_grow(addr_col, 1.0f);
         recompui_set_gap(addr_col, 4.0f, UNIT_DP);
         make_field(s_modal_ctx, addr_col, "Server Address",
-                   (cfg_host && cfg_host[0]) ? cfg_host : "localhost",
+                   (cfg_host && cfg_host[0]) ? cfg_host : "anchor.hm64.org",
                    &s_in_host);
 
         /* Port column (fixed 100 dp). */
@@ -349,15 +315,19 @@ static void connect_ui_init(void)
         recompui_set_flex_direction(room_col, FLEX_DIRECTION_COLUMN);
         recompui_set_gap(room_col, 4.0f, UNIT_DP);
         make_field(s_modal_ctx, room_col, "Room ID",
-                   (cfg_room && cfg_room[0]) ? cfg_room : "mnsg-recomp",
+                   cfg_room ? cfg_room : "",
                    &s_in_room);
+        make_field_hint(
+            s_modal_ctx, room_col,
+            "A private code for this session. Use a unique Room ID and share "
+            "it only with people you want to join.");
 
-        /* Two-column row: Player Name (left) + Team ID (right). */
+        /* Two-column row: Player Name (left) + Team Name (right). */
         RecompuiResource nt_row = recompui_create_element(s_modal_ctx, fields_wrap);
         recompui_set_display(nt_row, DISPLAY_FLEX);
         recompui_set_flex_direction(nt_row, FLEX_DIRECTION_ROW);
         recompui_set_gap(nt_row, 12.0f, UNIT_DP);
-        recompui_set_align_items(nt_row, ALIGN_ITEMS_FLEX_END);
+        recompui_set_align_items(nt_row, ALIGN_ITEMS_FLEX_START);
 
         RecompuiResource name_col = recompui_create_element(s_modal_ctx, nt_row);
         recompui_set_display(name_col, DISPLAY_FLEX);
@@ -373,9 +343,12 @@ static void connect_ui_init(void)
         recompui_set_flex_direction(team_col, FLEX_DIRECTION_COLUMN);
         recompui_set_flex_grow(team_col, 1.0f);
         recompui_set_gap(team_col, 4.0f, UNIT_DP);
-        make_field(s_modal_ctx, team_col, "Team ID",
+        make_field(s_modal_ctx, team_col, "Team Name",
                    (cfg_team && cfg_team[0]) ? cfg_team : "default",
                    &s_in_team);
+        make_field_hint(
+            s_modal_ctx, team_col,
+            "Players with the same Team Name share and sync game progression.");
 
         /* ── Lock overlay: covers all fields when connected ─────────── */
         s_fields_overlay = recompui_create_element(s_modal_ctx, fields_wrap);
@@ -401,7 +374,7 @@ static void connect_ui_init(void)
 
         s_status_lbl = recompui_create_label(
             s_modal_ctx, status_row,
-            "Fill in the settings above and click Connect, or click Skip to play offline.",
+            "Enter a Room ID and click Connect, or click Skip to play offline.",
             LABELSTYLE_SMALL);
         recompui_set_color(s_status_lbl, &CC_DIM);
         recompui_set_font_size(s_status_lbl, 15.0f, UNIT_DP);
@@ -517,9 +490,18 @@ void anchor_connect_ui_frame_hook(void)
         char *team_str = recompui_get_input_text(s_in_team);
         recompui_close_context(s_modal_ctx);
 
-        int port = str_to_int(port_str, 43383);
+        int port = mnsg_string_to_s32(port_str, 43383);
         if (port <= 0 || port > 65535)
             port = 43383;
+
+        /* Never collapse an empty field into a shared fallback room.  Check
+         * before disconnecting so a typo cannot drop a live session. */
+        if (!mnsg_room_id_is_valid(room_str))
+        {
+            s_pending_status = "Enter a Room ID before connecting.";
+            s_pending_status_ok = 0;
+            goto connect_cleanup;
+        }
 
         /* Disconnect first if already connected. */
         if (anchor_is_connected())
@@ -528,7 +510,7 @@ void anchor_connect_ui_frame_hook(void)
         int ok = anchor_connect(
             (host_str && host_str[0]) ? host_str : "anchor.hm64.org",
             port,
-            (room_str && room_str[0]) ? room_str : "mnsg-recomp",
+            room_str,
             (name_str && name_str[0]) ? name_str : "Player",
             0, /* client_id = 0 → let the server assign one */
             (team_str && team_str[0]) ? team_str : "default");
@@ -545,6 +527,7 @@ void anchor_connect_ui_frame_hook(void)
             s_pending_status_ok = 0;
         }
 
+    connect_cleanup:
         if (host_str)
             recomp_free(host_str);
         if (port_str)
@@ -604,7 +587,8 @@ void anchor_connect_ui_frame_hook(void)
             else
             {
                 recompui_set_text(s_status_lbl,
-                                  "Not connected. Update settings and click Connect, or close to stay offline.");
+                                  "Not connected. Enter a Room ID and click "
+                                  "Connect, or close to stay offline.");
                 recompui_set_color(s_status_lbl, &CC_DIM);
             }
             recompui_close_context(s_modal_ctx);

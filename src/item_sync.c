@@ -35,6 +35,9 @@
 #include "anchor_runtime.h"
 #include "anchor_flag_catalog.h"
 #include "boss_sync.h"
+#include "item_sync.h"
+#include "utils/json_utils.h"
+#include "utils/string_utils.h"
 
 void anchor_race_on_flag_synced(const char *flag_name, int flag_value);
 void anchor_race_on_remote_flag_synced(const char *flag_name, int flag_value);
@@ -80,207 +83,6 @@ static int save_is_loaded(void)
 int item_sync_save_is_loaded(void)
 {
     return save_is_loaded();
-}
-
-/* =========================================================================
-   Minimal string / JSON helpers  (no <string.h> / <stdio.h> required)
-   ========================================================================= */
-
-/** Locate the first occurrence of `needle` in `hay`; NULL if not found. */
-static const char *sfind(const char *hay, const char *needle)
-{
-    if (!needle || !*needle)
-        return hay;
-    for (; *hay; ++hay)
-    {
-        const char *h = hay, *n = needle;
-        while (*n && *h == *n)
-        {
-            ++h;
-            ++n;
-        }
-        if (!*n)
-            return hay;
-    }
-    return 0;
-}
-
-/**
- * Parse a leading decimal integer (with optional minus sign) pointed to by
- * *sp.  Advances *sp past the digits.  Returns 1 on success, 0 on failure.
- */
-static int parse_int(const char **sp, signed int *out)
-{
-    const char *p = *sp;
-    signed int sign = 1, v = 0;
-    if (*p == '-')
-    {
-        sign = -1;
-        ++p;
-    }
-    if (*p < '0' || *p > '9')
-        return 0;
-    while (*p >= '0' && *p <= '9')
-        v = v * 10 + (*p++ - '0');
-    *sp = p;
-    *out = sign * v;
-    return 1;
-}
-
-/**
- * Check whether the packet type field equals `target`.
- * Matches: "type":"TARGET"
- */
-static int is_packet_type(const char *json, const char *target)
-{
-    const char *pos = sfind(json, "\"type\":\"");
-    if (!pos)
-        return 0;
-    pos += 8;
-    const char *t = target;
-    while (*t && *pos == *t)
-    {
-        ++pos;
-        ++t;
-    }
-    return !*t && *pos == '"';
-}
-
-/**
- * Extract the string value of `"flag":"..."` into buf[buf_len].
- * Returns 1 on success.
- */
-static int get_flag_name(const char *json, char *buf, int buf_len)
-{
-    const char *pos = sfind(json, "\"flag\":\"");
-    if (!pos)
-        return 0;
-    pos += 8;
-    int i = 0;
-    while (*pos && *pos != '"' && i < buf_len - 1)
-        buf[i++] = *pos++;
-    buf[i] = '\0';
-    return i > 0;
-}
-
-/**
- * Extract the integer value of `"value":N` from a JSON packet string.
- * Returns 1 on success.
- */
-static int get_flag_value(const char *json, signed int *out)
-{
-    const char *pos = sfind(json, "\"value\":");
-    if (!pos)
-        return 0;
-    pos += 8;
-    while (*pos == ' ')
-        ++pos;
-    return parse_int(&pos, out);
-}
-
-/** Extract and validate the raw 16-bit game room in a live door event. */
-static int get_door_room_id(const char *json, unsigned short *out)
-{
-    const char *pos = sfind(json, "\"roomId\":");
-    signed int value;
-
-    if (!pos)
-        return 0;
-    pos += 9;
-    while (*pos == ' ')
-        ++pos;
-    if (!parse_int(&pos, &value) || value < 0 || value > 0xFFFF)
-        return 0;
-
-    *out = (unsigned short)value;
-    return 1;
-}
-
-/**
- * Extract the integer value of `"damage":N` from a DAMAGE_SYNC packet string.
- * Returns 1 on success.
- */
-static int get_ds_damage(const char *json, signed int *out)
-{
-    const char *pos = sfind(json, "\"damage\":");
-    if (!pos)
-        return 0;
-    pos += 9;
-    while (*pos == ' ')
-        ++pos;
-    return parse_int(&pos, out);
-}
-
-/**
- * Extract the integer value of `"heal":N` from a HEAL_SYNC packet string.
- * Returns 1 on success.
- */
-static int get_ds_heal(const char *json, signed int *out)
-{
-    const char *pos = sfind(json, "\"heal\":");
-    if (!pos)
-        return 0;
-    pos += 7;
-    while (*pos == ' ')
-        ++pos;
-    return parse_int(&pos, out);
-}
-
-/**
- * Extract the integer value of `"ryo":N` from a RYO_SYNC packet string.
- * Returns 1 on success.
- */
-static int get_ds_ryo(const char *json, signed int *out)
-{
-    const char *pos = sfind(json, "\"ryo\":");
-    if (!pos)
-        return 0;
-    pos += 6;
-    while (*pos == ' ')
-        ++pos;
-    return parse_int(&pos, out);
-}
-
-/* Append a signed decimal integer and return the first unwritten byte. */
-static char *append_signed_decimal(char *out, signed int value)
-{
-    char digits[10];
-    int count = 0;
-    unsigned int magnitude;
-
-    if (value < 0)
-    {
-        *out++ = '-';
-        magnitude = 0u - (unsigned int)value;
-    }
-    else
-    {
-        magnitude = (unsigned int)value;
-    }
-
-    do
-    {
-        digits[count++] = (char)('0' + (magnitude % 10u));
-        magnitude /= 10u;
-    } while (magnitude != 0u);
-
-    while (count-- > 0)
-        *out++ = digits[count];
-    return out;
-}
-
-/**
- * Compare two null-terminated strings for equality.
- * Returns 1 if equal, 0 otherwise.
- */
-static int streq(const char *a, const char *b)
-{
-    while (*a && *b && *a == *b)
-    {
-        ++a;
-        ++b;
-    }
-    return *a == *b;
 }
 
 /* =========================================================================
@@ -814,40 +616,30 @@ static unsigned char s_door_pending_flags[NUM_FLAGS];
 static unsigned short s_door_pending_room;
 static unsigned char s_door_pending_room_valid;
 
-static int visual_name_has_prefix(const char *name, const char *prefix)
-{
-    while (*prefix)
-    {
-        if (*name++ != *prefix++)
-            return 0;
-    }
-    return 1;
-}
-
 static int is_door_unlock_flag(int index)
 {
     return index >= 0 && index < NUM_FLAGS &&
-           visual_name_has_prefix(s_flag_bits[index].name, "lk_");
+           mnsg_string_starts_with(s_flag_bits[index].name, "lk_");
 }
 
 static int is_door_unlock_name(const char *name)
 {
-    return name && visual_name_has_prefix(name, "lk_");
+    return mnsg_string_starts_with(name, "lk_");
 }
 
 static int is_visual_collectible_field(int index)
 {
     const char *name = s_fields[index].name;
-    return visual_name_has_prefix(name, "mr_ely_") ||
-           visual_name_has_prefix(name, "mr_arr_");
+    return mnsg_string_starts_with(name, "mr_ely_") ||
+           mnsg_string_starts_with(name, "mr_arr_");
 }
 
 static int is_visual_collectible_flag(int index)
 {
     const char *name = s_flag_bits[index].name;
-    return visual_name_has_prefix(name, "ky_") ||
-           visual_name_has_prefix(name, "sd_") ||
-           visual_name_has_prefix(name, "gd_");
+    return mnsg_string_starts_with(name, "ky_") ||
+           mnsg_string_starts_with(name, "sd_") ||
+           mnsg_string_starts_with(name, "gd_");
 }
 
 static void clear_visual_collectible_pending(void)
@@ -898,7 +690,7 @@ static int consume_visual_collectible_flag(unsigned short flag_id,
     {
         if (!s_visual_pending_flags[i] ||
             s_flag_bits[i].id != flag_id ||
-            !visual_name_has_prefix(s_flag_bits[i].name, prefix))
+            !mnsg_string_starts_with(s_flag_bits[i].name, prefix))
             continue;
 
         s_visual_pending_flags[i] = 0;
@@ -1113,39 +905,18 @@ static int send_door_unlock_event(const char *flag_name,
                                   unsigned short source_room)
 {
     char payload[80];
-    char *wp = payload;
+    MnsgJsonObjectWriter writer;
     char *team_id;
     int sent;
-    const char *name = flag_name;
 
     if (!is_door_unlock_name(flag_name))
         return 0;
 
-    *wp++ = '{';
-    *wp++ = '"';
-    *wp++ = 'f';
-    *wp++ = 'l';
-    *wp++ = 'a';
-    *wp++ = 'g';
-    *wp++ = '"';
-    *wp++ = ':';
-    *wp++ = '"';
-    while (*name && wp < payload + sizeof(payload) - 24)
-        *wp++ = *name++;
-    *wp++ = '"';
-    *wp++ = ',';
-    *wp++ = '"';
-    *wp++ = 'r';
-    *wp++ = 'o';
-    *wp++ = 'o';
-    *wp++ = 'm';
-    *wp++ = 'I';
-    *wp++ = 'd';
-    *wp++ = '"';
-    *wp++ = ':';
-    wp = append_signed_decimal(wp, (signed int)source_room);
-    *wp++ = '}';
-    *wp = '\0';
+    mnsg_json_writer_begin(&writer, payload, (unsigned int)sizeof(payload));
+    if (!mnsg_json_writer_add_string(&writer, "flag", flag_name) ||
+        !mnsg_json_writer_add_s32(&writer, "roomId", (signed int)source_room) ||
+        !mnsg_json_writer_finish(&writer))
+        return 0;
 
     team_id = anchor_get_team_id();
     if (!team_id || !team_id[0])
@@ -1566,7 +1337,7 @@ static const char *apply_flag(const char *flag_name, signed int val)
     /* Check 32-bit save-data fields. */
     for (i = 0; i < NUM_FIELDS; ++i)
     {
-        if (!streq(s_fields[i].name, flag_name))
+        if (!mnsg_string_equal(s_fields[i].name, flag_name))
             continue;
 
         signed int cur = SAVE_READ32(s_fields[i].off);
@@ -1603,7 +1374,7 @@ static const char *apply_flag(const char *flag_name, signed int val)
     /* Check single-bit flags. */
     for (i = 0; i < NUM_FLAGS; ++i)
     {
-        if (!streq(s_flag_bits[i].name, flag_name))
+        if (!mnsg_string_equal(s_flag_bits[i].name, flag_name))
             continue;
 
         /* 0x033 alone only changes scenario 0x30C's dialogue.  Pair the
@@ -1611,7 +1382,7 @@ static const char *apply_flag(const char *flag_name, signed int val)
          * completion builds the interaction at Benkei rather than leaving
          * the challenge trigger at the bridge entrance.  This also heals a
          * save produced by an older build even when 0x033 is already set. */
-        if (val && streq(flag_name, "fl_benkei"))
+        if (val && mnsg_string_equal(flag_name, "fl_benkei"))
             item_sync_apply_benkei_postfight_state();
 
         if (val)
@@ -1643,7 +1414,7 @@ static const char *apply_flag(const char *flag_name, signed int val)
  * commits this deferred value after the scene has performed its increment. */
 static const char *apply_incoming_value(const char *flag_name, signed int val)
 {
-    if (streq(flag_name, "sasuke_body") && val > SAVE_READ32(0x260) &&
+    if (mnsg_string_equal(flag_name, "sasuke_body") && val > SAVE_READ32(0x260) &&
         boss_sync_has_active_encounter("fl_benkei"))
     {
         if (val > s_pending_benkei_sasuke_profile)
@@ -1660,7 +1431,7 @@ static int sync_flag_index(const char *flag_name)
     int i;
     for (i = 0; i < NUM_FLAGS; ++i)
     {
-        if (streq(s_flag_bits[i].name, flag_name))
+        if (mnsg_string_equal(s_flag_bits[i].name, flag_name))
             return i;
     }
     return -1;
@@ -1704,7 +1475,7 @@ void item_sync_commit_boss_completion(const char *flag_name)
         return;
 
     apply_flag(flag_name, 1);
-    if (streq(flag_name, "fl_benkei") && s_pending_benkei_sasuke_profile >= 0)
+    if (mnsg_string_equal(flag_name, "fl_benkei") && s_pending_benkei_sasuke_profile >= 0)
     {
         profile_display = apply_flag("sasuke_body",
                                      s_pending_benkei_sasuke_profile);
@@ -1805,31 +1576,6 @@ static void apply_pending_boss_flags(void)
     }
 }
 
-static int get_team_state_value(const char *json, const char *name, signed int *out)
-{
-    char quoted_name[32];
-    char *wp = quoted_name;
-    const char *pos;
-
-    *wp++ = '"';
-    while (*name && wp < quoted_name + sizeof(quoted_name) - 2)
-        *wp++ = *name++;
-    *wp++ = '"';
-    *wp = '\0';
-
-    pos = sfind(json, quoted_name);
-    if (!pos)
-        return 0;
-    while (*pos && *pos != ':')
-        ++pos;
-    if (*pos != ':')
-        return 0;
-    ++pos;
-    while (*pos == ' ' || *pos == '\t')
-        ++pos;
-    return parse_int(&pos, out);
-}
-
 /* Apply one compact UPDATE_TEAM_STATE snapshot. Queued SET_FLAG deltas are
  * expanded by Python and arrive immediately after this packet. */
 static void apply_team_state(const char *json)
@@ -1840,7 +1586,7 @@ static void apply_team_state(const char *json)
 
     for (i = 0; i < NUM_FIELDS; ++i)
     {
-        if (get_team_state_value(json, s_fields[i].name, &value))
+        if (mnsg_json_get_s32(json, s_fields[i].name, &value))
         {
             if (apply_incoming_value(s_fields[i].name, value))
                 applied++;
@@ -1848,7 +1594,7 @@ static void apply_team_state(const char *json)
     }
     for (i = 0; i < NUM_FLAGS; ++i)
     {
-        if (get_team_state_value(json, s_flag_bits[i].name, &value))
+        if (mnsg_json_get_s32(json, s_flag_bits[i].name, &value))
         {
             const char *display =
                 apply_incoming_flag(s_flag_bits[i].name, value);
@@ -1879,14 +1625,10 @@ static void apply_team_state(const char *json)
  */
 static unsigned int get_packet_client_id(const char *json)
 {
-    const char *pos = sfind(json, "\"clientId\":");
-    if (!pos)
-        return 0;
-    pos += 11;
-    while (*pos == ' ')
-        ++pos;
-    signed int v = 0;
-    return parse_int(&pos, &v) ? (unsigned int)v : 0u;
+    unsigned int client_id = 0;
+
+    mnsg_json_get_u32(json, "clientId", &client_id);
+    return client_id;
 }
 
 /**
@@ -1914,12 +1656,13 @@ static void process_incoming_packets(void)
             break;
         ++processed;
 
-        if (is_packet_type(pkt, "SET_FLAG"))
+        if (mnsg_json_string_equals(pkt, "type", "SET_FLAG"))
         {
             char fname[32];
             signed int fval = 0;
-            if (get_flag_name(pkt, fname, (int)sizeof(fname)) &&
-                get_flag_value(pkt, &fval))
+            if (mnsg_json_get_string(pkt, "flag", fname,
+                                     (unsigned int)sizeof(fname)) &&
+                fname[0] && mnsg_json_get_s32(pkt, "value", &fval))
             {
                 int index = sync_flag_index(fname);
                 const char *display = apply_incoming_flag(fname, fval);
@@ -1942,7 +1685,7 @@ static void process_incoming_packets(void)
                     item_notif_push("Received from team", display);
             }
         }
-        else if (is_packet_type(pkt, "MNSG_DOOR_UNLOCK"))
+        else if (mnsg_json_string_equals(pkt, "type", "MNSG_DOOR_UNLOCK"))
         {
             char fname[32];
             unsigned short source_room;
@@ -1952,8 +1695,9 @@ static void process_incoming_packets(void)
              * this room.  Only a live event with the exact source room may
              * animate an already-instantiated lock on this client. */
             if ((own_id == 0 || sender == 0 || sender != own_id) &&
-                get_flag_name(pkt, fname, (int)sizeof(fname)) &&
-                get_door_room_id(pkt, &source_room) &&
+                mnsg_json_get_string(pkt, "flag", fname,
+                                     (unsigned int)sizeof(fname)) &&
+                fname[0] && mnsg_json_get_u16(pkt, "roomId", &source_room) &&
                 source_room == D_800C7AB2)
             {
                 int index = sync_flag_index(fname);
@@ -1970,7 +1714,7 @@ static void process_incoming_packets(void)
                 }
             }
         }
-        else if (is_packet_type(pkt, "MNSG_BOSS_DEFEAT"))
+        else if (mnsg_json_string_equals(pkt, "type", "MNSG_BOSS_DEFEAT"))
         {
             char fname[32];
             unsigned int sender = get_packet_client_id(pkt);
@@ -1978,7 +1722,9 @@ static void process_incoming_packets(void)
             /* Some Anchor servers echo team packets to the sender.  Never run
              * the native transition twice on the client that won the fight. */
             if ((own_id == 0 || sender == 0 || sender != own_id) &&
-                get_flag_name(pkt, fname, (int)sizeof(fname)))
+                mnsg_json_get_string(pkt, "flag", fname,
+                                     (unsigned int)sizeof(fname)) &&
+                fname[0])
             {
                 int index = sync_flag_index(fname);
                 /* Do not gate the live transition on the durable bit.  A save
@@ -1996,15 +1742,15 @@ static void process_incoming_packets(void)
                 }
             }
         }
-        else if (is_packet_type(pkt, "UPDATE_TEAM_STATE"))
+        else if (mnsg_json_string_equals(pkt, "type", "UPDATE_TEAM_STATE"))
         {
             apply_team_state(pkt);
         }
-        else if (is_packet_type(pkt, "MNSG_TEAM_STATE"))
+        else if (mnsg_json_string_equals(pkt, "type", "MNSG_TEAM_STATE"))
         {
             apply_team_state(pkt);
         }
-        else if (is_packet_type(pkt, "REQUEST_TEAM_STATE"))
+        else if (mnsg_json_string_equals(pkt, "type", "REQUEST_TEAM_STATE"))
         {
             unsigned int requester = get_packet_client_id(pkt);
             /* Skip own requests (shouldn't normally arrive, but be safe). */
@@ -2017,11 +1763,12 @@ static void process_incoming_packets(void)
                 s_push_cooldown = PUSH_COOLDOWN_FRAMES;
             }
         }
-        else if (is_packet_type(pkt, "DAMAGE_SYNC"))
+        else if (mnsg_json_string_equals(pkt, "type", "DAMAGE_SYNC"))
         {
             signed int dmg = 0;
             if (anchor_race_is_active() && anchor_runtime_damage_sync_enabled() &&
-                get_ds_damage(pkt, &dmg) && dmg > 0 && save_is_loaded())
+                mnsg_json_get_s32(pkt, "damage", &dmg) &&
+                dmg > 0 && save_is_loaded())
             {
                 unsigned char cur_hp = DS_HP_READ();
                 if (cur_hp > 0)
@@ -2040,11 +1787,12 @@ static void process_incoming_packets(void)
                 }
             }
         }
-        else if (is_packet_type(pkt, "HEAL_SYNC"))
+        else if (mnsg_json_string_equals(pkt, "type", "HEAL_SYNC"))
         {
             signed int heal = 0;
             if (anchor_race_is_active() && anchor_runtime_damage_sync_enabled() &&
-                get_ds_heal(pkt, &heal) && heal > 0 && save_is_loaded())
+                mnsg_json_get_s32(pkt, "heal", &heal) &&
+                heal > 0 && save_is_loaded())
             {
                 unsigned char cur_hp = DS_HP_READ();
                 signed int hp_max = SAVE_READ32(SAVE_HP_MAX_OFFSET);
@@ -2061,11 +1809,12 @@ static void process_incoming_packets(void)
                 }
             }
         }
-        else if (is_packet_type(pkt, "RYO_SYNC"))
+        else if (mnsg_json_string_equals(pkt, "type", "RYO_SYNC"))
         {
             signed int delta = 0;
             if (anchor_race_is_active() && anchor_runtime_ryo_sync_enabled() &&
-                get_ds_ryo(pkt, &delta) && delta != 0 && save_is_loaded())
+                mnsg_json_get_s32(pkt, "ryo", &delta) &&
+                delta != 0 && save_is_loaded())
             {
                 signed int cur_ryo = DS_RYO_READ();
                 signed int new_ryo = cur_ryo + delta;
@@ -2078,7 +1827,7 @@ static void process_incoming_packets(void)
                               (int)delta, (int)cur_ryo, (int)new_ryo);
             }
         }
-        else if (is_packet_type(pkt, "MNSG_RACE_FINISH"))
+        else if (mnsg_json_string_equals(pkt, "type", "MNSG_RACE_FINISH"))
         {
             anchor_race_on_finish_packet(pkt);
         }
@@ -2096,69 +1845,27 @@ static void process_incoming_packets(void)
    Outgoing – compact team-state snapshot
    ========================================================================= */
 
-static int team_state_append_char(char **wp, char *end, char c)
-{
-    if (*wp >= end - 1)
-        return 0;
-    *(*wp)++ = c;
-    return 1;
-}
-
-static int team_state_append_text(char **wp, char *end, const char *text)
-{
-    while (*text)
-    {
-        if (!team_state_append_char(wp, end, *text++))
-            return 0;
-    }
-    return 1;
-}
-
-static int team_state_append_entry(char **wp, char *end, const char *name,
-                                   signed int value, int *wrote_entry)
-{
-    char value_text[12];
-    char *value_end = append_signed_decimal(value_text, value);
-
-    *value_end = '\0';
-    if (*wrote_entry && !team_state_append_char(wp, end, ','))
-        return 0;
-    if (!team_state_append_char(wp, end, '"') ||
-        !team_state_append_text(wp, end, name) ||
-        !team_state_append_char(wp, end, '"') ||
-        !team_state_append_char(wp, end, ':') ||
-        !team_state_append_text(wp, end, value_text))
-        return 0;
-    *wrote_entry = 1;
-    return 1;
-}
-
 static int build_team_state_json(void)
 {
-    char *wp = s_team_state_json;
-    char *end = s_team_state_json + TEAM_STATE_JSON_MAX;
-    int wrote_entry = 0;
+    MnsgJsonObjectWriter writer;
     int i;
 
-    if (!team_state_append_char(&wp, end, '{'))
-        return 0;
+    mnsg_json_writer_begin(&writer, s_team_state_json,
+                           (unsigned int)sizeof(s_team_state_json));
     for (i = 0; i < NUM_FIELDS; ++i)
     {
         signed int value = SAVE_READ32(s_fields[i].off);
         if (value != 0 &&
-            !team_state_append_entry(&wp, end, s_fields[i].name, value, &wrote_entry))
+            !mnsg_json_writer_add_s32(&writer, s_fields[i].name, value))
             return 0;
     }
     for (i = 0; i < NUM_FLAGS; ++i)
     {
         if (FLAG_IS_SET(s_flag_bits[i].id) &&
-            !team_state_append_entry(&wp, end, s_flag_bits[i].name, 1, &wrote_entry))
+            !mnsg_json_writer_add_s32(&writer, s_flag_bits[i].name, 1))
             return 0;
     }
-    if (!team_state_append_char(&wp, end, '}'))
-        return 0;
-    *wp = '\0';
-    return 1;
+    return mnsg_json_writer_finish(&writer);
 }
 
 /* Share this client's merged state once after load/reconnect. This preserves
@@ -2533,30 +2240,18 @@ void item_sync_update(void)
             if (is_connected && race_challenges_active &&
                 anchor_runtime_damage_sync_enabled())
             {
-                /* Build JSON payload {"damage":N} without printf.          */
                 char ds_payload[20];
-                char *wp = ds_payload;
-                *wp++ = '{';
-                *wp++ = '"';
-                *wp++ = 'd';
-                *wp++ = 'a';
-                *wp++ = 'm';
-                *wp++ = 'a';
-                *wp++ = 'g';
-                *wp++ = 'e';
-                *wp++ = '"';
-                *wp++ = ':';
-                if (damage >= 100)
-                    *wp++ = (char)('0' + damage / 100);
-                if (damage >= 10)
-                    *wp++ = (char)('0' + (damage / 10) % 10);
-                *wp++ = (char)('0' + damage % 10);
-                *wp++ = '}';
-                *wp = '\0';
+                MnsgJsonObjectWriter writer;
 
-                anchor_send_custom_packet("DAMAGE_SYNC", ds_payload, "", 0, 0);
-                recomp_printf("[DamageSync] Sent damage=%d to team (HP: %d -> %d)\n",
-                              (int)damage, (int)s_ds_prev_hp, (int)ds_cur_hp);
+                mnsg_json_writer_begin(&writer, ds_payload,
+                                       (unsigned int)sizeof(ds_payload));
+                if (mnsg_json_writer_add_s32(&writer, "damage", (signed int)damage) &&
+                    mnsg_json_writer_finish(&writer))
+                {
+                    anchor_send_custom_packet("DAMAGE_SYNC", ds_payload, "", 0, 0);
+                    recomp_printf("[DamageSync] Sent damage=%d to team (HP: %d -> %d)\n",
+                                  (int)damage, (int)s_ds_prev_hp, (int)ds_cur_hp);
+                }
             }
             s_ds_prev_hp = ds_cur_hp;
         }
@@ -2567,28 +2262,18 @@ void item_sync_update(void)
 
             if (race_challenges_active && anchor_runtime_damage_sync_enabled())
             {
-                /* Build JSON payload {"heal":N} without printf.            */
                 char hs_payload[18];
-                char *wp = hs_payload;
-                *wp++ = '{';
-                *wp++ = '"';
-                *wp++ = 'h';
-                *wp++ = 'e';
-                *wp++ = 'a';
-                *wp++ = 'l';
-                *wp++ = '"';
-                *wp++ = ':';
-                if (healed >= 100)
-                    *wp++ = (char)('0' + healed / 100);
-                if (healed >= 10)
-                    *wp++ = (char)('0' + (healed / 10) % 10);
-                *wp++ = (char)('0' + healed % 10);
-                *wp++ = '}';
-                *wp = '\0';
+                MnsgJsonObjectWriter writer;
 
-                anchor_send_custom_packet("HEAL_SYNC", hs_payload, "", 0, 0);
-                recomp_printf("[HealSync] Sent heal=%d to team (HP: %d -> %d)\n",
-                              (int)healed, (int)s_ds_prev_hp, (int)ds_cur_hp);
+                mnsg_json_writer_begin(&writer, hs_payload,
+                                       (unsigned int)sizeof(hs_payload));
+                if (mnsg_json_writer_add_s32(&writer, "heal", (signed int)healed) &&
+                    mnsg_json_writer_finish(&writer))
+                {
+                    anchor_send_custom_packet("HEAL_SYNC", hs_payload, "", 0, 0);
+                    recomp_printf("[HealSync] Sent heal=%d to team (HP: %d -> %d)\n",
+                                  (int)healed, (int)s_ds_prev_hp, (int)ds_cur_hp);
+                }
             }
             s_ds_prev_hp = ds_cur_hp;
         }
@@ -2617,24 +2302,18 @@ void item_sync_update(void)
         else if (ryo_cur != s_ryo_prev && is_connected)
         {
             signed int delta = ryo_cur - s_ryo_prev;
-
-            /* Build JSON payload {"ryo":N} without printf.                 */
             char ryo_payload[24];
-            char *wp = ryo_payload;
-            *wp++ = '{';
-            *wp++ = '"';
-            *wp++ = 'r';
-            *wp++ = 'y';
-            *wp++ = 'o';
-            *wp++ = '"';
-            *wp++ = ':';
-            wp = append_signed_decimal(wp, delta);
-            *wp++ = '}';
-            *wp = '\0';
+            MnsgJsonObjectWriter writer;
 
-            anchor_send_custom_packet("RYO_SYNC", ryo_payload, "", 0, 0);
-            recomp_printf("[RyoSync] Sent delta=%d ryo (%d -> %d)\n",
-                          (int)delta, (int)s_ryo_prev, (int)ryo_cur);
+            mnsg_json_writer_begin(&writer, ryo_payload,
+                                   (unsigned int)sizeof(ryo_payload));
+            if (mnsg_json_writer_add_s32(&writer, "ryo", delta) &&
+                mnsg_json_writer_finish(&writer))
+            {
+                anchor_send_custom_packet("RYO_SYNC", ryo_payload, "", 0, 0);
+                recomp_printf("[RyoSync] Sent delta=%d ryo (%d -> %d)\n",
+                              (int)delta, (int)s_ryo_prev, (int)ryo_cur);
+            }
             s_ryo_prev = ryo_cur;
         }
         else
@@ -2680,7 +2359,7 @@ void item_sync_force_flag(const char *name)
     /* ── 32-bit save-data fields ──────────────────────────────────── */
     for (i = 0; i < NUM_FIELDS; ++i)
     {
-        if (!streq(s_fields[i].name, name))
+        if (!mnsg_string_equal(s_fields[i].name, name))
             continue;
 
         signed int val = 1; /* "obtained" sentinel for all item fields */
@@ -2694,7 +2373,7 @@ void item_sync_force_flag(const char *name)
     /* ── Single-bit flags ────────────────────────────────────────── */
     for (i = 0; i < NUM_FLAGS; ++i)
     {
-        if (!streq(s_flag_bits[i].name, name))
+        if (!mnsg_string_equal(s_flag_bits[i].name, name))
             continue;
 
         FLAG_SET_BIT(s_flag_bits[i].id);
@@ -2714,7 +2393,7 @@ int item_sync_write_local_flag_val(const char *name, int val)
 
     for (i = 0; i < NUM_FIELDS; ++i)
     {
-        if (!streq(s_fields[i].name, name))
+        if (!mnsg_string_equal(s_fields[i].name, name))
             continue;
 
         SAVE_WRITE32(s_fields[i].off, val);
@@ -2730,7 +2409,7 @@ int item_sync_write_local_flag_val(const char *name, int val)
 
     for (i = 0; i < NUM_FLAGS; ++i)
     {
-        if (!streq(s_flag_bits[i].name, name))
+        if (!mnsg_string_equal(s_flag_bits[i].name, name))
             continue;
 
         if (val)
@@ -2766,7 +2445,7 @@ void item_sync_force_flag_val(const char *name, int val)
     /* ── 32-bit save-data fields ──────────────────────────────────── */
     for (i = 0; i < NUM_FIELDS; ++i)
     {
-        if (!streq(s_fields[i].name, name))
+        if (!mnsg_string_equal(s_fields[i].name, name))
             continue;
 
         SAVE_WRITE32(s_fields[i].off, val);

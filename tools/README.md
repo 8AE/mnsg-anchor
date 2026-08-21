@@ -8,14 +8,14 @@ mod can be stress tested without launching many game instances.
 Run it with UV:
 
 ```sh
-uv run tools/anchor_stress.py --clients 25 --host localhost --port 43383 --room mnsg-recomp
+uv run tools/anchor_stress.py --clients 25 --host localhost --port 43383 --room stress-test
 ```
 
 Useful startup options:
 
 - `--clients N`: number of synthetic clients to spawn.
 - `--host HOST` and `--port PORT`: Anchor server target.
-- `--room ROOM`: Anchor room id. `mnsg_` is added automatically if omitted.
+- `--room ROOM`: required private Anchor room id. The hidden `mnsg-` prefix is added automatically.
 - `--team TEAM`: team id for all synthetic clients.
 - `--x`, `--y`, `--z`: initial world coordinates.
 - `--room-id 0x1d1`: initial game room id. Decimal and hex both work.
