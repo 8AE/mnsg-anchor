@@ -9,9 +9,9 @@ typedef struct AnchorPlayerModelRemote
 {
     int cid;
     int ch;
-    int x;
-    int y;
-    int z;
+    float x;
+    float y;
+    float z;
     int vx;
     int vy;
     int vz;
@@ -19,6 +19,10 @@ typedef struct AnchorPlayerModelRemote
     int action;
     int anim_frame_100;
     int anim_frame_count_100;
+    int anim_step_100;
+    int has_anim_step;
+    int motion_phase_frames;
+    int new_motion_sample;
     int rot_x;
     int rot_y;
     int rot_z;

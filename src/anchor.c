@@ -263,7 +263,14 @@ int anchor_set_position(int pos_x, int pos_y, int pos_z)
 int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
                              int action, int frame_100, int frame_count_100,
                              int rot_x, int rot_y, int rot_z,
-                             int appearance_flags)
+                             int appearance_flags, int velocity_x,
+                             int velocity_y, int velocity_z,
+                             int angular_velocity_x,
+                             int angular_velocity_y,
+                             int angular_velocity_z,
+                             int force_motion_edge,
+                             int animation_step_100,
+                             int has_animation_step)
 {
     REPY_FN_SETUP;
     REPY_FN_SET_S32("pos_x", pos_x);
@@ -276,12 +283,23 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
     REPY_FN_SET_S32("rot_y", rot_y);
     REPY_FN_SET_S32("rot_z", rot_z);
     REPY_FN_SET_S32("appearance_flags", appearance_flags);
+    REPY_FN_SET_S32("velocity_x", velocity_x);
+    REPY_FN_SET_S32("velocity_y", velocity_y);
+    REPY_FN_SET_S32("velocity_z", velocity_z);
+    REPY_FN_SET_S32("angular_velocity_x", angular_velocity_x);
+    REPY_FN_SET_S32("angular_velocity_y", angular_velocity_y);
+    REPY_FN_SET_S32("angular_velocity_z", angular_velocity_z);
+    REPY_FN_SET_S32("force_motion_edge", force_motion_edge);
+    REPY_FN_SET_S32("animation_step_100", animation_step_100);
+    REPY_FN_SET_S32("has_animation_step", has_animation_step);
     REPY_FN_EXEC_CACHE(anchor_set_position_anim_code,
                        "import anchor_mnsg\n"
                        "result = anchor_mnsg.set_position_anim(\n"
                        "    pos_x, pos_y, pos_z, action, frame_100,\n"
                        "    frame_count_100, rot_x, rot_y, rot_z,\n"
-                       "    appearance_flags\n"
+                       "    appearance_flags, velocity_x, velocity_y, velocity_z,\n"
+                       "    angular_velocity_x, angular_velocity_y, angular_velocity_z,\n"
+                       "    force_motion_edge, animation_step_100, has_animation_step\n"
                        ")\n");
     int result = (int)REPY_FN_GET_BOOL("result");
     REPY_FN_CLEANUP;

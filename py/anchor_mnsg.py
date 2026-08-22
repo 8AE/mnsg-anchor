@@ -114,6 +114,7 @@ _local_character: str = ""
 _local_save_loaded: bool = False
 _last_position_sent: "tuple[int, int, int] | None" = None
 _last_position_sent_ms: int = 0
+_last_position_room_id: int = -1
 _last_position_action: int = -2
 _last_position_frame_100: int = 0
 _last_position_appearance_flags: int = -1
@@ -134,6 +135,13 @@ ANIMATION_RESTART_DELTA_100: int = 50
 APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
 APPEARANCE_MINI_EBISUMARU: int = 1 << 1
 APPEARANCE_MASK: int = APPEARANCE_SUDDEN_IMPACT | APPEARANCE_MINI_EBISUMARU
+_MOVEMENT_STATE_FIELDS: "tuple[str, ...]" = (
+    "posX", "posY", "posZ", "velX", "velY", "velZ", "posSeq", "posT",
+    "action", "animFrame100", "animFrameCount100", "rotX", "rotY", "rotZ",
+    "rotVelX", "rotVelY", "rotVelZ", "animStep100", "hasAnimStep",
+)
+_POSITION_SEQUENCE_MASK: int = 0x7fffffff
+_POSITION_SEQUENCE_HALF_RANGE: int = 0x40000000
 
 
 def normalize_room_id(room_id: str) -> str:
@@ -163,6 +171,159 @@ def _appearance_flags_from_payload(payload: dict, current: int = 0) -> int:
         else:
             flags &= ~APPEARANCE_MINI_EBISUMARU
     return flags
+
+
+def _clear_movement_state(state: dict) -> None:
+    """Invalidate a transform without discarding identity/room metadata."""
+    for field in _MOVEMENT_STATE_FIELDS:
+        state.pop(field, None)
+
+
+def _position_sample_is_fresh(state: dict, payload: dict) -> bool:
+    """Return whether a hot movement sample supersedes the stored sample."""
+    if "posSeq" not in payload or "posSeq" not in state:
+        return True
+    previous_seq = int(state["posSeq"]) & _POSITION_SEQUENCE_MASK
+    current_seq = int(payload["posSeq"]) & _POSITION_SEQUENCE_MASK
+    sequence_delta = (current_seq - previous_seq) & _POSITION_SEQUENCE_MASK
+    previous_time = int(state.get("posT", 0))
+    current_time = int(payload.get("posT", 0))
+
+    if previous_time > 0 and current_time > 0 and current_time <= previous_time:
+        # A delayed packet from before a reconnect can look sequence-forward
+        # relative to the reset counter. Sender time is the stronger ordering
+        # signal whenever both peers provide it.
+        return False
+    if sequence_delta == 0:
+        # Compatibility for a legacy sender that reuses sequence zero.
+        return current_time > previous_time > 0
+    if sequence_delta < _POSITION_SEQUENCE_HALF_RANGE:
+        return True
+    # Reconnect resets the sender sequence while monotonic time keeps moving.
+    # An actually reordered packet has an older timestamp and remains stale.
+    return current_time > previous_time > 0
+
+
+def _merge_client_state(
+    cid: int, payload: dict, enforce_movement_order: bool = False
+) -> bool:
+    """Merge metadata, keeping a room change separate from its next transform."""
+    state = _player_states.get(cid)
+    if state is None:
+        state = {
+            "name": payload.get("name", f"Player{cid}"),
+            "teamId": payload.get("teamId", ""),
+            "online": bool(payload.get("online", True)),
+            "isSaveLoaded": bool(payload.get("isSaveLoaded", False)),
+            "self": False,
+            "location": payload.get("currentRoom", ""),
+            "roomId": int(payload.get("currentRoomId", -1)),
+            "mnsgRace": str(payload.get("mnsgRace", "")),
+            "mnsgRaceConfig": str(payload.get("mnsgRaceConfig", "")),
+            "appearanceFlags": _appearance_flags_from_payload(payload),
+            "character": str(payload.get("currentCharacter", "")),
+        }
+        _player_states[cid] = state
+
+    if enforce_movement_order and not _position_sample_is_fresh(state, payload):
+        return False
+
+    if enforce_movement_order:
+        # These optional fields form one endpoint-rate capability. A legacy
+        # sender omitting them must explicitly fall back to the receiver's
+        # native action speed instead of inheriting a stale value from an
+        # earlier updated sender/reconnect.
+        state["animStep100"] = int(payload.get("animStep100", 0))
+        state["hasAnimStep"] = int(payload.get("hasAnimStep", 0))
+
+    if "currentRoomId" in payload:
+        next_room = int(payload["currentRoomId"])
+        previous_room = int(state.get("roomId", -1))
+        if next_room != previous_room:
+            # UPDATE_CLIENT_STATE room metadata normally arrives just before the
+            # hot movement packet. Clear the complete old sample first; any
+            # position fields carried atomically below repopulate a fresh one.
+            _clear_movement_state(state)
+        state["roomId"] = next_room
+
+    string_fields = {
+        "name": "name",
+        "teamId": "teamId",
+        "currentRoom": "location",
+        "mnsgRace": "mnsgRace",
+        "mnsgRaceConfig": "mnsgRaceConfig",
+        "currentCharacter": "character",
+    }
+    for source, destination in string_fields.items():
+        if source in payload:
+            state[destination] = str(payload[source])
+    if "online" in payload:
+        state["online"] = bool(payload["online"])
+    if "isSaveLoaded" in payload:
+        state["isSaveLoaded"] = bool(payload["isSaveLoaded"])
+    for field in _MOVEMENT_STATE_FIELDS:
+        if field in payload:
+            state[field] = int(payload[field])
+    if ("appearanceFlags" in payload or
+            "suddenImpact" in payload or
+            "modelScale100000" in payload):
+        state["appearanceFlags"] = _appearance_flags_from_payload(
+            payload, int(state.get("appearanceFlags", 0))
+        )
+    return True
+
+
+def _replace_all_client_states(states: list) -> None:
+    """Apply membership metadata without popping live same-room transforms."""
+    global _client_id
+
+    with _player_states_lock:
+        previous_players = dict(_player_states)
+        new_players: dict = {}
+        for member in states:
+            cid = int(member.get("clientId", 0))
+            if not cid:
+                continue
+            if member.get("self"):
+                _client_id = cid
+            client_state = member.get("clientState", member)
+            room_id = int(client_state.get("currentRoomId", -1))
+            previous = previous_players.get(cid, {})
+            name = (client_state.get("name", "") or
+                    member.get("name", f"Player{cid}"))
+            merged = {
+                "name": name,
+                "teamId": client_state.get("teamId", ""),
+                "online": bool(client_state.get("online", True)),
+                "isSaveLoaded": bool(client_state.get("isSaveLoaded", False)),
+                "self": bool(member.get("self")),
+                "location": client_state.get("currentRoom", ""),
+                "roomId": room_id,
+                "mnsgRace": str(client_state.get("mnsgRace", "")),
+                "mnsgRaceConfig": str(
+                    client_state.get("mnsgRaceConfig", "")
+                ),
+                "character": str(
+                    client_state.get(
+                        "currentCharacter", previous.get("character", "")
+                    )
+                ),
+            }
+            if previous and int(previous.get("roomId", -1)) == room_id:
+                for field in _MOVEMENT_STATE_FIELDS:
+                    if field in previous:
+                        merged[field] = previous[field]
+                if "appearanceFlags" in previous:
+                    merged["appearanceFlags"] = previous["appearanceFlags"]
+            if ("appearanceFlags" in client_state or
+                    "suddenImpact" in client_state or
+                    "modelScale100000" in client_state):
+                merged["appearanceFlags"] = _appearance_flags_from_payload(
+                    client_state, int(merged.get("appearanceFlags", 0))
+                )
+            new_players[cid] = merged
+        _player_states.clear()
+        _player_states.update(new_players)
 
 ###############################################################################
 # Room ID → area name lookup table
@@ -356,31 +517,7 @@ def _recv_loop(sock: socket.socket) -> None:
                 # Track our own assigned client ID and player list from ALL_CLIENT_STATE.
                 if ptype == "ALL_CLIENT_STATE":
                     states = packet.get("state", [])
-                    new_players: dict = {}
-                    for s in states:
-                        cid = s.get("clientId", 0)
-                        if s.get("self"):
-                            if cid:
-                                _client_id = cid
-                        if cid:
-                            cs = s.get("clientState", s)
-                            name = cs.get("name", "") or s.get("name", f"Player{cid}")
-                            online = bool(cs.get("online", True))
-                            location = cs.get("currentRoom", "")
-                            new_players[cid] = {
-                                "name": name,
-                                "teamId": cs.get("teamId", ""),
-                                "online": online,
-                                "isSaveLoaded": bool(cs.get("isSaveLoaded", False)),
-                                "self": bool(s.get("self")),
-                                "location": location,
-                                "roomId": int(cs.get("currentRoomId", -1)),
-                                "mnsgRace": str(cs.get("mnsgRace", "")),
-                                "mnsgRaceConfig": str(cs.get("mnsgRaceConfig", "")),
-                            }
-                    with _player_states_lock:
-                        _player_states.clear()
-                        _player_states.update(new_players)
+                    _replace_all_client_states(states)
                     # Reset so the next set_local_room() call re-broadcasts our room
                     # and character even if the values haven't changed (our entry was
                     # just rebuilt, and older movement packets may have wiped metadata).
@@ -391,44 +528,9 @@ def _recv_loop(sock: socket.socket) -> None:
                     cid = packet.get("clientId", 0)
                     if cid:
                         with _player_states_lock:
-                            if cid not in _player_states:
-                                _player_states[cid] = {
-                                    "name": f"Player{cid}",
-                                    "teamId": "",
-                                    "online": True,
-                                    "self": False,
-                                    "location": "",
-                                    "roomId": int(packet.get("currentRoomId", -1)),
-                                    "character": "",
-                                }
-                            if "currentRoomId" in packet:
-                                _player_states[cid]["roomId"] = int(packet["currentRoomId"])
-                            _player_states[cid]["posX"] = int(packet.get("posX", 0))
-                            _player_states[cid]["posY"] = int(packet.get("posY", 0))
-                            _player_states[cid]["posZ"] = int(packet.get("posZ", 0))
-                            _player_states[cid]["velX"] = int(packet.get("velX", 0))
-                            _player_states[cid]["velY"] = int(packet.get("velY", 0))
-                            _player_states[cid]["velZ"] = int(packet.get("velZ", 0))
-                            _player_states[cid]["posSeq"] = int(packet.get("posSeq", 0))
-                            _player_states[cid]["posT"] = int(packet.get("posT", 0))
-                            if "action" in packet:
-                                _player_states[cid]["action"] = int(packet.get("action", -1))
-                            if "animFrame100" in packet:
-                                _player_states[cid]["animFrame100"] = int(packet.get("animFrame100", 0))
-                            if "animFrameCount100" in packet:
-                                _player_states[cid]["animFrameCount100"] = int(packet.get("animFrameCount100", 0))
-                            if "rotX" in packet:
-                                _player_states[cid]["rotX"] = int(packet.get("rotX", 0))
-                            if "rotY" in packet:
-                                _player_states[cid]["rotY"] = int(packet.get("rotY", 0))
-                            if "rotZ" in packet:
-                                _player_states[cid]["rotZ"] = int(packet.get("rotZ", 0))
-                            if ("appearanceFlags" in packet or
-                                    "suddenImpact" in packet or
-                                    "modelScale100000" in packet):
-                                current = int(_player_states[cid].get("appearanceFlags", 0))
-                                _player_states[cid]["appearanceFlags"] = \
-                                    _appearance_flags_from_payload(packet, current)
+                            _merge_client_state(
+                                cid, packet, enforce_movement_order=True
+                            )
                     # Movement is already coalesced into _player_states. Do not
                     # duplicate this hot path in the general game-event queue.
                     continue
@@ -441,89 +543,7 @@ def _recv_loop(sock: socket.socket) -> None:
                     cid = cs.get("clientId") or packet.get("clientId", 0)
                     if cid:
                         with _player_states_lock:
-                            if cid in _player_states:
-                                if "name" in cs:
-                                    _player_states[cid]["name"] = cs["name"]
-                                if "teamId" in cs:
-                                    _player_states[cid]["teamId"] = cs["teamId"]
-                                if "online" in cs:
-                                    _player_states[cid]["online"] = bool(cs["online"])
-                                if "isSaveLoaded" in cs:
-                                    _player_states[cid]["isSaveLoaded"] = bool(cs["isSaveLoaded"])
-                                if "mnsgRace" in cs:
-                                    _player_states[cid]["mnsgRace"] = str(cs["mnsgRace"])
-                                if "mnsgRaceConfig" in cs:
-                                    _player_states[cid]["mnsgRaceConfig"] = str(cs["mnsgRaceConfig"])
-                                if "currentRoom" in cs:
-                                    _player_states[cid]["location"] = cs["currentRoom"]
-                                if "currentRoomId" in cs:
-                                    _player_states[cid]["roomId"] = int(cs["currentRoomId"])
-                                if "posX" in cs:
-                                    _player_states[cid]["posX"] = int(cs["posX"])
-                                if "posY" in cs:
-                                    _player_states[cid]["posY"] = int(cs["posY"])
-                                if "posZ" in cs:
-                                    _player_states[cid]["posZ"] = int(cs["posZ"])
-                                if "velX" in cs:
-                                    _player_states[cid]["velX"] = int(cs["velX"])
-                                if "velY" in cs:
-                                    _player_states[cid]["velY"] = int(cs["velY"])
-                                if "velZ" in cs:
-                                    _player_states[cid]["velZ"] = int(cs["velZ"])
-                                if "posSeq" in cs:
-                                    _player_states[cid]["posSeq"] = int(cs["posSeq"])
-                                if "posT" in cs:
-                                    _player_states[cid]["posT"] = int(cs["posT"])
-                                if "action" in cs:
-                                    _player_states[cid]["action"] = int(cs["action"])
-                                if "animFrame100" in cs:
-                                    _player_states[cid]["animFrame100"] = int(cs["animFrame100"])
-                                if "animFrameCount100" in cs:
-                                    _player_states[cid]["animFrameCount100"] = int(cs["animFrameCount100"])
-                                if "rotX" in cs:
-                                    _player_states[cid]["rotX"] = int(cs["rotX"])
-                                if "rotY" in cs:
-                                    _player_states[cid]["rotY"] = int(cs["rotY"])
-                                if "rotZ" in cs:
-                                    _player_states[cid]["rotZ"] = int(cs["rotZ"])
-                                if ("appearanceFlags" in cs or
-                                        "suddenImpact" in cs or
-                                        "modelScale100000" in cs):
-                                    current = int(_player_states[cid].get("appearanceFlags", 0))
-                                    _player_states[cid]["appearanceFlags"] = \
-                                        _appearance_flags_from_payload(cs, current)
-                                if "currentCharacter" in cs:
-                                    _player_states[cid]["character"] = str(cs["currentCharacter"])
-                            else:
-                                name = cs.get("name", f"Player{cid}")
-                                location = cs.get("currentRoom", "")
-                                _player_states[cid] = {
-                                    "name": name,
-                                    "teamId": cs.get("teamId", ""),
-                                    "online": bool(cs.get("online", True)),
-                                    "isSaveLoaded": bool(cs.get("isSaveLoaded", False)),
-                                    "self": False,
-                                    "location": location,
-                                    "roomId": int(cs.get("currentRoomId", -1)),
-                                    "mnsgRace": str(cs.get("mnsgRace", "")),
-                                    "mnsgRaceConfig": str(cs.get("mnsgRaceConfig", "")),
-                                    "posX": int(cs.get("posX", 0)),
-                                    "posY": int(cs.get("posY", 0)),
-                                    "posZ": int(cs.get("posZ", 0)),
-                                    "velX": int(cs.get("velX", 0)),
-                                    "velY": int(cs.get("velY", 0)),
-                                    "velZ": int(cs.get("velZ", 0)),
-                                    "posSeq": int(cs.get("posSeq", 0)),
-                                    "posT": int(cs.get("posT", 0)),
-                                    "action": int(cs.get("action", -1)),
-                                    "animFrame100": int(cs.get("animFrame100", 0)),
-                                    "animFrameCount100": int(cs.get("animFrameCount100", 0)),
-                                    "rotX": int(cs.get("rotX", 0)),
-                                    "rotY": int(cs.get("rotY", 0)),
-                                    "rotZ": int(cs.get("rotZ", 0)),
-                                    "appearanceFlags": _appearance_flags_from_payload(cs),
-                                    "character": str(cs.get("currentCharacter", "")),
-                                }
+                            _merge_client_state(cid, cs)
 
                 if ptype == "REQUEST_TEAM_STATE" and not _should_handle_team_state_request(packet):
                     continue
@@ -549,7 +569,7 @@ def _recv_loop(sock: socket.socket) -> None:
 def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     """Close the socket and mark as disconnected (idempotent)."""
     global _sock, _connected, _local_room_id, _local_character, _local_save_loaded
-    global _last_position_sent, _last_position_sent_ms
+    global _last_position_sent, _last_position_sent_ms, _last_position_room_id
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags
 
@@ -566,6 +586,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _local_save_loaded = False
     _last_position_sent = None
     _last_position_sent_ms = 0
+    _last_position_room_id = -1
     _last_position_action = -2
     _last_position_frame_100 = 0
     _last_position_appearance_flags = -1
@@ -608,7 +629,8 @@ def connect(
     Returns True on success, False on failure.
     """
     global _sock, _connected, _client_id, _room_id, _team_id, _player_name
-    global _last_position_sent, _last_position_sent_ms, _position_seq, _local_character
+    global _last_position_sent, _last_position_sent_ms, _last_position_room_id
+    global _position_seq, _local_character
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
@@ -631,6 +653,7 @@ def connect(
     _disabled = False
     _last_position_sent = None
     _last_position_sent_ms = 0
+    _last_position_room_id = -1
     _last_position_action = -2
     _last_position_frame_100 = 0
     _last_position_appearance_flags = -1
@@ -928,14 +951,25 @@ def set_position_anim(
     rot_y: int,
     rot_z: int,
     appearance_flags: int = 0,
+    velocity_x: "int | None" = None,
+    velocity_y: "int | None" = None,
+    velocity_z: "int | None" = None,
+    angular_velocity_x: "int | None" = None,
+    angular_velocity_y: "int | None" = None,
+    angular_velocity_z: "int | None" = None,
+    force_motion_edge: int = 0,
+    animation_step_100: int = 0,
+    has_animation_step: int = 0,
 ) -> bool:
     """
     Broadcast world-space position and the live animation phase to teammates.
 
     This is the hot movement payload, so it intentionally avoids repeating
     identity/team fields that are sent by handshake, room, and character
-    updates.  A small velocity estimate and sequence number are included so
-    clients can smooth short gaps between server updates.
+    updates. The game-side caller supplies the final displacement of the
+    current frame so clients can preserve acceleration, gravity, and stops
+    while reconstructing only the frames between packets. Older callers may
+    omit it and retain the packet-interval estimate.
 
     Args:
         x: World X coordinate (int, from CLS_BG_W::position.x truncated).
@@ -949,10 +983,23 @@ def set_position_anim(
         rot_z: Current model Z rotation.
         appearance_flags: Bitmap containing Sudden Impact (bit 0) and Mini
             Ebisumaru (bit 1).
+        velocity_x: Optional final-frame X velocity in world units per second.
+        velocity_y: Optional final-frame Y velocity in world units per second.
+        velocity_z: Optional final-frame Z velocity in world units per second.
+        angular_velocity_x: Optional final-frame X rotation velocity.
+        angular_velocity_y: Optional final-frame Y rotation velocity.
+        angular_velocity_z: Optional final-frame Z rotation velocity.
+        force_motion_edge: Nonzero when the game observed a start, stop, or
+            strong reversal that must bypass the normal send interval.
+        animation_step_100: Native animation advance for the latest 30 Hz game
+            tick, in hundredths of a clip frame.
+        has_animation_step: Nonzero when animation_step_100 is valid. A valid
+            zero represents a paused native clip.
 
     Returns True if the packet was sent.
     """
-    global _last_position_sent, _last_position_sent_ms, _position_seq
+    global _last_position_sent, _last_position_sent_ms, _last_position_room_id
+    global _position_seq
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags
 
@@ -960,6 +1007,7 @@ def set_position_anim(
         return False
     now_ms = int(time.monotonic() * 1000)
     action_changed = int(action) != _last_position_action
+    room_changed = _last_position_room_id != _local_room_id
     appearance_flags = int(appearance_flags) & APPEARANCE_MASK
     appearance_changed = appearance_flags != _last_position_appearance_flags
     frame_restarted = (
@@ -969,20 +1017,50 @@ def set_position_anim(
     if (
         _last_position_sent_ms > 0
         and now_ms - _last_position_sent_ms < MOVEMENT_MIN_INTERVAL_MS
+        and not room_changed
         and not action_changed
         and not appearance_changed
         and not frame_restarted
+        and not bool(force_motion_edge)
     ):
         return False
 
-    vel_x = 0
-    vel_y = 0
-    vel_z = 0
-    if _last_position_sent is not None and _last_position_sent_ms > 0:
+    has_endpoint_velocity = (
+        velocity_x is not None
+        and velocity_y is not None
+        and velocity_z is not None
+    )
+    if has_endpoint_velocity:
+        vel_x = int(velocity_x)
+        vel_y = int(velocity_y)
+        vel_z = int(velocity_z)
+    else:
+        vel_x = 0
+        vel_y = 0
+        vel_z = 0
+    if (
+        not has_endpoint_velocity
+        and _last_position_sent is not None
+        and _last_position_sent_ms > 0
+        and _last_position_room_id == _local_room_id
+    ):
         dt_ms = max(1, now_ms - _last_position_sent_ms)
         vel_x = int((x - _last_position_sent[0]) * 1000 / dt_ms)
         vel_y = int((y - _last_position_sent[1]) * 1000 / dt_ms)
         vel_z = int((z - _last_position_sent[2]) * 1000 / dt_ms)
+    has_endpoint_angular_velocity = (
+        angular_velocity_x is not None
+        and angular_velocity_y is not None
+        and angular_velocity_z is not None
+    )
+    if has_endpoint_angular_velocity:
+        rot_vel_x = int(angular_velocity_x)
+        rot_vel_y = int(angular_velocity_y)
+        rot_vel_z = int(angular_velocity_z)
+    else:
+        rot_vel_x = 0
+        rot_vel_y = 0
+        rot_vel_z = 0
     next_seq = (_position_seq + 1) & 0x7fffffff
     sent = _send_raw({
         "type": "MNSG_PLAYER_POS",
@@ -999,9 +1077,14 @@ def set_position_anim(
         "action": int(action),
         "animFrame100": int(frame_100),
         "animFrameCount100": int(frame_count_100),
+        "animStep100": int(animation_step_100),
+        "hasAnimStep": 1 if has_animation_step else 0,
         "rotX": int(rot_x),
         "rotY": int(rot_y),
         "rotZ": int(rot_z),
+        "rotVelX": rot_vel_x,
+        "rotVelY": rot_vel_y,
+        "rotVelZ": rot_vel_z,
         "appearanceFlags": appearance_flags,
         "quiet": True,
     })
@@ -1010,6 +1093,7 @@ def set_position_anim(
 
     _last_position_sent = (x, y, z)
     _last_position_sent_ms = now_ms
+    _last_position_room_id = _local_room_id
     _last_position_action = int(action)
     _last_position_frame_100 = int(frame_100)
     _last_position_appearance_flags = appearance_flags
@@ -1029,9 +1113,14 @@ def set_position_anim(
             local["action"] = int(action)
             local["animFrame100"] = int(frame_100)
             local["animFrameCount100"] = int(frame_count_100)
+            local["animStep100"] = int(animation_step_100)
+            local["hasAnimStep"] = 1 if has_animation_step else 0
             local["rotX"] = int(rot_x)
             local["rotY"] = int(rot_y)
             local["rotZ"] = int(rot_z)
+            local["rotVelX"] = rot_vel_x
+            local["rotVelY"] = rot_vel_y
+            local["rotVelZ"] = rot_vel_z
             local["appearanceFlags"] = appearance_flags
     return True
 
@@ -1256,6 +1345,7 @@ def get_lobby_positions_json() -> str:
       "room" – raw 16-bit room ID the player last reported, -1 if unknown.
       "x","y","z" – last broadcast world-space position (0 if not yet received).
       "hp"   – 1 if the player has sent at least one position update, 0 otherwise.
+      "t"    – sender monotonic milliseconds, masked to a positive 31-bit value.
       "ap"   – appearance bitmap: Sudden Impact bit 0, Mini Ebisumaru bit 1.
 
     Unlike get_teammate_positions_json(), this function:
@@ -1294,12 +1384,18 @@ def get_lobby_positions_json() -> str:
                 "vy": int(v.get("velY", 0)),
                 "vz": int(v.get("velZ", 0)),
                 "s": int(v.get("posSeq", 0)),
+                "t": int(v.get("posT", 0)) & 0x7fffffff,
                 "a": int(v.get("action", -1)),
                 "af": int(v.get("animFrame100", 0)),
                 "al": int(v.get("animFrameCount100", 0)),
+                "as": int(v.get("animStep100", 0)),
+                "ah": int(v.get("hasAnimStep", 0)),
                 "rx": int(v.get("rotX", 0)),
                 "ry": int(v.get("rotY", 0)),
                 "rz": int(v.get("rotZ", 0)),
+                "rvx": int(v.get("rotVelX", 0)),
+                "rvy": int(v.get("rotVelY", 0)),
+                "rvz": int(v.get("rotVelZ", 0)),
                 "ap": int(v.get("appearanceFlags", 0)) & APPEARANCE_MASK,
                 "tm": 1 if v.get("teamId", "") == _team_id else 0,
             })

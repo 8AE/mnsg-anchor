@@ -12,6 +12,8 @@
 #include "anchor.h"
 #include "anchor_nameplates.h"
 #include "anchor_player_models.h"
+#include "anchor_remote_animation.h"
+#include "anchor_remote_motion.h"
 #include "utils/string_utils.h"
 
 #define ANCHOR_REMOTE_MAX 25
@@ -20,10 +22,12 @@
 #define POSITION_MIN_DELTA_SQ 36
 #define ANIMATION_SEND_DELTA_100 20
 #define ANIMATION_RESTART_DELTA_100 50
-#define LOBBY_REFRESH_FRAMES 1
-#define REMOTE_SNAP_DISTANCE_SQ 250000.0f
-#define REMOTE_SMOOTHING_FACTOR 0.35f
-#define REMOTE_VELOCITY_LEAD_SECONDS 0.08f
+#define LOBBY_REFRESH_FRAMES 0
+#define LOCAL_GAME_TICKS_PER_SECOND 30.0f
+#define MOTION_EDGE_LINEAR_MIN_SPEED 30
+/* 32 signed-angle units/tick is about 0.18 degrees/tick. Ignore the common
+ * one-unit quantization wobble while still publishing a visible turn edge. */
+#define MOTION_EDGE_ANGULAR_MIN_SPEED 960
 
 #define CHARACTER_GOEMON 0
 #define CHARACTER_EBISUMARU 1
@@ -50,22 +54,30 @@ typedef struct RemotePlayer
 {
     int cid;
     int room;
-    int x;
-    int y;
-    int z;
+    float x;
+    float y;
+    float z;
     int has_pos;
     int ch;
     int vx;
     int vy;
     int vz;
     int seq;
+    int timestamp_ms;
     int action;
     int anim_frame_100;
     int anim_frame_count_100;
+    int anim_step_100;
+    int has_anim_step;
     int rot_x;
     int rot_y;
     int rot_z;
+    int rot_vx;
+    int rot_vy;
+    int rot_vz;
     int appearance_flags;
+    int motion_phase_frames;
+    int new_motion_sample;
     int same_team;
     char name[32];
 } RemotePlayer;
@@ -73,12 +85,9 @@ typedef struct RemotePlayer
 typedef struct RemoteSmoothing
 {
     int cid;
-    int room;
     int active;
-    float x;
-    float y;
-    float z;
-    int seq;
+    int seen;
+    AnchorRemoteMotionState motion;
 } RemoteSmoothing;
 
 /* Current room id. The remote renderer uses the same room boundary as the
@@ -123,8 +132,28 @@ static int s_last_sent_frame_count_100;
 static int s_last_sent_rot_x;
 static int s_last_sent_rot_y;
 static int s_last_sent_rot_z;
+static int s_last_sent_velocity_x;
+static int s_last_sent_velocity_y;
+static int s_last_sent_velocity_z;
+static int s_last_sent_angular_velocity_x;
+static int s_last_sent_angular_velocity_y;
+static int s_last_sent_angular_velocity_z;
 static int s_last_sent_appearance_flags = -1;
 static unsigned int s_last_sent_room = 0xffffffffu;
+static int s_have_previous_frame_position;
+static float s_previous_frame_x;
+static float s_previous_frame_y;
+static float s_previous_frame_z;
+static int s_have_previous_frame_rotation;
+static int s_previous_frame_rot_x;
+static int s_previous_frame_rot_y;
+static int s_previous_frame_rot_z;
+static int s_have_previous_frame_animation;
+static int s_previous_frame_action;
+static float s_previous_frame_anim_frame;
+static float s_previous_frame_anim_count;
+static const PlayerObject *s_previous_frame_object;
+static const void *s_previous_frame_task;
 static int s_lobby_refresh_timer;
 
 static const char *const s_char_names[4] = {
@@ -158,6 +187,22 @@ static int is_rdram_pointer(const void *ptr)
     /* The engine uses 0x80000000 as an invalid-link sentinel during task
      * teardown; it must not pass the same test as a live RDRAM object. */
     return phys >= 0x00001000u && phys < 0x00800000u;
+}
+
+static int round_float_to_int(float value)
+{
+    if (value < 0.0f)
+        return (int)(value - 0.5f);
+    return (int)(value + 0.5f);
+}
+
+static void reset_frame_motion_baseline(void)
+{
+    s_have_previous_frame_position = 0;
+    s_have_previous_frame_rotation = 0;
+    s_have_previous_frame_animation = 0;
+    s_previous_frame_object = 0;
+    s_previous_frame_task = 0;
 }
 
 /* Gameplay uses a different overlay than file_18. This return hook runs after
@@ -252,12 +297,19 @@ static int parse_lobby_positions(const char *json)
         s_remote_players[count].vy = parse_int_after(p, "\"vy\"", 0);
         s_remote_players[count].vz = parse_int_after(p, "\"vz\"", 0);
         s_remote_players[count].seq = parse_int_after(p, "\"s\"", 0);
+        s_remote_players[count].timestamp_ms =
+            parse_int_after(p, "\"t\"", 0);
         s_remote_players[count].action = parse_int_after(p, "\"a\"", -1);
         s_remote_players[count].anim_frame_100 = parse_int_after(p, "\"af\"", 0);
         s_remote_players[count].anim_frame_count_100 = parse_int_after(p, "\"al\"", 0);
+        s_remote_players[count].anim_step_100 = parse_int_after(p, "\"as\"", 0);
+        s_remote_players[count].has_anim_step = parse_int_after(p, "\"ah\"", 0);
         s_remote_players[count].rot_x = parse_int_after(p, "\"rx\"", 0);
         s_remote_players[count].rot_y = parse_int_after(p, "\"ry\"", 0);
         s_remote_players[count].rot_z = parse_int_after(p, "\"rz\"", 0);
+        s_remote_players[count].rot_vx = parse_int_after(p, "\"rvx\"", 0);
+        s_remote_players[count].rot_vy = parse_int_after(p, "\"rvy\"", 0);
+        s_remote_players[count].rot_vz = parse_int_after(p, "\"rvz\"", 0);
         s_remote_players[count].appearance_flags =
             parse_int_after(p, "\"ap\"", 0);
         s_remote_players[count].same_team = parse_int_after(p, "\"tm\"", 1);
@@ -293,11 +345,8 @@ static RemoteSmoothing *find_remote_smoothing(int cid, int create)
         return 0;
     s_remote_smoothing[free_index].cid = cid;
     s_remote_smoothing[free_index].active = 1;
-    s_remote_smoothing[free_index].room = -1;
-    s_remote_smoothing[free_index].x = 0.0f;
-    s_remote_smoothing[free_index].y = 0.0f;
-    s_remote_smoothing[free_index].z = 0.0f;
-    s_remote_smoothing[free_index].seq = 0;
+    s_remote_smoothing[free_index].seen = 0;
+    anchor_remote_motion_reset(&s_remote_smoothing[free_index].motion);
     return &s_remote_smoothing[free_index];
 }
 
@@ -309,45 +358,68 @@ static void clear_remote_smoothing(void)
         s_remote_smoothing[i].active = 0;
 }
 
+static void begin_remote_smoothing_frame(void)
+{
+    int i;
+
+    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+        s_remote_smoothing[i].seen = 0;
+}
+
+static void end_remote_smoothing_frame(void)
+{
+    int i;
+
+    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+    {
+        if (s_remote_smoothing[i].active && !s_remote_smoothing[i].seen)
+            s_remote_smoothing[i].active = 0;
+    }
+}
+
+static void drop_remote_smoothing(int cid)
+{
+    RemoteSmoothing *smooth = find_remote_smoothing(cid, 0);
+
+    if (smooth)
+        smooth->active = 0;
+}
+
 static void smooth_remote_player(const RemotePlayer *remote, RemotePlayer *out)
 {
     RemoteSmoothing *smooth = find_remote_smoothing(remote->cid, 1);
-    float target_x;
-    float target_y;
-    float target_z;
-    float dx;
-    float dy;
-    float dz;
-    float dist_sq;
+    AnchorRemoteMotionSample sample;
+    AnchorRemoteMotionOutput motion;
 
     *out = *remote;
     if (!smooth)
         return;
-    target_x = (float)remote->x + (float)remote->vx * REMOTE_VELOCITY_LEAD_SECONDS;
-    target_y = (float)remote->y + (float)remote->vy * REMOTE_VELOCITY_LEAD_SECONDS;
-    target_z = (float)remote->z + (float)remote->vz * REMOTE_VELOCITY_LEAD_SECONDS;
-    dx = target_x - smooth->x;
-    dy = target_y - smooth->y;
-    dz = target_z - smooth->z;
-    dist_sq = dx * dx + dy * dy + dz * dz;
-    if (smooth->room != remote->room || smooth->seq == 0 ||
-        dist_sq > REMOTE_SNAP_DISTANCE_SQ)
-    {
-        smooth->x = target_x;
-        smooth->y = target_y;
-        smooth->z = target_z;
-    }
-    else
-    {
-        smooth->x += dx * REMOTE_SMOOTHING_FACTOR;
-        smooth->y += dy * REMOTE_SMOOTHING_FACTOR;
-        smooth->z += dz * REMOTE_SMOOTHING_FACTOR;
-    }
-    smooth->room = remote->room;
-    smooth->seq = remote->seq ? remote->seq : smooth->seq + 1;
-    out->x = (int)smooth->x;
-    out->y = (int)smooth->y;
-    out->z = (int)smooth->z;
+    smooth->seen = 1;
+    sample.room = remote->room;
+    sample.seq = remote->seq;
+    sample.timestamp_ms = remote->timestamp_ms;
+    sample.position.x = remote->x;
+    sample.position.y = remote->y;
+    sample.position.z = remote->z;
+    sample.velocity.x = (float)remote->vx;
+    sample.velocity.y = (float)remote->vy;
+    sample.velocity.z = (float)remote->vz;
+    sample.action = remote->action;
+    sample.rot_x = remote->rot_x;
+    sample.rot_y = remote->rot_y;
+    sample.rot_z = remote->rot_z;
+    sample.angular_velocity.x = (float)remote->rot_vx;
+    sample.angular_velocity.y = (float)remote->rot_vy;
+    sample.angular_velocity.z = (float)remote->rot_vz;
+    anchor_remote_motion_step(&smooth->motion, &sample, &motion);
+    out->x = motion.position.x;
+    out->y = motion.position.y;
+    out->z = motion.position.z;
+    out->rot_x = motion.rot_x;
+    out->rot_y = motion.rot_y;
+    out->rot_z = motion.rot_z;
+    out->motion_phase_frames = smooth->motion.projection_lead_frames;
+    out->new_motion_sample = motion.consumed_sample;
 }
 
 static void reset_last_sent_state(void)
@@ -360,6 +432,7 @@ static void reset_last_sent_state(void)
     s_last_sent_frame_count_100 = 0;
     s_last_sent_appearance_flags = -1;
     s_last_sent_room = 0xffffffffu;
+    reset_frame_motion_baseline();
 }
 
 static void publish_local_state(PlayerObject *local_obj)
@@ -379,10 +452,22 @@ static void publish_local_state(PlayerObject *local_obj)
     int rot_y;
     int rot_z;
     int appearance_flags;
+    int velocity_x = 0;
+    int velocity_y = 0;
+    int velocity_z = 0;
+    int angular_velocity_x = 0;
+    int angular_velocity_y = 0;
+    int angular_velocity_z = 0;
+    int animation_step_100 = 0;
+    int has_animation_step = 0;
     int anim_delta;
     int frame_restarted;
     int should_send_position = 0;
     int should_send_animation;
+    int force_motion_edge = 0;
+    float current_x;
+    float current_y;
+    float current_z;
     float frame_count;
 
     if (!anchor_is_connected())
@@ -399,6 +484,7 @@ static void publish_local_state(PlayerObject *local_obj)
         s_have_sent_position = 0;
         s_position_keepalive_timer = 0;
         s_last_sent_action = -2;
+        reset_frame_motion_baseline();
     }
     anchor_set_local_room(room);
     /* Read only the selected-character id so peers select the matching
@@ -415,11 +501,52 @@ static void publish_local_state(PlayerObject *local_obj)
      * the normal network cadence without increasing steady-state traffic. */
     if (!is_rdram_pointer(local_obj) ||
         !is_rdram_pointer(D_801FC604_5B8514))
+    {
+        reset_frame_motion_baseline();
         return;
+    }
 
-    x = (int)local_obj->x;
-    y = (int)local_obj->y;
-    z = (int)local_obj->z;
+    if (local_obj != s_previous_frame_object ||
+        D_801FC604_5B8514 != s_previous_frame_task)
+    {
+        /* A same-room respawn or character task replacement can swap valid
+         * pointers without an invalid frame in between. Never finite-
+         * difference the new model against the previous owner's transform. */
+        reset_frame_motion_baseline();
+        s_previous_frame_object = local_obj;
+        s_previous_frame_task = D_801FC604_5B8514;
+        /* The new authority may be stationary at the old coordinates and
+         * otherwise evade every cadence predicate. Publish its zero endpoint
+         * immediately so peers cannot keep carrying the previous owner. */
+        force_motion_edge = 1;
+    }
+
+    current_x = local_obj->x;
+    current_y = local_obj->y;
+    current_z = local_obj->z;
+    x = (int)current_x;
+    y = (int)current_y;
+    z = (int)current_z;
+    /* Capture the final post-collision displacement of this exact game frame.
+     * Packet-to-packet averages hide acceleration, jump apices, landings, and
+     * abrupt stops; the receiver carries this latest resolved displacement
+     * across only the missing game ticks. */
+    if (s_have_previous_frame_position)
+    {
+        velocity_x = round_float_to_int(
+            (current_x - s_previous_frame_x) *
+            LOCAL_GAME_TICKS_PER_SECOND);
+        velocity_y = round_float_to_int(
+            (current_y - s_previous_frame_y) *
+            LOCAL_GAME_TICKS_PER_SECOND);
+        velocity_z = round_float_to_int(
+            (current_z - s_previous_frame_z) *
+            LOCAL_GAME_TICKS_PER_SECOND);
+    }
+    s_previous_frame_x = current_x;
+    s_previous_frame_y = current_y;
+    s_previous_frame_z = current_z;
+    s_have_previous_frame_position = 1;
     /* Read the stable player task/model fields after the game frame so peers
      * receive the action boundary, animation phase, and final rotations. */
     action = (int)read_u8_at(D_801FC604_5B8514, 0xcc);
@@ -428,9 +555,70 @@ static void publish_local_state(PlayerObject *local_obj)
      * be safely dereferenced as ordinary pointers by the mod. */
     frame_count = func_8001B5AC_1C1AC(local_obj);
     frame_count_100 = frame_count > 0.0f ? (int)(frame_count * 100.0f) : 0;
+    if (s_have_previous_frame_animation &&
+        action == s_previous_frame_action &&
+        frame_count > 0.0f &&
+        frame_count == s_previous_frame_anim_count)
+    {
+        float animation_delta =
+            read_float_at(local_obj, 0x28) - s_previous_frame_anim_frame;
+        float half_frame_count = frame_count * 0.5f;
+
+        while (animation_delta > half_frame_count)
+            animation_delta -= frame_count;
+        while (animation_delta < -half_frame_count)
+            animation_delta += frame_count;
+        animation_step_100 = round_float_to_int(animation_delta * 100.0f);
+        has_animation_step = 1;
+    }
+    s_previous_frame_action = action;
+    s_previous_frame_anim_frame = read_float_at(local_obj, 0x28);
+    s_previous_frame_anim_count = frame_count;
+    s_have_previous_frame_animation = 1;
     rot_x = (int)read_s16_at(local_obj, 0x14);
     rot_y = (int)read_s16_at(local_obj, 0x16);
     rot_z = (int)read_s16_at(local_obj, 0x18);
+    if (s_have_previous_frame_rotation)
+    {
+        angular_velocity_x =
+            anchor_remote_motion_angle_delta_s16(
+                rot_x, s_previous_frame_rot_x) *
+            (int)LOCAL_GAME_TICKS_PER_SECOND;
+        angular_velocity_y =
+            anchor_remote_motion_angle_delta_s16(
+                rot_y, s_previous_frame_rot_y) *
+            (int)LOCAL_GAME_TICKS_PER_SECOND;
+        angular_velocity_z =
+            anchor_remote_motion_angle_delta_s16(
+                rot_z, s_previous_frame_rot_z) *
+            (int)LOCAL_GAME_TICKS_PER_SECOND;
+    }
+    s_previous_frame_rot_x = rot_x;
+    s_previous_frame_rot_y = rot_y;
+    s_previous_frame_rot_z = rot_z;
+    s_have_previous_frame_rotation = 1;
+    if (s_have_sent_position)
+    {
+        force_motion_edge = force_motion_edge ||
+            anchor_remote_motion_axis_has_edge(
+                s_last_sent_velocity_x, velocity_x,
+                MOTION_EDGE_LINEAR_MIN_SPEED) ||
+            anchor_remote_motion_axis_has_edge(
+                s_last_sent_velocity_y, velocity_y,
+                MOTION_EDGE_LINEAR_MIN_SPEED) ||
+            anchor_remote_motion_axis_has_edge(
+                s_last_sent_velocity_z, velocity_z,
+                MOTION_EDGE_LINEAR_MIN_SPEED) ||
+            anchor_remote_motion_axis_has_edge(
+                s_last_sent_angular_velocity_x, angular_velocity_x,
+                MOTION_EDGE_ANGULAR_MIN_SPEED) ||
+            anchor_remote_motion_axis_has_edge(
+                s_last_sent_angular_velocity_y, angular_velocity_y,
+                MOTION_EDGE_ANGULAR_MIN_SPEED) ||
+            anchor_remote_motion_axis_has_edge(
+                s_last_sent_angular_velocity_z, angular_velocity_z,
+                MOTION_EDGE_ANGULAR_MIN_SPEED);
+    }
     /* Pack remote appearance state into one byte-sized bitmap. FUN_801F5314
      * sets work +0x84 when Sudden Impact actually turns gold. Ebisumaru's
      * work +0x86 marker remains nonzero from the shrink action until the grow
@@ -472,6 +660,8 @@ static void publish_local_state(PlayerObject *local_obj)
     frame_restarted =
         action == s_last_sent_action &&
         frame_100 + ANIMATION_RESTART_DELTA_100 < s_last_sent_frame_100;
+    has_animation_step = anchor_remote_animation_step_is_continuous(
+        frame_restarted, has_animation_step, animation_step_100);
     should_send_animation =
         action != s_last_sent_action ||
         appearance_flags != s_last_sent_appearance_flags ||
@@ -483,11 +673,19 @@ static void publish_local_state(PlayerObject *local_obj)
           rot_y != s_last_sent_rot_y ||
           rot_z != s_last_sent_rot_z));
     if (!should_send_position && !should_send_animation)
-        return;
+    {
+        if (!force_motion_edge)
+            return;
+        should_send_position = 1;
+    }
 
     if (anchor_set_position_anim(x, y, z, action, frame_100,
                                  frame_count_100, rot_x, rot_y, rot_z,
-                                 appearance_flags))
+                                 appearance_flags, velocity_x, velocity_y,
+                                 velocity_z, angular_velocity_x,
+                                 angular_velocity_y, angular_velocity_z,
+                                 force_motion_edge, animation_step_100,
+                                 has_animation_step))
     {
         s_have_sent_position = 1;
         s_last_sent_x = x;
@@ -499,6 +697,12 @@ static void publish_local_state(PlayerObject *local_obj)
         s_last_sent_rot_x = rot_x;
         s_last_sent_rot_y = rot_y;
         s_last_sent_rot_z = rot_z;
+        s_last_sent_velocity_x = velocity_x;
+        s_last_sent_velocity_y = velocity_y;
+        s_last_sent_velocity_z = velocity_z;
+        s_last_sent_angular_velocity_x = angular_velocity_x;
+        s_last_sent_angular_velocity_y = angular_velocity_y;
+        s_last_sent_angular_velocity_z = angular_velocity_z;
         s_last_sent_appearance_flags = appearance_flags;
         s_state_send_timer = POSITION_SEND_FRAMES;
         s_position_keepalive_timer = POSITION_KEEPALIVE_FRAMES;
@@ -566,6 +770,7 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
         /* The previous owner may already have been torn down; clear mod-side
          * handles without dereferencing or deleting that stale external task. */
         anchor_player_models_reset();
+        clear_remote_smoothing();
         for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
             anchor_nameplates_hide_slot(i);
         anchor_nameplates_set_context_visible(0);
@@ -584,6 +789,8 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
         return;
     }
 
+    begin_remote_smoothing_frame();
+
     for (remote_index = 0;
          remote_index < s_remote_count && slot_index < ANCHOR_REMOTE_MAX;
          ++remote_index)
@@ -591,10 +798,18 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
         RemotePlayer *remote = &s_remote_players[remote_index];
         RemotePlayer smoothed_remote;
 
-        if (!remote->has_pos || remote->room != (int)D_800C7AB2)
+        if (!remote->has_pos)
+        {
+            drop_remote_smoothing(remote->cid);
             continue;
+        }
 
+        /* Ingest every peer before applying the local-room visibility filter.
+         * This lets room changes reset interpolation even while the peer is
+         * invisible, so returning to a room cannot reuse an old trajectory. */
         smooth_remote_player(remote, &smoothed_remote);
+        if (remote->room != (int)D_800C7AB2)
+            continue;
         if (remote->ch >= CHARACTER_GOEMON &&
             remote->ch < CHARACTER_COUNT &&
             model_count < ANCHOR_REMOTE_MAX)
@@ -614,6 +829,12 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
             model->anim_frame_100 = smoothed_remote.anim_frame_100;
             model->anim_frame_count_100 =
                 smoothed_remote.anim_frame_count_100;
+            model->anim_step_100 = smoothed_remote.anim_step_100;
+            model->has_anim_step = smoothed_remote.has_anim_step;
+            model->motion_phase_frames =
+                smoothed_remote.motion_phase_frames;
+            model->new_motion_sample =
+                smoothed_remote.new_motion_sample;
             model->rot_x = smoothed_remote.rot_x;
             model->rot_y = smoothed_remote.rot_y;
             model->rot_z = smoothed_remote.rot_z;
@@ -625,6 +846,7 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
             render_remote_nameplate(slot_index, &smoothed_remote, local_obj);
         slot_index++;
     }
+    end_remote_smoothing_frame();
 
     /* Bind the sender's character/action records to plain cutscene-style
      * objects. This call never runs playable constructors or behavior code. */

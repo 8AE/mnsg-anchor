@@ -207,8 +207,11 @@ Current local player model/display object. Anchor reads:
 - `+0x28`: current animation frame.
 
 The frame count is obtained with `func_8001B5AC`. Character, action, frame,
-frame count, and rotations are sent together so the receiving client binds the
-same character/action record and predicts the one frame between packets.
+frame count, rotations, final game-tick linear/angular displacement, and the
+loop-aware per-tick animation advance are sampled together. The receiving
+client therefore binds the same character/action record and carries both the
+sender's resolved root motion and its native animation clock across the normal
+six-tick packet interval.
 
 ### `D_8020D1C0_5C90D0` and `D_8020D1D0_5C90E0`
 

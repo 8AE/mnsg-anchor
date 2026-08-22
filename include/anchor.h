@@ -197,12 +197,29 @@ extern "C"
     * @param rot_z            Model Z rotation from object offset 0x18.
     * @param appearance_flags Appearance bitmap: bit 0 is Goemon's Sudden
     *                         Impact; bit 1 is Mini Ebisumaru.
+    * @param velocity_x       Final frame-to-frame X displacement, units/sec.
+    * @param velocity_y       Final frame-to-frame Y displacement, units/sec.
+    * @param velocity_z       Final frame-to-frame Z displacement, units/sec.
+    * @param angular_velocity_x Final frame X rotation delta, angle units/sec.
+    * @param angular_velocity_y Final frame Y rotation delta, angle units/sec.
+    * @param angular_velocity_z Final frame Z rotation delta, angle units/sec.
+    * @param force_motion_edge Nonzero for a sparse start/stop/reversal packet.
+    * @param animation_step_100 Final native animation advance for this game
+    *                           tick, in hundredths of a clip frame.
+    * @param has_animation_step Nonzero when animation_step_100 is valid.
     * @return 1 if sent, 0 otherwise.
     */
    int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
                                 int action, int frame_100, int frame_count_100,
                                 int rot_x, int rot_y, int rot_z,
-                                int appearance_flags);
+                                int appearance_flags, int velocity_x,
+                                int velocity_y, int velocity_z,
+                                int angular_velocity_x,
+                                int angular_velocity_y,
+                                int angular_velocity_z,
+                                int force_motion_edge,
+                                int animation_step_100,
+                                int has_animation_step);
 
    /**
     * @brief Broadcast the local player's currently selected character.

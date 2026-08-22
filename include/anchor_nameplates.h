@@ -16,9 +16,9 @@ typedef struct AnchorNameplateCamera
 
 typedef struct AnchorNameplatePlayer
 {
-    int x;
-    int y;
-    int z;
+    float x;
+    float y;
+    float z;
     int ch;
     int same_team;
     const char *name;

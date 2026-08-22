@@ -36,6 +36,7 @@
  */
 
 #include "anchor_player_models.h"
+#include "anchor_remote_animation.h"
 #include "modding.h"
 #include "recomputils.h"
 
@@ -50,8 +51,6 @@
 #define CLOTHED_CHARACTER_OBJECT_MODE 2u
 #define REMOTE_YAW_SPEED_THRESHOLD_SQ 64
 #define REMOTE_MODEL_SCALE 0.1f
-#define REMOTE_FRAME_SNAP_THRESHOLD 4.0f
-#define REMOTE_PACKET_FRAME_INTERVAL 6.0f
 
 #define REMOTE_MODEL_SLOT_COUNT ANCHOR_PLAYER_MODEL_MAX
 #define CHARACTER_GOEMON 0
@@ -100,9 +99,13 @@ typedef struct RemoteModelSlot
     int last_seq;
     int last_remote_frame_100;
     int last_remote_frame_count_100;
+    int last_remote_anim_step_100;
+    int last_remote_has_anim_step;
     short yaw;
     float frame;
     float frame_step;
+    float native_frame_step;
+    AnchorRemoteAnimationState animation;
     void *task;
     void *object;
     unsigned char *private_action;
@@ -586,9 +589,13 @@ static void clear_slot_state(RemoteModelSlot *slot, int preserve_live_task)
     slot->last_seq = 0;
     slot->last_remote_frame_100 = 0;
     slot->last_remote_frame_count_100 = 0;
+    slot->last_remote_anim_step_100 = 0;
+    slot->last_remote_has_anim_step = 0;
     slot->yaw = 0;
     slot->frame = 0.0f;
     slot->frame_step = 1.0f;
+    slot->native_frame_step = 1.0f;
+    anchor_remote_animation_reset(&slot->animation);
     slot->aux_last_frame = 0.0f;
     slot->pending_valid = 0;
     slot->task = retained_task;
@@ -677,7 +684,7 @@ static int ensure_slot_task(RemoteModelSlot *slot, const AnchorPlayerModelRemote
      * no player initialization or behavior function is called. */
     object = func_8000DBF0_E7F0(slot->task, 0,
                                 CLOTHED_CHARACTER_ANIM_CONTEXT,
-                                (float)remote->x, (float)remote->y, (float)remote->z,
+                                remote->x, remote->y, remote->z,
                                 0, slot->yaw, 0,
                                 scale, scale, scale,
                                 0, 0);
@@ -950,8 +957,10 @@ static int bind_model(RemoteModelSlot *slot, int ch, int action,
         return 0;
 
     speed = *(short *)(entry + 0x04);
-    slot->frame_step = (float)speed / 100.0f;
+    slot->native_frame_step = (float)speed / 100.0f;
+    slot->frame_step = slot->native_frame_step;
     slot->frame = 0.0f;
+    anchor_remote_animation_reset(&slot->animation);
     slot->aux_last_frame = 0.0f;
     write_float_at(slot->object, 0x28, 0.0f);
 
@@ -988,27 +997,6 @@ static short yaw_from_velocity(int vx, int vz, short fallback)
     if (vx < 0 && vz < 0)
         return (short)0xe000;
     return 0x2000;
-}
-
-static float frame_delta(float target, float current, float frame_count)
-{
-    float delta = target - current;
-
-    if (frame_count > 1.0f)
-    {
-        float half = frame_count * 0.5f;
-
-        if (delta > half)
-            delta -= frame_count;
-        else if (delta < -half)
-            delta += frame_count;
-    }
-    return delta;
-}
-
-static float abs_float(float value)
-{
-    return value < 0.0f ? -value : value;
 }
 
 static float remote_model_scale(const AnchorPlayerModelRemote *remote,
@@ -1052,7 +1040,14 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
 {
     unsigned char *entry;
     float frame_count;
-    int new_remote_packet = remote->seq != slot->last_seq;
+    int new_remote_packet =
+        remote->new_motion_sample ||
+        remote->seq != slot->last_seq ||
+        remote->anim_frame_100 != slot->last_remote_frame_100 ||
+        remote->anim_frame_count_100 !=
+            slot->last_remote_frame_count_100 ||
+        remote->anim_step_100 != slot->last_remote_anim_step_100 ||
+        remote->has_anim_step != slot->last_remote_has_anim_step;
     int use_remote_anim = remote->action == slot->bound_action &&
                           remote->action >= 0 &&
                           remote->action < REMOTE_PLAYER_ACTION_MAX;
@@ -1060,46 +1055,38 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
     if (!use_remote_anim)
         slot->yaw = yaw_from_velocity(remote->vx, remote->vz, slot->yaw);
 
-    slot->frame += slot->frame_step;
     /* Resolve the bound clip length through the engine because its model
      * command pointer is segmented and cannot be dereferenced directly. */
     frame_count = func_8001B5AC_1C1AC(slot->object);
 
-    if (use_remote_anim && new_remote_packet)
+    if (use_remote_anim)
     {
-        float target_frame = (float)remote->anim_frame_100 / 100.0f;
-        float source_frame_count =
+        AnchorRemoteAnimationInput animation_input;
+        AnchorRemoteAnimationOutput animation_output;
+
+        animation_input.action = remote->action;
+        animation_input.seq = remote->seq;
+        animation_input.new_sample = new_remote_packet || action_changed;
+        animation_input.source_frame_count =
             (float)remote->anim_frame_count_100 / 100.0f;
-
-        /* The sender and receiver use the same character/action record. The
-         * normalized fallback only protects against a resolver count mismatch. */
-        if (source_frame_count > 1.0f && frame_count > 1.0f &&
-            abs_float(source_frame_count - frame_count) >= 0.01f)
-        {
-            target_frame = target_frame / source_frame_count * frame_count;
-        }
-
-        if (!action_changed && slot->last_seq != 0 &&
-            remote->anim_frame_count_100 > 100 &&
-            remote->anim_frame_count_100 == slot->last_remote_frame_count_100)
-        {
-            float previous_frame =
-                (float)slot->last_remote_frame_100 / 100.0f;
-            float delta;
-
-            if (source_frame_count > 1.0f && frame_count > 1.0f &&
-                abs_float(source_frame_count - frame_count) >= 0.01f)
-                previous_frame = previous_frame / source_frame_count * frame_count;
-            delta = frame_delta(target_frame, previous_frame, frame_count);
-            if (abs_float(delta) < REMOTE_FRAME_SNAP_THRESHOLD)
-                slot->frame_step = delta / REMOTE_PACKET_FRAME_INTERVAL;
-        }
-
-        /* Snap to every authoritative packet. The derived step above predicts
-         * the frames until the next expected packet, including paused clips. */
-        slot->frame = target_frame;
-        slot->last_remote_frame_100 = remote->anim_frame_100;
-        slot->last_remote_frame_count_100 = remote->anim_frame_count_100;
+        animation_input.target_frame_count = frame_count;
+        animation_input.target_frame =
+            (float)remote->anim_frame_100 / 100.0f;
+        animation_input.endpoint_step_valid = remote->has_anim_step;
+        animation_input.endpoint_step =
+            (float)remote->anim_step_100 / 100.0f;
+        animation_input.native_step = slot->native_frame_step;
+        animation_input.root_phase_lead_frames =
+            remote->motion_phase_frames;
+        anchor_remote_animation_step(&slot->animation, &animation_input,
+                                     &animation_output);
+        slot->frame = animation_output.frame;
+        slot->frame_step = animation_output.playback_step;
+    }
+    else
+    {
+        slot->frame += slot->native_frame_step;
+        slot->frame_step = slot->native_frame_step;
     }
 
     if (frame_count > 1.0f)
@@ -1125,9 +1112,9 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
         return;
     }
 
-    write_float_at(slot->object, 0x08, (float)remote->x);
-    write_float_at(slot->object, 0x0c, (float)remote->y);
-    write_float_at(slot->object, 0x10, (float)remote->z);
+    write_float_at(slot->object, 0x08, remote->x);
+    write_float_at(slot->object, 0x0c, remote->y);
+    write_float_at(slot->object, 0x10, remote->z);
     {
         float scale = remote_model_scale(remote, slot->frame);
 
@@ -1150,6 +1137,11 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
     }
     write_float_at(slot->object, 0x28, slot->frame);
     slot->last_seq = remote->seq;
+    slot->last_remote_frame_100 = remote->anim_frame_100;
+    slot->last_remote_frame_count_100 =
+        remote->anim_frame_count_100;
+    slot->last_remote_anim_step_100 = remote->anim_step_100;
+    slot->last_remote_has_anim_step = remote->has_anim_step;
 }
 
 static void update_slot_hidden_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemote *remote)
@@ -1157,9 +1149,9 @@ static void update_slot_hidden_pose(RemoteModelSlot *slot, const AnchorPlayerMod
     if (!slot->object)
         return;
 
-    write_float_at(slot->object, 0x08, (float)remote->x);
-    write_float_at(slot->object, 0x0c, (float)remote->y);
-    write_float_at(slot->object, 0x10, (float)remote->z);
+    write_float_at(slot->object, 0x08, remote->x);
+    write_float_at(slot->object, 0x0c, remote->y);
+    write_float_at(slot->object, 0x10, remote->z);
     {
         float scale = remote_model_scale(
             remote, (float)remote->anim_frame_100 / 100.0f);

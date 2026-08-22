@@ -208,9 +208,9 @@ int anchor_nameplates_render_slot(
         return 0;
     }
 
-    local_dx = (float)remote->x - camera->player_x;
-    local_dy = (float)remote->y - camera->player_y;
-    local_dz = (float)remote->z - camera->player_z;
+    local_dx = remote->x - camera->player_x;
+    local_dy = remote->y - camera->player_y;
+    local_dz = remote->z - camera->player_z;
     distance_sq = local_dx * local_dx + local_dy * local_dy + local_dz * local_dz;
     if (distance_sq > NAMEPLATE_HIDE_DISTANCE_SQ)
     {
@@ -231,9 +231,9 @@ int anchor_nameplates_render_slot(
     right_x = -forward_z;
     right_z = forward_x;
 
-    rel_x = (float)remote->x - eye_x;
-    rel_y = ((float)remote->y + label_height) - eye_y;
-    rel_z = (float)remote->z - eye_z;
+    rel_x = remote->x - eye_x;
+    rel_y = (remote->y + label_height) - eye_y;
+    rel_z = remote->z - eye_z;
     depth = rel_x * forward_x + rel_z * forward_z;
 
     if (depth < 20.0f)

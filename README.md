@@ -46,7 +46,7 @@ Every individual silver doll (40 rooms) and gold doll (5 rooms) room pickup flag
 
 Networking is handled by `py/anchor_mnsg.py`, a Python module that runs inside the [REPY (RecompExternalPython)](https://github.com/LT-Schmiddy/zelda64recomp-python-extlibs-mod) extlib embedded in the `.nrm`. REPY must be installed as a dependency mod.
 
-Player movement is coalesced to a steady 10 Hz update rate, with action changes and animation-loop restarts sent immediately. Receivers keep only the newest movement state per player instead of adding movement packets to the gameplay-event queue.
+Player movement is coalesced to a steady 5 Hz update rate, with action/animation edges and sparse motion starts, stops, and reversals sent immediately. Receivers keep only the newest movement state per player instead of adding movement packets to the gameplay-event queue. A native-order client predictor [reconstructs the 30 Hz game ticks between those snapshots](docs/remote-player-movement-interpolation.md) from final linear/angular displacement and the source animation's actual per-tick rate, with signed arrival phase, bounded constant residual correction, conservative shortest-path rotation, and bounded packet-underrun prediction.
 
 Join-time item synchronization uses one compact team-state snapshot followed by durable incremental flag packets. This avoids the previous burst of hundreds of individual packets when a save loads or a teammate joins.
 
