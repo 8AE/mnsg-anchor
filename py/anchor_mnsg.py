@@ -77,6 +77,9 @@ import platform
 import subprocess
 import time
 import logging
+import math
+import secrets
+from collections import deque
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -119,6 +122,14 @@ _last_position_action: int = -2
 _last_position_frame_100: int = 0
 _last_position_appearance_flags: int = -1
 _last_position_collision_disabled: int = -1
+_last_position_drive: "tuple[int, int]" = (0, 0)
+_last_position_epoch: int = 0
+_interaction_session: int = 0
+_player_hit_seq: int = 0
+_player_hits = deque(maxlen=32)
+_player_hit_seen: "dict[int, tuple[int, int, int, int]]" = {}
+_retired_interaction_sessions: "dict[int, set[int]]" = {}
+_player_movement_order: "dict[int, dict]" = {}
 _position_seq: int = 0
 _race_status: str = ""
 _race_config_json: str = ""
@@ -132,6 +143,7 @@ DEFAULT_PORT: int = 43383
 ROOM_ID_PREFIX: str = "mnsg-"
 ROOM_ID_TRIM_CHARS: str = " \t\n\r\v\f"
 MOVEMENT_MIN_INTERVAL_MS: int = 50
+PLAYER_HIT_MAX_AGE_MS: int = 500
 ANIMATION_RESTART_DELTA_100: int = 50
 APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
 APPEARANCE_MINI_EBISUMARU: int = 1 << 1
@@ -141,6 +153,7 @@ _MOVEMENT_STATE_FIELDS: "tuple[str, ...]" = (
     "action", "animFrame100", "animFrameCount100", "rotX", "rotY", "rotZ",
     "rotVelX", "rotVelY", "rotVelZ", "animStep100", "hasAnimStep",
     "collisionDisabled",
+    "driveX", "driveZ", "playerEpoch", "interactionSession",
 )
 _POSITION_SEQUENCE_MASK: int = 0x7fffffff
 _POSITION_SEQUENCE_HALF_RANGE: int = 0x40000000
@@ -179,6 +192,13 @@ def _clear_movement_state(state: dict) -> None:
     """Invalidate a transform without discarding identity/room metadata."""
     for field in _MOVEMENT_STATE_FIELDS:
         state.pop(field, None)
+
+
+def _retire_interaction_session(cid: int, session: int) -> None:
+    if session > 0:
+        # Keep retired identities for this whole local connection. Evicting
+        # an older token would let its delayed movement become current again.
+        _retired_interaction_sessions.setdefault(cid, set()).add(session)
 
 
 def _position_sample_is_fresh(state: dict, payload: dict) -> bool:
@@ -227,16 +247,26 @@ def _merge_client_state(
         }
         _player_states[cid] = state
 
-    if enforce_movement_order and not _position_sample_is_fresh(state, payload):
-        return False
-
     if enforce_movement_order:
-        # These optional fields form one endpoint-rate capability. A legacy
-        # sender omitting them must explicitly fall back to the receiver's
-        # native action speed instead of inheriting a stale value from an
-        # earlier updated sender/reconnect.
-        state["animStep100"] = int(payload.get("animStep100", 0))
-        state["hasAnimStep"] = int(payload.get("hasAnimStep", 0))
+        session = int(payload.get("interactionSession", 0))
+        epoch = int(payload.get("playerEpoch", 0))
+        if not (0 <= session <= _POSITION_SEQUENCE_MASK and
+                0 <= epoch <= _POSITION_SEQUENCE_MASK):
+            return False
+        previous_order = _player_movement_order.get(cid, state)
+        previous_session = int(previous_order.get("interactionSession", 0))
+        if session in _retired_interaction_sessions.get(cid, ()):
+            return False
+        new_session = session > 0 and session != previous_session
+        if not new_session and not _position_sample_is_fresh(previous_order, payload):
+            return False
+        if session == previous_session and session > 0:
+            previous_epoch = int(previous_order.get("playerEpoch", 0))
+            if epoch > 0 and epoch < previous_epoch:
+                return False
+        if session != previous_session:
+            _retire_interaction_session(cid, previous_session)
+            _clear_movement_state(state)
 
     if "currentRoomId" in payload:
         next_room = int(payload["currentRoomId"])
@@ -273,6 +303,21 @@ def _merge_client_state(
         state["collisionDisabled"] = (
             1 if int(payload.get("collisionDisabled", 0)) else 0
         )
+        state["driveX"] = max(-30000, min(30000, int(payload.get("driveX", 0))))
+        state["driveZ"] = max(-30000, min(30000, int(payload.get("driveZ", 0))))
+        for field in ("playerEpoch", "interactionSession"):
+            value = int(payload.get(field, 0))
+            state[field] = value if 0 < value <= _POSITION_SEQUENCE_MASK else 0
+        # Optional animation rate belongs to the same sample, including an
+        # atomic room change. A legacy sender must clear any retained rate.
+        if enforce_movement_order:
+            state["animStep100"] = int(payload.get("animStep100", 0))
+            state["hasAnimStep"] = int(payload.get("hasAnimStep", 0))
+            _player_movement_order[cid] = {
+                field: state[field] for field in
+                ("posSeq", "posT", "interactionSession", "playerEpoch")
+                if field in state
+            }
     if ("appearanceFlags" in payload or
             "suddenImpact" in payload or
             "modelScale100000" in payload):
@@ -331,6 +376,10 @@ def _replace_all_client_states(states: list) -> None:
                     client_state, int(merged.get("appearanceFlags", 0))
                 )
             new_players[cid] = merged
+        for cid, previous in previous_players.items():
+            if cid not in new_players:
+                order = _player_movement_order.pop(cid, previous)
+                _retire_interaction_session(cid, int(order.get("interactionSession", 0)))
         _player_states.clear()
         _player_states.update(new_players)
 
@@ -493,6 +542,8 @@ def _recv_loop(sock: socket.socket) -> None:
             buf += chunk
             # Process all complete messages in the buffer.
             while b"\x00" in buf:
+                if not _connected or _sock is not sock:
+                    return
                 sep = buf.index(b"\x00")
                 raw = buf[:sep].decode("utf-8", errors="replace").strip()
                 buf = buf[sep + 1:]
@@ -544,6 +595,10 @@ def _recv_loop(sock: socket.socket) -> None:
                     # duplicate this hot path in the general game-event queue.
                     continue
 
+                if ptype == "MNSG_PLAYER_HIT":
+                    _receive_player_hit(packet)
+                    continue
+
                 # Update a single player's status when they broadcast their state.
                 if ptype == "UPDATE_CLIENT_STATE":
                     # The server relays the packet as-is. We put clientId inside
@@ -581,6 +636,8 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     global _last_position_sent, _last_position_sent_ms, _last_position_room_id
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
+    global _last_position_drive, _last_position_epoch, _interaction_session
+    global _player_hit_seq
 
     # A receiver from an older connection must never close a newer socket.
     if expected_sock is not None and _sock is not expected_sock:
@@ -600,6 +657,10 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _last_position_frame_100 = 0
     _last_position_appearance_flags = -1
     _last_position_collision_disabled = -1
+    _last_position_drive = (0, 0)
+    _last_position_epoch = 0
+    _interaction_session = 0
+    _player_hit_seq = 0
     _connected = False
     s = _sock
     _sock = None
@@ -610,6 +671,10 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
             pass
     with _player_states_lock:
         _player_states.clear()
+        _player_hits.clear()
+        _player_hit_seen.clear()
+        _retired_interaction_sessions.clear()
+        _player_movement_order.clear()
 
 
 ###############################################################################
@@ -643,6 +708,8 @@ def connect(
     global _position_seq, _local_character
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
+    global _last_position_drive, _last_position_epoch, _interaction_session
+    global _player_hit_seq
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
 
     normalized_room_id = normalize_room_id(room_id)
@@ -668,11 +735,20 @@ def connect(
     _last_position_frame_100 = 0
     _last_position_appearance_flags = -1
     _last_position_collision_disabled = -1
+    _last_position_drive = (0, 0)
+    _last_position_epoch = 0
+    _interaction_session = secrets.randbelow(_POSITION_SEQUENCE_MASK) + 1
+    _player_hit_seq = 0
     _position_seq = 0
     _local_character = ""
     _local_save_loaded = False
     _race_status = ""
     _race_config_json = ""
+    with _player_states_lock:
+        _player_hits.clear()
+        _player_hit_seen.clear()
+        _retired_interaction_sessions.clear()
+        _player_movement_order.clear()
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -711,6 +787,7 @@ def connect(
             "name": _player_name,
             "online": True,
             "isSaveLoaded": False,
+            "interactionSession": _interaction_session,
         },
         "roomState": {},
     }
@@ -784,6 +861,144 @@ def poll_packet() -> str:
         return _recv_queue.get_nowait()
     except queue.Empty:
         return ""
+
+
+def _player_hit_matches_live_state(packet: dict) -> bool:
+    """Validate a hit against current movement identities; caller holds lock."""
+    try:
+        sender = int(packet.get("clientId", 0))
+        target = int(packet.get("targetClientId", 0))
+        source = _player_states.get(sender, {})
+        local = _player_states.get(_client_id, {})
+        room = int(packet.get("roomId", -1))
+        if (packet.get("type") != "MNSG_PLAYER_HIT" or
+                not _connected or _client_id <= 0 or sender <= 0 or
+                sender == _client_id or target != _client_id or
+                not source.get("online", False) or
+                source.get("collisionDisabled", 0) or local.get("collisionDisabled", 0) or
+                "posX" not in source or "posX" not in local or
+                room != _local_room_id or room != int(source.get("roomId", -1)) or
+                room != int(local.get("roomId", -1))):
+            return False
+        if (int(packet.get("sourceSession", 0)) <= 0 or
+                int(packet["sourceSession"]) != int(source.get("interactionSession", 0)) or
+                int(packet.get("targetSession", 0)) != _interaction_session or
+                _interaction_session <= 0 or
+                int(local.get("interactionSession", 0)) != _interaction_session or
+                int(packet.get("sourceEpoch", 0)) <= 0 or
+                int(packet["sourceEpoch"]) != int(source.get("playerEpoch", 0)) or
+                int(packet.get("targetEpoch", 0)) <= 0 or
+                int(packet["targetEpoch"]) != int(local.get("playerEpoch", 0))):
+            return False
+        sequence = int(packet.get("hitSeq", 0))
+        if not 0 < sequence <= _POSITION_SEQUENCE_MASK:
+            return False
+        # More recent movement may arrive before C polls this hit. A request
+        # cannot refer to a sender sample that the receiver has not seen yet.
+        source_seq = int(packet.get("sourcePosSeq", -1))
+        if not 0 <= source_seq <= _POSITION_SEQUENCE_MASK:
+            return False
+        sequence_lag = (int(source.get("posSeq", 0)) - source_seq) & _POSITION_SEQUENCE_MASK
+        if sequence_lag >= _POSITION_SEQUENCE_HALF_RANGE:
+            return False
+        hit_time = int(packet.get("hitT", 0))
+        source_time = int(source.get("posT", 0))
+        if (hit_time <= 0 or source_time <= 0 or
+                source_time - hit_time > PLAYER_HIT_MAX_AGE_MS or
+                hit_time - source_time > 5000):
+            return False
+        for coordinate in ("hitX", "hitY", "hitZ"):
+            value = float(packet[coordinate])
+            if not math.isfinite(value) or abs(value) > 10000000.0:
+                return False
+        return True
+    except (TypeError, ValueError, KeyError, OverflowError):
+        return False
+
+
+def _receive_player_hit(packet: dict) -> bool:
+    """Accept a bounded transient hit once; never enqueue it for item sync."""
+    received_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        if not _player_hit_matches_live_state(packet):
+            return False
+        sender = int(packet["clientId"])
+        identity = (int(packet["sourceSession"]), int(packet["sourceEpoch"]),
+                    int(packet["targetEpoch"]))
+        sequence = int(packet["hitSeq"])
+        previous = _player_hit_seen.get(sender)
+        if previous and previous[:3] == identity:
+            delta = (sequence - previous[3]) & _POSITION_SEQUENCE_MASK
+            if delta == 0 or delta >= _POSITION_SEQUENCE_HALF_RANGE:
+                return False
+        _player_hit_seen[sender] = (*identity, sequence)
+        _player_hits.append((received_ms, dict(packet)))
+    return True
+
+
+def send_player_hit(target_cid: int, target_epoch: int,
+                    hit_x: float, hit_y: float, hit_z: float,
+                    source_epoch: "int | None" = None) -> bool:
+    """Request one native hit on the target owner using current identities."""
+    global _player_hit_seq
+    try:
+        target_cid = int(target_cid)
+        target_epoch = int(target_epoch)
+        if source_epoch is not None:
+            source_epoch = int(source_epoch)
+        coordinates = tuple(float(value) for value in (hit_x, hit_y, hit_z))
+        if any(not math.isfinite(value) or abs(value) > 10000000.0 for value in coordinates):
+            return False
+    except (TypeError, ValueError, OverflowError):
+        return False
+    with _player_states_lock:
+        local = _player_states.get(_client_id, {})
+        target = _player_states.get(target_cid, {})
+        if (not _connected or _client_id <= 0 or target_cid <= 0 or
+                target_cid == _client_id or not target.get("online", False) or
+                local.get("collisionDisabled", 0) or target.get("collisionDisabled", 0) or
+                _local_room_id < 0 or
+                int(target.get("roomId", -1)) != _local_room_id or
+                int(local.get("roomId", -1)) != _local_room_id or
+                "posX" not in local or "posX" not in target or
+                target_epoch <= 0 or int(target.get("playerEpoch", 0)) != target_epoch or
+                _interaction_session <= 0 or
+                int(local.get("interactionSession", 0)) != _interaction_session or
+                int(local.get("playerEpoch", 0)) <= 0 or
+                (source_epoch is not None and source_epoch != int(local.get("playerEpoch", 0))) or
+                int(target.get("interactionSession", 0)) <= 0):
+            return False
+        next_seq = (_player_hit_seq % _POSITION_SEQUENCE_MASK) + 1
+        packet = {
+            "type": "MNSG_PLAYER_HIT", "clientId": _client_id,
+            "targetClientId": target_cid, "roomId": _local_room_id,
+            "sourceSession": _interaction_session,
+            "targetSession": int(target["interactionSession"]),
+            "sourceEpoch": int(local["playerEpoch"]),
+            "targetEpoch": target_epoch, "hitSeq": next_seq,
+            "sourcePosSeq": int(local.get("posSeq", 0)),
+            "hitT": int(time.monotonic() * 1000),
+            "hitX": coordinates[0], "hitY": coordinates[1], "hitZ": coordinates[2],
+            "quiet": True,
+        }
+    if not _send_raw(packet):
+        return False
+    _player_hit_seq = next_seq
+    return True
+
+
+def poll_player_hit():
+    """Return a fresh owner-targeted hit tuple, or None, without any echo."""
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        while _player_hits:
+            received_ms, packet = _player_hits.popleft()
+            if (now_ms - received_ms > PLAYER_HIT_MAX_AGE_MS or
+                    not _player_hit_matches_live_state(packet)):
+                continue
+            return (int(packet["clientId"]), int(packet["targetEpoch"]),
+                    float(packet["hitX"]), float(packet["hitY"]), float(packet["hitZ"]))
+    return None
 
 
 def get_server_message() -> str:
@@ -972,6 +1187,9 @@ def set_position_anim(
     animation_step_100: int = 0,
     has_animation_step: int = 0,
     collision_disabled: int = 0,
+    drive_x: int = 0,
+    drive_z: int = 0,
+    player_epoch: int = 0,
 ) -> bool:
     """
     Broadcast world-space position and the live animation phase to teammates.
@@ -1009,6 +1227,9 @@ def set_position_anim(
             zero represents a paused native clip.
         collision_disabled: Nonzero during native cutscene/script movement.
             Both edges bypass the normal send interval.
+        drive_x, drive_z: Intended horizontal drive, hundredths of world
+            units per second. Each axis is bounded to +/-30000.
+        player_epoch: Positive local-player lifecycle counter.
 
     Returns True if the packet was sent.
     """
@@ -1016,6 +1237,7 @@ def set_position_anim(
     global _position_seq
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
+    global _last_position_drive, _last_position_epoch
 
     if not _connected:
         return False
@@ -1026,6 +1248,16 @@ def set_position_anim(
     appearance_changed = appearance_flags != _last_position_appearance_flags
     collision_disabled = 1 if collision_disabled else 0
     collision_changed = collision_disabled != _last_position_collision_disabled
+    drive_x = max(-30000, min(30000, int(drive_x)))
+    drive_z = max(-30000, min(30000, int(drive_z)))
+    player_epoch = int(player_epoch)
+    if not 0 < player_epoch <= _POSITION_SEQUENCE_MASK:
+        player_epoch = 0
+    drive_stopped = (
+        (_last_position_drive[0] != 0 and drive_x == 0) or
+        (_last_position_drive[1] != 0 and drive_z == 0)
+    )
+    epoch_changed = player_epoch != _last_position_epoch
     frame_restarted = (
         not action_changed
         and int(frame_100) + ANIMATION_RESTART_DELTA_100 < _last_position_frame_100
@@ -1037,6 +1269,8 @@ def set_position_anim(
         and not action_changed
         and not appearance_changed
         and not collision_changed
+        and not drive_stopped
+        and not epoch_changed
         and not frame_restarted
         and not bool(force_motion_edge)
     ):
@@ -1104,6 +1338,10 @@ def set_position_anim(
         "rotVelZ": rot_vel_z,
         "appearanceFlags": appearance_flags,
         "collisionDisabled": collision_disabled,
+        "driveX": drive_x,
+        "driveZ": drive_z,
+        "playerEpoch": player_epoch,
+        "interactionSession": _interaction_session,
         "quiet": True,
     })
     if not sent:
@@ -1116,6 +1354,8 @@ def set_position_anim(
     _last_position_frame_100 = int(frame_100)
     _last_position_appearance_flags = appearance_flags
     _last_position_collision_disabled = collision_disabled
+    _last_position_drive = (drive_x, drive_z)
+    _last_position_epoch = player_epoch
     _position_seq = next_seq
 
     if _client_id:
@@ -1142,6 +1382,11 @@ def set_position_anim(
             local["rotVelZ"] = rot_vel_z
             local["appearanceFlags"] = appearance_flags
             local["collisionDisabled"] = collision_disabled
+            local["driveX"] = drive_x
+            local["driveZ"] = drive_z
+            local["playerEpoch"] = player_epoch
+            local["interactionSession"] = _interaction_session
+            local["roomId"] = _local_room_id
     return True
 
 
@@ -1419,6 +1664,10 @@ def get_lobby_positions_json() -> str:
                 "rvz": int(v.get("rotVelZ", 0)),
                 "ap": int(v.get("appearanceFlags", 0)) & APPEARANCE_MASK,
                 "cd": 1 if v.get("collisionDisabled", 0) else 0,
+                "dx": int(v.get("driveX", 0)),
+                "dz": int(v.get("driveZ", 0)),
+                "pe": int(v.get("playerEpoch", 0)),
+                "ps": int(v.get("interactionSession", 0)),
                 "tm": 1 if v.get("teamId", "") == _team_id else 0,
             })
     return json.dumps(result, separators=(",", ":"))

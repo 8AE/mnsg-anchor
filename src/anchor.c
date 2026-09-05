@@ -33,6 +33,7 @@
 #include "modding.h"
 #include "recomputils.h" /* also defines NULL and recomp_get_mod_file_path */
 #include "anchor.h"
+#include "anchor_player_models.h"
 #include "repy_api.h"
 
 /* =========================================================================
@@ -271,7 +272,8 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
                              int force_motion_edge,
                              int animation_step_100,
                              int has_animation_step,
-                             int collision_disabled)
+                             int collision_disabled,
+                             int drive_x, int drive_z, int player_epoch)
 {
     REPY_FN_SETUP;
     REPY_FN_SET_S32("pos_x", pos_x);
@@ -294,6 +296,9 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
     REPY_FN_SET_S32("animation_step_100", animation_step_100);
     REPY_FN_SET_S32("has_animation_step", has_animation_step);
     REPY_FN_SET_S32("collision_disabled", collision_disabled);
+    REPY_FN_SET_S32("drive_x", drive_x);
+    REPY_FN_SET_S32("drive_z", drive_z);
+    REPY_FN_SET_S32("player_epoch", player_epoch);
     REPY_FN_EXEC_CACHE(anchor_set_position_anim_code,
                        "import anchor_mnsg\n"
                        "result = anchor_mnsg.set_position_anim(\n"
@@ -302,9 +307,53 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
                        "    appearance_flags, velocity_x, velocity_y, velocity_z,\n"
                        "    angular_velocity_x, angular_velocity_y, angular_velocity_z,\n"
                        "    force_motion_edge, animation_step_100, has_animation_step,\n"
-                       "    collision_disabled\n"
+                       "    collision_disabled, drive_x, drive_z, player_epoch\n"
                        ")\n");
     int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_send_player_hit(int target_cid, int target_epoch,
+                           float hit_x, float hit_y, float hit_z)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("target_cid", target_cid);
+    REPY_FN_SET_S32("target_epoch", target_epoch);
+    REPY_FN_SET_S32("source_epoch", anchor_player_models_get_epoch());
+    REPY_FN_SET_F32("hit_x", hit_x);
+    REPY_FN_SET_F32("hit_y", hit_y);
+    REPY_FN_SET_F32("hit_z", hit_z);
+    REPY_FN_EXEC_CACHE(anchor_send_player_hit_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.send_player_hit(\n"
+                       "    target_cid, target_epoch, hit_x, hit_y, hit_z, source_epoch)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
+                           float *x, float *y, float *z)
+{
+    if (!sender_cid || !target_epoch || !x || !y || !z)
+        return 0;
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_poll_player_hit_code,
+                       "import anchor_mnsg\n"
+                       "hit = anchor_mnsg.poll_player_hit()\n"
+                       "has_hit = hit is not None\n"
+                       "if has_hit:\n"
+                       "    sender_cid, target_epoch, hit_x, hit_y, hit_z = hit\n");
+    int result = (int)REPY_FN_GET_BOOL("has_hit");
+    if (result)
+    {
+        *sender_cid = (int)REPY_FN_GET_S32("sender_cid");
+        *target_epoch = (int)REPY_FN_GET_S32("target_epoch");
+        *x = REPY_FN_GET_F32("hit_x");
+        *y = REPY_FN_GET_F32("hit_y");
+        *z = REPY_FN_GET_F32("hit_z");
+    }
     REPY_FN_CLEANUP;
     return result;
 }

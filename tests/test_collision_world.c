@@ -529,6 +529,49 @@ static int test_normal_contact_free_motion_uses_only_one_world_resolution(void)
     return 0;
 }
 
+static int test_player_pressure_moves_recipient_until_world_or_peer_blocks(void)
+{
+    AnchorCollisionBody recipient = {{14.02f, 0.0f, 0.0f}, 7.0f, 18.5f};
+    AnchorCollisionBody peers[2] = {
+        {{0.0f, 0.0f, 0.0f}, 7.0f, 18.5f},
+        {{36.0f, 0.0f, 0.0f}, 7.0f, 18.5f},
+    };
+    int i;
+    clear_scene();
+    add_plane(0, 30.0f, -1.0f, 0);
+    for (i = 0; i < 20; ++i)
+    {
+        AnchorCollisionVec3 push = anchor_collision_push(&recipient, &peers[0], 2.0f, 0.0f);
+        AnchorCollisionVec3 target = recipient.position;
+        AnchorCollisionVec3 out;
+        target.x += push.x;
+        CHECK(anchor_collision_move_body(&recipient, &target, 0.1f, peers, 1, &out));
+        recipient.position = out;
+        CHECK(recipient.position.x <= 23.001f);
+        CHECK(bodies_separate(&recipient, out, &peers[0]));
+        /* Next movement snapshot preserves the recipient's new position;
+         * the source can approach the now displaced body and push again. */
+        peers[0].position.x = recipient.position.x - 14.02f;
+    }
+    CHECK(recipient.position.x > 22.8f);
+    clear_scene();
+    recipient.position.x = 14.02f;
+    peers[0].position.x = 0.0f;
+    for (i = 0; i < 20; ++i)
+    {
+        AnchorCollisionVec3 push = anchor_collision_push(&recipient, &peers[0], 2.0f, 0.0f);
+        AnchorCollisionVec3 target = recipient.position;
+        AnchorCollisionVec3 out;
+        target.x += push.x;
+        CHECK(anchor_collision_move_body(&recipient, &target, 0.1f, peers, 2, &out));
+        recipient.position = out;
+        peers[0].position.x = recipient.position.x - 14.02f;
+        CHECK(bodies_separate(&recipient, out, &peers[1]));
+    }
+    CHECK(recipient.position.x > 21.8f && recipient.position.x <= 22.001f);
+    return 0;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -550,5 +593,6 @@ int main(void)
     failures += test_spawn_escape_keeps_a_third_player_as_a_swept_obstacle();
     failures += test_fully_blocked_spawn_reports_failure_without_an_invalid_collider();
     failures += test_normal_contact_free_motion_uses_only_one_world_resolution();
+    failures += test_player_pressure_moves_recipient_until_world_or_peer_blocks();
     return failures != 0;
 }

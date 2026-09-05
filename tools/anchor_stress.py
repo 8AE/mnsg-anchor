@@ -20,6 +20,7 @@ import contextlib
 import json
 import math
 import signal
+import secrets
 import sys
 import time
 from dataclasses import dataclass, field
@@ -66,6 +67,10 @@ class RemoteState:
     vel_z: int = 0
     pos_seq: int = 0
     collision_disabled: int = 0
+    drive_x: int = 0
+    drive_z: int = 0
+    player_epoch: int = 0
+    interaction_session: int = 0
     updated_at: float = field(default_factory=time.monotonic)
 
 
@@ -158,10 +163,18 @@ class WorldState:
             next_room = int(data["currentRoomId"])
             if next_room != player.room_id:
                 player.collision_disabled = 0
+                player.drive_x = 0
+                player.drive_z = 0
+                player.player_epoch = 0
+                player.interaction_session = 0
             player.room_id = next_room
         if "posX" in data:
             player.x = int(data["posX"])
             player.collision_disabled = 1 if int(data.get("collisionDisabled", 0)) else 0
+            player.drive_x = max(-30000, min(30000, int(data.get("driveX", 0))))
+            player.drive_z = max(-30000, min(30000, int(data.get("driveZ", 0))))
+            player.player_epoch = int(data.get("playerEpoch", 0))
+            player.interaction_session = int(data.get("interactionSession", 0))
         if "posY" in data:
             player.y = int(data["posY"])
         if "posZ" in data:
@@ -205,6 +218,10 @@ class AnchorBot:
         self.room_id = config.start_room
         self.character = config.character
         self.collision_disabled = 0
+        self.drive_x = 0
+        self.drive_z = 0
+        self.player_epoch = 1
+        self.interaction_session = 0
         self._last_pos: tuple[int, int, int] | None = None
         self._last_pos_ms = 0
         self._pos_seq = 0
@@ -215,6 +232,7 @@ class AnchorBot:
 
     async def connect(self) -> None:
         self._reader, self._writer = await asyncio.open_connection(self.config.host, self.config.port)
+        self.interaction_session = secrets.randbelow(0x7fffffff) + 1
         self.connected = True
         await self._send({
             "type": "HANDSHAKE",
@@ -225,6 +243,7 @@ class AnchorBot:
                 "name": self.name,
                 "online": True,
                 "isSaveLoaded": True,
+                "interactionSession": self.interaction_session,
             },
             "roomState": {},
         })
@@ -269,6 +288,7 @@ class AnchorBot:
             self.character = normalize_character(character)
             metadata_changed = True
         if metadata_changed:
+            self.player_epoch = (self.player_epoch % 0x7fffffff) + 1
             await self.publish_metadata(force=True)
         await self.publish_position()
 
@@ -313,6 +333,10 @@ class AnchorBot:
             "posSeq": self._pos_seq,
             "posT": now_ms,
             "collisionDisabled": self.collision_disabled,
+            "driveX": self.drive_x,
+            "driveZ": self.drive_z,
+            "playerEpoch": self.player_epoch,
+            "interactionSession": self.interaction_session,
             "quiet": True,
         })
 
@@ -510,6 +534,8 @@ class StressController:
             bot.y = int(target.y)
             bot.z = int(target.z + math.sin(angle) * radius)
             bot.collision_disabled = target.collision_disabled
+            bot.drive_x = target.drive_x
+            bot.drive_z = target.drive_z
             metadata_changed = False
             if target.room_id >= 0:
                 metadata_changed = metadata_changed or bot.room_id != target.room_id
@@ -519,6 +545,7 @@ class StressController:
                 metadata_changed = metadata_changed or bot.character != next_character
                 bot.character = next_character
             if metadata_changed:
+                bot.player_epoch = (bot.player_epoch % 0x7fffffff) + 1
                 await bot.publish_metadata(force=True)
 
     async def _command_set(self, args: list[str]) -> None:

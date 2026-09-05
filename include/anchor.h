@@ -209,6 +209,9 @@ extern "C"
     * @param has_animation_step Nonzero when animation_step_100 is valid.
     * @param collision_disabled Nonzero while native cutscene/script movement
     *                           requires peers to bypass local collision.
+    * @param drive_x          Intended X drive, hundredths of world units/sec.
+    * @param drive_z          Intended Z drive, hundredths of world units/sec.
+    * @param player_epoch     Positive local-player lifecycle counter.
     * @return 1 if sent, 0 otherwise.
     */
    int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
@@ -222,7 +225,15 @@ extern "C"
                                 int force_motion_edge,
                                 int animation_step_100,
                                 int has_animation_step,
-                                int collision_disabled);
+                                int collision_disabled,
+                                int drive_x, int drive_z, int player_epoch);
+
+   /* Targeted, transient native player hits. Python validates live room,
+    * connection sessions, player lifetimes, ordering and queue age. */
+   int anchor_send_player_hit(int target_cid, int target_epoch,
+                               float hit_x, float hit_y, float hit_z);
+   int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
+                               float *x, float *y, float *z);
 
    /**
     * @brief Broadcast the local player's currently selected character.

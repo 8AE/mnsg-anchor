@@ -10,6 +10,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 * **Teams** — players can be grouped by Team Name within a room so that flag queues and save-state syncs are scoped to that team.
 * **Reconnect support** — client IDs are preserved across sessions so the server can deliver queued packets on reconnect.
 * **Remote player collision** — remote models collide with the local player, other remote players, and local world geometry. Collision is suspended during either client's cutscene or scripted movement. Use the updated mod on both clients for the remote cutscene exemption; see [collision behavior and validation](docs/remote-player-collision.md).
+* **Player combat and pushing** — players in the same area can hit each other with native melee and player-owned projectile attack volumes, and push each other by moving into contact. Hits use the victim's native armour, hurt reaction and recovery; both interactions pause during cutscenes. Install the updated mod on all clients.
 
 ### What is synced
 
@@ -28,7 +29,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 | Stat                                    | Behaviour                                                                                   |
 | --------------------------------------- | ------------------------------------------------------------------------------------------- |
 | HP Max                                  | Highest value wins; receiving an upgrade also refills current HP to the new maximum         |
-| Current HP                              | Standard multiplayer does not sync it; the Team Damage Sync race challenge shares damage and healing deltas |
+| Current HP                              | Player attacks damage their victim directly. The Team Damage Sync race challenge shares other damage and healing deltas; PvP damage is excluded to prevent feedback. |
 | Fortune Dolls (total & traded)          | Highest value wins                                                                          |
 | Ryo (money)                             | Standard multiplayer does not sync it; the Ryo Sync race challenge shares both earnings and spending deltas |
 | Fish counts (red / yellow / blue)       | Highest value wins                                                                          |

@@ -78,6 +78,10 @@ typedef struct RemotePlayer
     int rot_vz;
     int appearance_flags;
     int collision_disabled;
+    int drive_x;
+    int drive_z;
+    int player_epoch;
+    int interaction_session;
     int motion_phase_frames;
     int new_motion_sample;
     int same_team;
@@ -89,6 +93,8 @@ typedef struct RemoteSmoothing
     int cid;
     int active;
     int seen;
+    int player_epoch;
+    int interaction_session;
     AnchorRemoteMotionState motion;
 } RemoteSmoothing;
 
@@ -142,6 +148,9 @@ static int s_last_sent_angular_velocity_y;
 static int s_last_sent_angular_velocity_z;
 static int s_last_sent_appearance_flags = -1;
 static int s_last_sent_collision_disabled = -1;
+static int s_last_sent_drive_x;
+static int s_last_sent_drive_z;
+static int s_last_sent_player_epoch;
 static unsigned int s_last_sent_room = 0xffffffffu;
 static int s_have_previous_frame_position;
 static float s_previous_frame_x;
@@ -317,6 +326,10 @@ static int parse_lobby_positions(const char *json)
             parse_int_after(p, "\"ap\"", 0);
         s_remote_players[count].collision_disabled =
             parse_int_after(p, "\"cd\"", 0) != 0;
+        s_remote_players[count].drive_x = parse_int_after(p, "\"dx\"", 0);
+        s_remote_players[count].drive_z = parse_int_after(p, "\"dz\"", 0);
+        s_remote_players[count].player_epoch = parse_int_after(p, "\"pe\"", 0);
+        s_remote_players[count].interaction_session = parse_int_after(p, "\"ps\"", 0);
         s_remote_players[count].same_team = parse_int_after(p, "\"tm\"", 1);
         parse_string_after(p, "\"n\"", s_remote_players[count].name,
                            (int)sizeof(s_remote_players[count].name));
@@ -351,6 +364,8 @@ static RemoteSmoothing *find_remote_smoothing(int cid, int create)
     s_remote_smoothing[free_index].cid = cid;
     s_remote_smoothing[free_index].active = 1;
     s_remote_smoothing[free_index].seen = 0;
+    s_remote_smoothing[free_index].player_epoch = 0;
+    s_remote_smoothing[free_index].interaction_session = 0;
     anchor_remote_motion_reset(&s_remote_smoothing[free_index].motion);
     return &s_remote_smoothing[free_index];
 }
@@ -400,6 +415,13 @@ static void smooth_remote_player(const RemotePlayer *remote, RemotePlayer *out)
     if (!smooth)
         return;
     smooth->seen = 1;
+    if (smooth->player_epoch != remote->player_epoch ||
+        smooth->interaction_session != remote->interaction_session)
+    {
+        anchor_remote_motion_reset(&smooth->motion);
+        smooth->player_epoch = remote->player_epoch;
+        smooth->interaction_session = remote->interaction_session;
+    }
     sample.room = remote->room;
     sample.seq = remote->seq;
     sample.timestamp_ms = remote->timestamp_ms;
@@ -437,6 +459,9 @@ static void reset_last_sent_state(void)
     s_last_sent_frame_count_100 = 0;
     s_last_sent_appearance_flags = -1;
     s_last_sent_collision_disabled = -1;
+    s_last_sent_drive_x = 0;
+    s_last_sent_drive_z = 0;
+    s_last_sent_player_epoch = 0;
     s_last_sent_room = 0xffffffffu;
     reset_frame_motion_baseline();
 }
@@ -459,6 +484,9 @@ static void publish_local_state(PlayerObject *local_obj)
     int rot_z;
     int appearance_flags;
     int collision_disabled;
+    int drive_x = 0;
+    int drive_z = 0;
+    int player_epoch;
     int velocity_x = 0;
     int velocity_y = 0;
     int velocity_z = 0;
@@ -650,6 +678,11 @@ static void publish_local_state(PlayerObject *local_obj)
     /* Transmit both script boundaries immediately, even when a stationary
      * player keeps the same action and animation throughout the transition. */
     collision_disabled = anchor_remote_collision_is_scripted();
+    anchor_player_models_get_drive(&drive_x, &drive_z);
+    player_epoch = anchor_player_models_get_epoch();
+    if ((s_last_sent_drive_x != 0 && drive_x == 0) ||
+        (s_last_sent_drive_z != 0 && drive_z == 0))
+        force_motion_edge = 1;
 
     if (!s_have_sent_position)
     {
@@ -663,7 +696,7 @@ static void publish_local_state(PlayerObject *local_obj)
         should_send_position =
             s_state_send_timer <= 0 &&
             ((dx * dx + dy * dy + dz * dz) >= POSITION_MIN_DELTA_SQ ||
-             s_position_keepalive_timer <= 0);
+             s_position_keepalive_timer <= 0 || drive_x != 0 || drive_z != 0);
     }
     anim_delta = frame_100 - s_last_sent_frame_100;
     if (anim_delta < 0)
@@ -677,6 +710,7 @@ static void publish_local_state(PlayerObject *local_obj)
         action != s_last_sent_action ||
         appearance_flags != s_last_sent_appearance_flags ||
         collision_disabled != s_last_sent_collision_disabled ||
+        player_epoch != s_last_sent_player_epoch ||
         frame_restarted ||
         (s_state_send_timer <= 0 &&
          (anim_delta >= ANIMATION_SEND_DELTA_100 ||
@@ -697,7 +731,8 @@ static void publish_local_state(PlayerObject *local_obj)
                                  velocity_z, angular_velocity_x,
                                  angular_velocity_y, angular_velocity_z,
                                  force_motion_edge, animation_step_100,
-                                 has_animation_step, collision_disabled))
+                                 has_animation_step, collision_disabled,
+                                 drive_x, drive_z, player_epoch))
     {
         s_have_sent_position = 1;
         s_last_sent_x = x;
@@ -717,6 +752,9 @@ static void publish_local_state(PlayerObject *local_obj)
         s_last_sent_angular_velocity_z = angular_velocity_z;
         s_last_sent_appearance_flags = appearance_flags;
         s_last_sent_collision_disabled = collision_disabled;
+        s_last_sent_drive_x = drive_x;
+        s_last_sent_drive_z = drive_z;
+        s_last_sent_player_epoch = player_epoch;
         s_state_send_timer = POSITION_SEND_FRAMES;
         s_position_keepalive_timer = POSITION_KEEPALIVE_FRAMES;
     }
@@ -853,6 +891,10 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
             model->rot_z = smoothed_remote.rot_z;
             model->appearance_flags = smoothed_remote.appearance_flags;
             model->collision_disabled = smoothed_remote.collision_disabled;
+            model->drive_x = smoothed_remote.drive_x;
+            model->drive_z = smoothed_remote.drive_z;
+            model->player_epoch = smoothed_remote.player_epoch;
+            model->interaction_session = smoothed_remote.interaction_session;
             model->same_team = smoothed_remote.same_team;
         }
 

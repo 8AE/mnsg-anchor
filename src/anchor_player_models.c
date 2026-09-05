@@ -38,6 +38,8 @@
 #include "anchor_player_models.h"
 #include "anchor_remote_animation.h"
 #include "anchor_remote_collision.h"
+#include "anchor_player_damage.h"
+#include "item_sync.h"
 #include "anchor.h"
 #include "modding.h"
 #include "recomputils.h"
@@ -123,6 +125,7 @@ typedef struct RemoteModelSlot
     unsigned short pending_room;
     AnchorCollisionBody collision_body;
     int collision_ready;
+    unsigned int drive_sample_tick;
 } RemoteModelSlot;
 
 /* Allocate and insert an engine task under `task_list` with an update
@@ -223,6 +226,16 @@ extern int func_8001C3E0_1CFE0(void *object, unsigned int model_ptr,
 static CharacterModelCache s_char_cache[CHARACTER_COUNT];
 static RemoteModelSlot s_slots[REMOTE_MODEL_SLOT_COUNT];
 static void *s_owner_task;
+static unsigned int s_interaction_tick;
+static void *s_interaction_task;
+static void *s_interaction_object;
+static unsigned short s_interaction_room;
+static int s_interaction_scripted;
+static int s_interaction_alive;
+static int s_player_epoch = 1;
+static int s_drive_x;
+static int s_drive_z;
+static unsigned int s_drive_tick;
 static unsigned char *s_aux_arena_next;
 static unsigned char *s_aux_arena_end;
 
@@ -618,6 +631,7 @@ static void clear_slot_state(RemoteModelSlot *slot, int preserve_live_task)
     slot->aux_last_frame = 0.0f;
     slot->pending_valid = 0;
     slot->collision_ready = 0;
+    slot->drive_sample_tick = 0;
     slot->task = retained_task;
     slot->object = retained_object;
     for (i = 0; i < AUX_RESOURCE_COUNT; ++i)
@@ -1131,6 +1145,133 @@ static int local_collision_body(AnchorCollisionBody *body, float *scale)
     return 1;
 }
 
+/* A new owner, room, death or scripted-control transition invalidates queued
+ * hits. Refresh at both the native movement boundary and the publisher, so
+ * an old event cannot affect a newly created player at the same address. */
+int anchor_player_models_get_epoch(void)
+{
+    AnchorCollisionBody body;
+    float scale;
+    void *task = 0;
+    void *object = 0;
+    int alive = 0;
+    int scripted = anchor_remote_collision_is_scripted();
+    if (anchor_is_connected() && local_collision_body(&body, &scale))
+    {
+        unsigned char *work;
+        task = D_801FC604_5B8514;
+        object = D_801FC60C_5B851C;
+        work = *(unsigned char **)((unsigned char *)task + 0x5c);
+        alive = is_rdram_pointer(work) && work[0x69] == 0 &&
+                item_sync_save_is_loaded() && item_sync_local_player_health() > 0;
+    }
+    if (task != s_interaction_task || object != s_interaction_object ||
+        D_800C7AB2 != s_interaction_room ||
+        scripted != s_interaction_scripted || alive != s_interaction_alive)
+    {
+        s_player_epoch = s_player_epoch == 0x7fffffff ? 1 : s_player_epoch + 1;
+        s_interaction_task = task;
+        s_interaction_object = object;
+        s_interaction_room = D_800C7AB2;
+        s_interaction_scripted = scripted;
+        s_interaction_alive = alive;
+        s_drive_x = s_drive_z = 0;
+    }
+    return s_player_epoch;
+}
+
+void anchor_player_models_get_drive(int *x, int *z)
+{
+    (void)anchor_player_models_get_epoch();
+    *x = s_interaction_tick - s_drive_tick <= 1u ? s_drive_x : 0;
+    *z = s_interaction_tick - s_drive_tick <= 1u ? s_drive_z : 0;
+}
+
+int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacity)
+{
+    int i;
+    int count = 0;
+    (void)anchor_player_models_get_epoch();
+    if (!out || capacity <= 0 || !s_interaction_alive ||
+        s_interaction_scripted || !anchor_is_connected() ||
+        s_owner_task != D_801FC604_5B8514 || !is_linked_task(s_owner_task))
+        return 0;
+    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT && count < capacity; ++i)
+    {
+        RemoteModelSlot *slot = &s_slots[i];
+        if (!slot->active || !slot->pending_valid || !slot->collision_ready ||
+            slot->pending_room != D_800C7AB2 ||
+            slot->pending_remote.collision_disabled ||
+            slot->pending_remote.player_epoch <= 0 ||
+            slot->pending_remote.interaction_session <= 0 ||
+            !is_linked_remote_task(slot->task))
+            continue;
+        out[count].cid = slot->cid;
+        out[count].epoch = slot->pending_remote.player_epoch;
+        out[count++].body = slot->collision_body;
+    }
+    return count;
+}
+
+static void receive_player_hits(void)
+{
+    int sender;
+    int epoch;
+    int i;
+    float x, y, z;
+    int current_epoch = anchor_player_models_get_epoch();
+    /* Drain even rejected hits instead of retaining them until control
+     * resumes. The transport also bounds the queue by age and peer session. */
+    for (i = 0; i < 16 && anchor_poll_player_hit(&sender, &epoch, &x, &y, &z); ++i)
+        if (epoch == current_epoch && s_interaction_alive &&
+            !s_interaction_scripted)
+            (void)anchor_player_damage_apply(x, y, z);
+}
+
+/* Apply an accepted network hit at the real player's normal pre-update
+ * boundary, before animation/action dispatch. The intake helper preserves
+ * native environment-hit priority and hurt/armour/projectile cleanup. */
+RECOMP_HOOK("func_801CB824_587734")
+void anchor_player_interactions_before_update(void *task, void *object)
+{
+    if (task == D_801FC604_5B8514 && object == D_801FC60C_5B851C)
+        receive_player_hits();
+}
+
+static AnchorCollisionVec3 incoming_player_push(const AnchorCollisionBody *body)
+{
+    AnchorCollisionVec3 total = {0.0f, 0.0f, 0.0f};
+    float length_squared;
+    int i;
+    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    {
+        RemoteModelSlot *slot = &s_slots[i];
+        AnchorCollisionVec3 push;
+        if (!slot->active || !slot->pending_valid || !slot->collision_ready ||
+            slot->pending_room != D_800C7AB2 ||
+            slot->pending_remote.collision_disabled ||
+            slot->pending_remote.player_epoch <= 0 ||
+            slot->pending_remote.interaction_session <= 0 ||
+            s_interaction_tick - slot->drive_sample_tick > 12u ||
+            !is_linked_remote_task(slot->task))
+            continue;
+        push = anchor_collision_push(body, &slot->collision_body,
+                                      (float)slot->pending_remote.drive_x / 3000.0f,
+                                      (float)slot->pending_remote.drive_z / 3000.0f);
+        total.x += push.x;
+        total.z += push.z;
+    }
+    /* A crowded room cannot multiply the per-frame push limit. */
+    length_squared = total.x * total.x + total.z * total.z;
+    if (length_squared > 2.25f)
+    {
+        float factor = 1.5f / __builtin_sqrtf(length_squared);
+        total.x *= factor;
+        total.z *= factor;
+    }
+    return total;
+}
+
 static int resolve_slot_collision(RemoteModelSlot *slot,
                                     const AnchorPlayerModelRemote *remote,
                                     float scale)
@@ -1187,7 +1328,11 @@ RECOMP_HOOK("func_801CBAF8_587A08")
 void anchor_collision_before_local_movement(void *task)
 {
     s_collision_local_task = 0;
-    if (task != D_801FC604_5B8514 || !anchor_is_connected() ||
+    if (task != D_801FC604_5B8514)
+        return;
+    s_drive_x = s_drive_z = 0;
+    (void)anchor_player_models_get_epoch();
+    if (!anchor_is_connected() || !s_interaction_alive ||
         anchor_remote_collision_is_scripted() ||
         !local_collision_body(&s_collision_local_body, &s_collision_local_scale))
         return;
@@ -1201,6 +1346,8 @@ void anchor_collision_after_local_movement(void)
 {
     AnchorCollisionBody peers[REMOTE_MODEL_SLOT_COUNT];
     AnchorCollisionVec3 target;
+    AnchorCollisionVec3 native_target;
+    AnchorCollisionVec3 push;
     AnchorCollisionVec3 contact;
     AnchorCollisionVec3 resolved;
     int count;
@@ -1216,13 +1363,31 @@ void anchor_collision_after_local_movement(void)
         return;
     }
     s_collision_local_task = 0;
+    native_target = object_position(s_collision_local_object);
+    /* Publish native attempted travel before player contact and before the
+     * incoming pressure below. Otherwise a stationary blocked sender loses
+     * its push, or a received push feeds back as voluntary pressure. */
+    {
+        float dx = native_target.x - s_collision_local_body.position.x;
+        float dz = native_target.z - s_collision_local_body.position.z;
+        s_drive_tick = s_interaction_tick;
+        if (dx * dx + dz * dz <= 100.0f)
+        {
+            s_drive_x = (int)(dx * 3000.0f);
+            s_drive_z = (int)(dz * 3000.0f);
+        }
+    }
     count = collect_collision_peers(0, peers);
     if (!count)
         return;
-    target = object_position(s_collision_local_object);
+    target = native_target;
+    push = incoming_player_push(&s_collision_local_body);
+    target.x += push.x;
+    target.z += push.z;
     anchor_collision_move_peers(&s_collision_local_body, &target,
                                 peers, count, &contact);
-    if (contact.x == target.x && contact.y == target.y && contact.z == target.z)
+    if (push.x == 0.0f && push.z == 0.0f &&
+        contact.x == target.x && contact.y == target.y && contact.z == target.z)
         return;
     if (!anchor_collision_move_body(&s_collision_local_body, &target,
                                     s_collision_local_scale, peers, count,
@@ -1237,9 +1402,9 @@ void anchor_collision_after_local_movement(void)
         for (i = 0; i < 3 && is_rdram_pointer(object); ++i)
         {
             AnchorCollisionVec3 position = object_position(object);
-            position.x += resolved.x - target.x;
-            position.y += resolved.y - target.y;
-            position.z += resolved.z - target.z;
+            position.x += resolved.x - native_target.x;
+            position.y += resolved.y - native_target.y;
+            position.z += resolved.z - native_target.z;
             set_object_position(object, position);
             object = *(void **)object;
         }
@@ -1463,6 +1628,8 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
                                  void *render_parent_task)
 {
     int i;
+    ++s_interaction_tick;
+    (void)anchor_player_models_get_epoch();
 
     if (!is_linked_task(render_parent_task))
     {
@@ -1498,7 +1665,13 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
             continue;
         /* Queue only plain network state here. The task callback consumes the
          * newest complete snapshot at the engine's safe pre-render point. */
-        if (slot->pending_room != D_800C7AB2)
+        if (!slot->pending_valid || remote->seq != slot->pending_remote.seq ||
+            remote->player_epoch != slot->pending_remote.player_epoch ||
+            remote->interaction_session != slot->pending_remote.interaction_session)
+            slot->drive_sample_tick = s_interaction_tick;
+        if (slot->pending_room != D_800C7AB2 ||
+            remote->player_epoch != slot->pending_remote.player_epoch ||
+            remote->interaction_session != slot->pending_remote.interaction_session)
             slot->collision_ready = 0;
         slot->pending_room = D_800C7AB2;
         slot->pending_remote = *remote;

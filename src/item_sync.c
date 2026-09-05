@@ -1007,9 +1007,26 @@ static signed int s_pending_benkei_sasuke_profile = -1;
 /* Active character index.                                                   */
 #define DS_CHAR_IDX() (((*(volatile unsigned int *)0x8015C5DC)) & 0xFFu)
 
-static unsigned char s_ds_prev_hp = 0;  /* HP observed last frame              */
+/* Signed so excluding PvP after a same-frame heal can retain that whole
+ * heal even when its adjusted comparison baseline falls below zero. */
+static signed int s_ds_prev_hp = 0;
 static unsigned int s_ds_prev_char = 0; /* character index observed last frame  */
 static int s_ds_initialized = 0;        /* 0 until first baseline is captured   */
+
+unsigned int item_sync_local_player_health(void)
+{
+    return DS_HP_READ();
+}
+
+void item_sync_exclude_pvp_damage(unsigned int damage)
+{
+    /* Shift only the HP loss just applied by native PvP intake. Replacing
+     * the baseline with current HP would also hide an unrelated enemy hit
+     * earlier in this frame, or a heal that still needs to be shared. */
+    if (!s_ds_initialized || DS_CHAR_IDX() != s_ds_prev_char)
+        return;
+    s_ds_prev_hp -= (signed int)damage;
+}
 
 /* Ryo delta sync state                                                      */
 #define DS_RYO_OFFSET (-0x20)

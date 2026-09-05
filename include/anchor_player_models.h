@@ -1,6 +1,8 @@
 #ifndef ANCHOR_PLAYER_MODELS_H
 #define ANCHOR_PLAYER_MODELS_H
 
+#include "anchor_remote_collision.h"
+
 #define ANCHOR_PLAYER_MODEL_MAX 25
 #define ANCHOR_APPEARANCE_SUDDEN_IMPACT (1 << 0)
 #define ANCHOR_APPEARANCE_MINI_EBISUMARU (1 << 1)
@@ -28,13 +30,27 @@ typedef struct AnchorPlayerModelRemote
     int rot_z;
     int appearance_flags;
     int collision_disabled;
+    int drive_x;
+    int drive_z;
+    int player_epoch;
+    int interaction_session;
     int same_team;
 } AnchorPlayerModelRemote;
+
+typedef struct AnchorPlayerHitTarget
+{
+    int cid;
+    int epoch;
+    AnchorCollisionBody body;
+} AnchorPlayerHitTarget;
 
 void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int count,
                                  void *render_parent_task);
 void anchor_player_models_load_resources(void);
 void anchor_player_models_reset(void);
 int anchor_player_models_get_position(int cid, float *x, float *y, float *z);
+int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacity);
+void anchor_player_models_get_drive(int *x, int *z);
+int anchor_player_models_get_epoch(void);
 
 #endif

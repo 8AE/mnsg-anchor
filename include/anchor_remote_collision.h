@@ -19,6 +19,13 @@ typedef struct AnchorCollisionBody
 
 int anchor_remote_collision_is_scripted(void);
 
+/* A peer's native movement before solid player contact, in world units per
+ * tick. Only approaching horizontal contact contributes pressure. The
+ * recipient resolves the returned displacement against its own world. */
+AnchorCollisionVec3 anchor_collision_push(const AnchorCollisionBody *recipient,
+                                         const AnchorCollisionBody *peer,
+                                         float drive_x, float drive_z);
+
 /* Native room and moving-object geometry, without player action callbacks. */
 void anchor_collision_world_move(const AnchorCollisionVec3 *from,
                                  const AnchorCollisionVec3 *target,
