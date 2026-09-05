@@ -23,10 +23,13 @@ int D_801684F8_1690F8, D_801684FC_1690FC;
 static AlignedBytes s_native, s_scratch, s_assets, s_objects;
 static unsigned int s_asset_bytes;
 static unsigned int s_reports;
+static int s_dialog_busy;
 void anchor_render_scratch_begin_bank(void);
 void anchor_render_scratch_begin_object(void *object);
 void anchor_render_scratch_end_object(void);
 void anchor_render_scratch_test_bind(void *arena, unsigned int bank_bytes);
+
+int anchor_dialog_busy(void) { return s_dialog_busy; }
 
 void recomp_printf(const char *format, ...)
 {
@@ -185,6 +188,7 @@ static void setup_native(void)
     D_801684F8_1690F8 = -1;
     D_801684FC_1690FC = 1;
     s_reports = 0;
+    s_dialog_busy = 0;
     anchor_render_scratch_test_bind(s_scratch.bytes, 32768u);
 }
 
@@ -302,6 +306,46 @@ static void exhaustion_skips_only_the_draw_and_preserves_colliders(void)
     assert(s_objects.bytes[0x64] == 0x80);
 }
 
+static void invitation_reserves_native_window_commands(void)
+{
+    unsigned int *head;
+    unsigned char *matrix;
+    unsigned int dialog_limit = (10640u - 512u - 2048u) * 8u;
+    unsigned char old[0x100];
+
+    /* Without a dialog, the original stock-tail budget is still available. */
+    setup_native();
+    D_8015C5CC_15D1CC = (unsigned int *)(s_native.bytes + dialog_limit);
+    head = D_8015C5CC_15D1CC;
+    draw_object(s_objects.bytes, 0x61);
+    assert(D_8015C5CC_15D1CC == head + 2);
+
+    /* At the dialog boundary, skip only the remote draw. Its object and
+     * collider remain intact and no stock or private cursor advances. */
+    setup_native();
+    s_dialog_busy = 1;
+    D_8015C5CC_15D1CC = (unsigned int *)(s_native.bytes + dialog_limit);
+    head = D_8015C5CC_15D1CC;
+    matrix = D_80168504_169104;
+    memcpy(old, s_objects.bytes, sizeof(old));
+    anchor_render_scratch_begin_object(s_objects.bytes);
+    assert(s_objects.bytes[0x64] & 1u);
+    anchor_render_scratch_end_object();
+    assert(memcmp(old, s_objects.bytes, sizeof(old)) == 0);
+    assert(D_8015C5CC_15D1CC == head && D_80168504_169104 == matrix);
+
+    /* One final group call immediately below the boundary is safe. Even a
+     * full 120-glyph window plus frame/cursor allowance and the normal HUD
+     * allowance fit without touching the adjacent native matrix storage. */
+    setup_native();
+    s_dialog_busy = 1;
+    D_8015C5CC_15D1CC = (unsigned int *)(s_native.bytes + dialog_limit - 8u);
+    draw_object(s_objects.bytes, 0x62);
+    assert((unsigned char *)D_8015C5CC_15D1CC == s_native.bytes + dialog_limit);
+    memset(D_8015C5CC_15D1CC, 0x33, (2048u + 512u) * 8u);
+    assert(s_native.bytes[10640u * 8u] == 0xa5);
+}
+
 int main(void)
 {
     native_tree_budget();
@@ -309,6 +353,7 @@ int main(void)
     reserve_actual_scene_bytes();
     private_lists_chain_and_keep_submitted_storage_alive();
     exhaustion_skips_only_the_draw_and_preserves_colliders();
+    invitation_reserves_native_window_commands();
     puts("Render scratch and native preflight tests passed");
     return 0;
 }

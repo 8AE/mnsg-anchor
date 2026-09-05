@@ -158,6 +158,15 @@ extern "C"
     */
    int anchor_set_local_room(unsigned int room_id);
 
+   /* Live, team-scoped boss-arena notifications. Arena 0 means outside;
+    * arena 1 is Congo. Entry/exit edges are sent once, independently of room
+    * metadata refreshes. The peeked JSON contains cid/session/seq/arena/name;
+    * it must be freed and explicitly dismissed after a dialog response. */
+   int anchor_update_boss_arena(int arena, int visit);
+   char *anchor_get_boss_invitation_json(void);
+   int anchor_boss_invitation_is_current(int cid, int session, int sequence);
+   void anchor_dismiss_boss_invitation(int cid, int session, int sequence);
+
    /**
     * @brief Broadcast the local player's world-space position to teammates.
     *

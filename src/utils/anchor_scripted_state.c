@@ -1,4 +1,5 @@
 #include "anchor_remote_collision.h"
+#include "anchor_dialog.h"
 
 /* Native byte fields in g_system (0x8008CCC0): +0x3AE20 and +0x3AE23.
  * These exact exports have no ROM suffix in mnsg.datasyms.toml. */
@@ -7,6 +8,11 @@ extern unsigned char D_800C7AE3;
 
 int anchor_remote_collision_is_scripted(void)
 {
+    /* An invitation owns player input while its native dialog is visible.
+     * Keep local/remote pushes and multiplayer damage out of that modal. */
+    if (anchor_dialog_busy())
+        return 1;
+
     /* The native late player update, func_801CBAF8_587A08, skips movement
      * collision when either low control-state bit is set. */
     if ((D_800C7AE0 & 3u) != 0)

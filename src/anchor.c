@@ -247,6 +247,56 @@ int anchor_set_local_room(unsigned int room_id)
     return result;
 }
 
+int anchor_update_boss_arena(int arena, int visit)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("arena", arena);
+    REPY_FN_SET_S32("visit", visit);
+    REPY_FN_EXEC_CACHE(anchor_update_boss_arena_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.set_boss_arena(arena, visit)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+char *anchor_get_boss_invitation_json(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_get_boss_invitation_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.get_boss_invitation_json()\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_boss_invitation_is_current(int cid, int session, int sequence)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("cid", cid);
+    REPY_FN_SET_S32("session", session);
+    REPY_FN_SET_S32("sequence", sequence);
+    REPY_FN_EXEC_CACHE(anchor_boss_invitation_current_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.boss_invitation_is_current(cid, session, sequence)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+void anchor_dismiss_boss_invitation(int cid, int session, int sequence)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("cid", cid);
+    REPY_FN_SET_S32("session", session);
+    REPY_FN_SET_S32("sequence", sequence);
+    REPY_FN_EXEC_CACHE(anchor_dismiss_boss_invitation_code,
+                      "import anchor_mnsg\n"
+                      "anchor_mnsg.dismiss_boss_invitation(cid, session, sequence)\n");
+    REPY_FN_CLEANUP;
+}
+
 int anchor_set_position(int pos_x, int pos_y, int pos_z)
 {
     REPY_FN_SETUP;

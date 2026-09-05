@@ -5,6 +5,8 @@
 
 unsigned char D_800C7AE0;
 unsigned char D_800C7AE3;
+static int dialog_active;
+int anchor_dialog_busy(void) { return dialog_active; }
 
 static int near(float a, float b)
 {
@@ -103,6 +105,10 @@ static void native_script_gate(void)
     D_800C7AE3 = 1;
     assert(anchor_remote_collision_is_scripted());
     D_800C7AE3 = 0;
+    assert(!anchor_remote_collision_is_scripted());
+    dialog_active = 1;
+    assert(anchor_remote_collision_is_scripted());
+    dialog_active = 0;
     assert(!anchor_remote_collision_is_scripted());
 }
 

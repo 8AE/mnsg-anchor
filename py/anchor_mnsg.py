@@ -139,6 +139,14 @@ _position_seq: int = 0
 _race_status: str = ""
 _race_config_json: str = ""
 
+# Live arena events are separate from durable save/flag packets. One pending
+# invitation per sender grows with the roster; room snapshots never create an
+# invitation or reset its consumed marker.
+_arena_local_state: "tuple[str, int, int]" = ("", 0, 0)
+_arena_sequence: int = 0
+_arena_events: dict = {}
+_arena_seen: dict = {}
+
 ###############################################################################
 # Constants
 ###############################################################################
@@ -153,6 +161,9 @@ PROJECTILE_MAX_AGE_MS: int = 750
 PROJECTILE_BATCH_COUNT: int = 16
 PROJECTILE_QUEUE_COUNT: int = 64
 PROJECTILE_MAX_JSON_BYTES: int = 512
+CONGO_ARENA: int = 1
+CONGO_ROOM: int = 0x16
+ARENA_METADATA_WAIT_MS: int = 5000
 ANIMATION_RESTART_DELTA_100: int = 50
 APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
 APPEARANCE_MINI_EBISUMARU: int = 1 << 1
@@ -399,6 +410,15 @@ def _replace_all_client_states(states: list) -> None:
                         merged[field] = previous[field]
                 if "appearanceFlags" in previous:
                     merged["appearanceFlags"] = previous["appearanceFlags"]
+            # A fresh handshake already identifies this live connection.
+            # Arena events do not require movement to have started, but an
+            # older room snapshot must not replace a newer motion session.
+            snapshot_session = client_state.get("interactionSession")
+            if ("interactionSession" not in merged and
+                    type(snapshot_session) is int and
+                    0 < snapshot_session <= _POSITION_SEQUENCE_MASK and
+                    snapshot_session not in _retired_interaction_sessions.get(cid, ())):
+                merged["interactionSession"] = snapshot_session
             if ("appearanceFlags" in client_state or
                     "suddenImpact" in client_state or
                     "modelScale100000" in client_state):
@@ -637,6 +657,10 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_projectile_spawn(packet)
                     continue
 
+                if ptype == "MNSG_BOSS_ARENA":
+                    _receive_boss_arena(packet)
+                    continue
+
                 if ptype == "MNSG_PROJECTILES":
                     # Retired continuous-visual protocol: never replay these
                     # old packets through the durable item/event queue.
@@ -719,6 +743,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _retired_interaction_sessions.clear()
         _player_movement_order.clear()
         _reset_projectile_spawns()
+        _reset_boss_invitations()
 
 
 ###############################################################################
@@ -794,6 +819,7 @@ def connect(
         _retired_interaction_sessions.clear()
         _player_movement_order.clear()
         _reset_projectile_spawns()
+        _reset_boss_invitations()
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -1296,6 +1322,9 @@ def update_client_state(state_json: str) -> bool:
 
     # Keep internal team_id in sync.
     if "teamId" in state:
+        if state["teamId"] != _team_id:
+            with _player_states_lock:
+                _arena_events.clear()
         _team_id = state["teamId"]
 
     # Server requires these fields.
@@ -1323,6 +1352,155 @@ def update_client_state(state_json: str) -> bool:
     return sent
 
 
+def _reset_boss_invitations() -> None:
+    """Called with the roster lock during connection teardown/setup."""
+    global _arena_local_state, _arena_sequence
+    _arena_local_state = ("", 0, 0)
+    _arena_sequence = 0
+    _arena_events.clear()
+    _arena_seen.clear()
+
+
+def set_boss_arena(arena: int, visit: int = 0) -> bool:
+    """Publish entry/exit edges supplied by the native loaded-room observer.
+
+    Congo is the sole supported arena in this draft. Metadata refreshes and
+    movement packets cannot generate an edge. Failed sends retain the old
+    state, so the next frame retries the same sequence number.
+    """
+    global _arena_local_state, _arena_sequence
+    if (type(arena) is not int or arena not in (0, CONGO_ARENA) or
+            type(visit) is not int or not 0 <= visit <= _POSITION_SEQUENCE_MASK or
+            not _connected or _client_id <= 0 or _interaction_session <= 0):
+        return False
+    if arena and not _local_save_loaded:
+        return False
+    next_state = (_team_id, arena, visit if arena else 0)
+    if next_state == _arena_local_state:
+        return True
+    if arena == 0 and _arena_local_state[1] == 0:
+        _arena_local_state = next_state
+        return True
+    sequence = _arena_sequence + 1
+    if sequence > _POSITION_SEQUENCE_MASK:
+        return False
+    packet = {"type": "MNSG_BOSS_ARENA", "clientId": _client_id,
+              "targetTeamId": _team_id, "arena": CONGO_ARENA,
+              "entered": arena != 0, "session": _interaction_session,
+              "seq": sequence}
+    if not _send_raw(packet):
+        return False
+    _arena_sequence = sequence
+    _arena_local_state = next_state
+    return True
+
+
+def _receive_boss_arena(packet: dict) -> bool:
+    """Receive a transient team event; membership and room are checked again
+    when it is presented and accepted, including events racing metadata.
+    """
+    if (not isinstance(packet, dict) or
+            packet.get("type") != "MNSG_BOSS_ARENA" or
+            not _connected or _client_id <= 0 or not _local_save_loaded or
+            packet.get("targetTeamId") != _team_id or
+            type(packet.get("arena")) is not int or
+            packet["arena"] != CONGO_ARENA or
+            type(packet.get("entered")) is not bool):
+        return False
+    for key in ("clientId", "session", "seq"):
+        if type(packet.get(key)) is not int or not 0 < packet[key] <= _POSITION_SEQUENCE_MASK:
+            return False
+    cid, session, sequence = (packet[key] for key in ("clientId", "session", "seq"))
+    if cid == _client_id:
+        return False
+    with _player_states_lock:
+        peer = _player_states.get(cid)
+        # Movement can create a row before its handshake metadata arrives.
+        # An absent team waits for confirmation; a known other team cannot
+        # inject an invitation simply by naming our targetTeamId.
+        if peer and (not peer.get("online", False) or
+                     (peer.get("teamId") and peer["teamId"] != _team_id)):
+            return False
+        if session in _retired_interaction_sessions.get(cid, ()):
+            return False
+        key = (cid, session)
+        if sequence <= _arena_seen.get(key, 0):
+            return False
+        _arena_seen[key] = sequence
+        if not packet["entered"]:
+            event = _arena_events.get(cid)
+            if event and event["session"] == session:
+                _arena_events.pop(cid, None)
+            return True
+        _arena_events[cid] = {
+            "cid": cid, "session": session, "seq": sequence,
+            "arena": CONGO_ARENA, "team": _team_id,
+            "entered": packet["entered"], "consumed": False,
+            "confirmed": False, "received": int(time.monotonic() * 1000),
+        }
+    return True
+
+
+def _boss_invitation_is_current(event: dict, now: int) -> bool:
+    """Under the roster lock. Pending metadata has a short grace period;
+    confirmed invitations live until the sender exits, disconnects or changes
+    teams, so a long local conversation does not lose a legitimate invitation.
+    """
+    if (not _connected or not _local_save_loaded or event["team"] != _team_id or
+            not event["entered"] or event["consumed"] or
+            _arena_local_state[:2] == (_team_id, CONGO_ARENA)):
+        event["consumed"] = True
+        return False
+    cid, session = event["cid"], event["session"]
+    peer = _player_states.get(cid, {})
+    known_session = peer.get("interactionSession") or _player_movement_order.get(cid, {}).get("interactionSession", 0)
+    eligible = (peer.get("online", False) and peer.get("isSaveLoaded", False) and
+                peer.get("teamId") == _team_id and peer.get("roomId") == CONGO_ROOM and
+                known_session == session and
+                session not in _retired_interaction_sessions.get(cid, ()))
+    if eligible:
+        event["confirmed"] = True
+        return True
+    if event["confirmed"] or now - event["received"] > ARENA_METADATA_WAIT_MS:
+        event["consumed"] = True
+    return False
+
+
+def get_boss_invitation_json() -> str:
+    """Peek one invitation. It remains available until the dialog responds;
+    an unrelated native dialog can defer presentation without consuming it.
+    """
+    now = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        for event in sorted(_arena_events.values(), key=lambda e: e["received"]):
+            if _boss_invitation_is_current(event, now):
+                name = _player_states[event["cid"]].get("name") or f'Player{event["cid"]}'
+                return json.dumps({"cid": event["cid"], "session": event["session"],
+                                   "seq": event["seq"], "arena": event["arena"],
+                                   "name": str(name)[:64]}, separators=(",", ":"), ensure_ascii=False)
+            if event["consumed"]:
+                _arena_events.pop(event["cid"], None)
+    return ""
+
+
+def boss_invitation_is_current(cid: int, session: int, sequence: int) -> bool:
+    with _player_states_lock:
+        event = _arena_events.get(cid)
+        if not event or event["session"] != session or event["seq"] != sequence:
+            return False
+        current = _boss_invitation_is_current(event, int(time.monotonic() * 1000))
+        if event["consumed"]:
+            _arena_events.pop(cid, None)
+        return current
+
+
+def dismiss_boss_invitation(cid: int, session: int, sequence: int) -> None:
+    with _player_states_lock:
+        event = _arena_events.get(cid)
+        if event and event["session"] == session and event["seq"] == sequence:
+            _arena_events.pop(cid, None)
+
+
 def set_save_loaded(is_loaded: bool) -> bool:
     """
     Convenience wrapper: set isSaveLoaded flag, making yourself eligible
@@ -1330,6 +1508,10 @@ def set_save_loaded(is_loaded: bool) -> bool:
     """
     global _local_save_loaded
     _local_save_loaded = bool(is_loaded)
+    if not _local_save_loaded:
+        set_boss_arena(0)
+        with _player_states_lock:
+            _arena_events.clear()
     return update_client_state(json.dumps({"isSaveLoaded": _local_save_loaded}))
 
 
@@ -1734,8 +1916,6 @@ def set_team(new_team_id: str) -> bool:
     Args:
         new_team_id: The new team identifier.
     """
-    global _team_id
-    _team_id = new_team_id
     return update_client_state(json.dumps({"teamId": new_team_id}))
 
 

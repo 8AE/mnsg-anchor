@@ -1,4 +1,5 @@
 #include "anchor_render_scratch.h"
+#include "anchor_dialog.h"
 
 #ifndef ANCHOR_RENDER_SCRATCH_HOST_TEST
 #include "modding.h"
@@ -31,6 +32,12 @@ extern const void *anchor_player_models_resolve_render_address(
 /* Remote draws use a single stock call per contiguous group; leave the
  * stock command tail for the engine's later frame-finalization/HUD work. */
 #define NATIVE_GRAPHICS_TAIL_BYTES (512u * 8u)
+/* 8000B8F0 emits 11 commands for each of at most 120 visible glyphs.
+ * The style-8 window adds nine 16-command frame strips in 8000C904, setup,
+ * clipping and a choice cursor. 2048 commands cover that complete window
+ * in addition to the ordinary HUD/finalization allowance, including its
+ * opening and closing animation. */
+#define NATIVE_DIALOG_TAIL_BYTES (2048u * 8u)
 
 static unsigned char *s_arena;
 static unsigned int s_bank_bytes;
@@ -112,7 +119,7 @@ void anchor_render_scratch_begin_object(void *pointer)
     unsigned char *bank_start;
     unsigned char *native_start;
     unsigned char *native_limit;
-    unsigned int left, matrix_bytes, command_bytes;
+    unsigned int left, matrix_bytes, command_bytes, tail_bytes;
     unsigned char *object = pointer;
 
     /* Case-6 native drawing recurses through 18CA0, never through 16C44. */
@@ -137,7 +144,10 @@ void anchor_render_scratch_begin_object(void *pointer)
         return;
     }
     native_start = D_8015C5C8_15D1C8 + s_bank * NATIVE_GRAPHICS_BANK_BYTES;
-    native_limit = native_start + NATIVE_GRAPHICS_COMMAND_BYTES - NATIVE_GRAPHICS_TAIL_BYTES;
+    tail_bytes = NATIVE_GRAPHICS_TAIL_BYTES;
+    if (anchor_dialog_busy())
+        tail_bytes += NATIVE_DIALOG_TAIL_BYTES;
+    native_limit = native_start + NATIVE_GRAPHICS_COMMAND_BYTES - tail_bytes;
     if ((unsigned char *)D_8015C5CC_15D1CC < native_start ||
         (unsigned char *)D_8015C5CC_15D1CC + 8 > native_limit)
     {
