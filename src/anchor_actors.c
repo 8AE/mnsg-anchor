@@ -12,6 +12,7 @@
 #include "anchor.h"
 #include "anchor_nameplates.h"
 #include "anchor_player_models.h"
+#include "anchor_projectile_models.h"
 #include "anchor_remote_animation.h"
 #include "anchor_remote_collision.h"
 #include "anchor_remote_motion.h"
@@ -226,6 +227,8 @@ void anchor_load_remote_cutscene_resources(void)
     /* Use the dedicated stage-load path so broad decompression and whole-file
      * action DMA never occur inside the per-frame remote update hook. */
     anchor_player_models_load_resources();
+    /* Projectile recipes share the already staged character broad files. */
+    anchor_projectile_models_load_resources();
 }
 
 static int parse_int_after(const char *obj, const char *key, int fallback)
@@ -658,8 +661,12 @@ static void publish_local_state(PlayerObject *local_obj)
      * sets work +0x84 when Sudden Impact actually turns gold. Ebisumaru's
      * work +0x86 marker remains nonzero from the shrink action until the grow
      * action completes; peers derive the live scale locally from that bit and
-     * the already-synchronized action frame. */
+     * the already-synchronized action frame. Player +0xD4 is the native hurt
+     * recovery timer. Send its active state, not each object +0x64 blink edge;
+     * peers reproduce the native alternating-frame flicker locally. */
     appearance_flags = 0;
+    if (read_u8_at(D_801FC604_5B8514, 0xd4) != 0)
+        appearance_flags |= ANCHOR_APPEARANCE_HURT_RECOVERY;
     {
         void *player_work =
             *(void **)((unsigned char *)D_801FC604_5B8514 + 0x5c);

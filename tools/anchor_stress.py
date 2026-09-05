@@ -38,12 +38,15 @@ try:
     DEFAULT_PORT = anchor_mnsg.DEFAULT_PORT
     ROOM_ID_PREFIX = anchor_mnsg.ROOM_ID_PREFIX
     ROOM_ID_TRIM_CHARS = anchor_mnsg.ROOM_ID_TRIM_CHARS
+    APPEARANCE_MASK = anchor_mnsg.APPEARANCE_MASK
     ROOM_NAMES = dict(getattr(anchor_mnsg, "_ROOM_NAMES", {}))
 except Exception:
+    anchor_mnsg = None
     DEFAULT_HOST = "anchor.hm64.org"
     DEFAULT_PORT = 43383
     ROOM_ID_PREFIX = "mnsg-"
     ROOM_ID_TRIM_CHARS = " \t\n\r\v\f"
+    APPEARANCE_MASK = 7
     ROOM_NAMES: dict[int, str] = {}
 
 
@@ -67,6 +70,7 @@ class RemoteState:
     vel_z: int = 0
     pos_seq: int = 0
     collision_disabled: int = 0
+    appearance_flags: int = 0
     drive_x: int = 0
     drive_z: int = 0
     player_epoch: int = 0
@@ -163,6 +167,7 @@ class WorldState:
             next_room = int(data["currentRoomId"])
             if next_room != player.room_id:
                 player.collision_disabled = 0
+                player.appearance_flags = 0
                 player.drive_x = 0
                 player.drive_z = 0
                 player.player_epoch = 0
@@ -175,6 +180,9 @@ class WorldState:
             player.drive_z = max(-30000, min(30000, int(data.get("driveZ", 0))))
             player.player_epoch = int(data.get("playerEpoch", 0))
             player.interaction_session = int(data.get("interactionSession", 0))
+            player.appearance_flags = int(data.get("appearanceFlags", 0)) & APPEARANCE_MASK
+        elif "appearanceFlags" in data:
+            player.appearance_flags = int(data["appearanceFlags"]) & APPEARANCE_MASK
         if "posY" in data:
             player.y = int(data["posY"])
         if "posZ" in data:
@@ -218,6 +226,7 @@ class AnchorBot:
         self.room_id = config.start_room
         self.character = config.character
         self.collision_disabled = 0
+        self.appearance_flags = 0
         self.drive_x = 0
         self.drive_z = 0
         self.player_epoch = 1
@@ -225,6 +234,9 @@ class AnchorBot:
         self._last_pos: tuple[int, int, int] | None = None
         self._last_pos_ms = 0
         self._pos_seq = 0
+        self._projectile_spawn_id = 0
+        self.projectile_sent = 0
+        self.projectile_received = 0
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._recv_task: asyncio.Task[None] | None = None
@@ -233,6 +245,8 @@ class AnchorBot:
     async def connect(self) -> None:
         self._reader, self._writer = await asyncio.open_connection(self.config.host, self.config.port)
         self.interaction_session = secrets.randbelow(0x7fffffff) + 1
+        self._projectile_spawn_id = 0
+        self.projectile_sent = self.projectile_received = 0
         self.connected = True
         await self._send({
             "type": "HANDSHAKE",
@@ -271,6 +285,7 @@ class AnchorBot:
         room_id: int | None = None,
         character: str | None = None,
         collision_disabled: int | None = None,
+        appearance_flags: int | None = None,
     ) -> None:
         if x is not None:
             self.x = x
@@ -280,6 +295,8 @@ class AnchorBot:
             self.z = z
         if collision_disabled is not None:
             self.collision_disabled = 1 if collision_disabled else 0
+        if appearance_flags is not None:
+            self.appearance_flags = appearance_flags & APPEARANCE_MASK
         metadata_changed = False
         if room_id is not None and room_id != self.room_id:
             self.room_id = room_id
@@ -337,8 +354,25 @@ class AnchorBot:
             "driveZ": self.drive_z,
             "playerEpoch": self.player_epoch,
             "interactionSession": self.interaction_session,
+            "appearanceFlags": self.appearance_flags & APPEARANCE_MASK,
             "quiet": True,
         })
+
+    async def publish_projectile_spawn(self, entry: dict[str, int]) -> None:
+        """Inject one throw using the same compact array as a native owner."""
+        if anchor_mnsg is None:
+            raise RuntimeError("projectile stress packets require py/anchor_mnsg.py")
+        validated = anchor_mnsg._validate_projectile_spawn(entry)
+        if validated is None:
+            raise ValueError("invalid projectile spawn")
+        if not self.connected or self.client_id <= 0:
+            return
+        await self._send({
+            "type": "MNSG_PROJECTILE_SPAWN", "clientId": self.client_id,
+            "currentRoomId": self.room_id, "interactionSession": self.interaction_session,
+            "ownerEpoch": self.player_epoch, "spawn": list(validated.values()), "quiet": True,
+        })
+        self.projectile_sent += 1
 
     async def tick(self) -> None:
         if self.connected:
@@ -379,6 +413,9 @@ class AnchorBot:
             return
         if ptype == "MNSG_PLAYER_POS":
             await self.world.update_from_position_packet(packet)
+            return
+        if ptype == "MNSG_PROJECTILE_SPAWN":
+            self.projectile_received += 1
             return
         if ptype == "UPDATE_CLIENT_STATE":
             state = packet.get("state") or packet.get("clientState") or {}
@@ -487,12 +524,20 @@ class StressController:
         if cmd == "cutscene":
             await self._command_cutscene(args)
             return
+        if cmd == "recovery":
+            await self._command_recovery(args)
+            return
+        if cmd == "throw":
+            await self._command_throw(args)
+            return
         print(f"unknown command: {cmd}")
 
     async def print_status(self) -> None:
         connected = sum(1 for bot in self.bots if bot.connected)
         ids = [bot.client_id for bot in self.bots if bot.client_id]
         print(f"bots={len(self.bots)} connected={connected} assigned_ids={len(ids)} rate_hz={self.config.rate_hz}")
+        print(f"projectile events sent={sum(b.projectile_sent for b in self.bots)} "
+              f"received={sum(b.projectile_received for b in self.bots)}")
         if self.follow_selector:
             target = await self.world.find_target(self.follow_selector)
             if target and target.x is not None:
@@ -534,6 +579,7 @@ class StressController:
             bot.y = int(target.y)
             bot.z = int(target.z + math.sin(angle) * radius)
             bot.collision_disabled = target.collision_disabled
+            bot.appearance_flags = target.appearance_flags
             bot.drive_x = target.drive_x
             bot.drive_z = target.drive_z
             metadata_changed = False
@@ -590,6 +636,32 @@ class StressController:
         await asyncio.gather(*(bot.set_state(collision_disabled=disabled) for bot in bots))
         print(f"cutscene collision bypass {'on' if disabled else 'off'} for {len(bots)} bots")
 
+    async def _command_recovery(self, args: list[str]) -> None:
+        if len(args) != 2 or args[1].lower() not in {"on", "off"}:
+            raise ValueError("usage: recovery <all|N|A-B> <on|off>")
+        bots = self._select_bots(args[0])
+        enabled = args[1].lower() == "on"
+        await asyncio.gather(*(bot.set_state(appearance_flags=(bot.appearance_flags | 4)
+                                             if enabled else (bot.appearance_flags & ~4))
+                               for bot in bots))
+        print(f"hurt recovery {'on' if enabled else 'off'} for {len(bots)} bots")
+
+    async def _command_throw(self, args: list[str]) -> None:
+        if len(args) not in (2, 5):
+            raise ValueError("usage: throw <all|N|A-B> <kind> [vx100 vy100 vz100]")
+        bots = self._select_bots(args[0])
+        kind = int(args[1], 0)
+        velocity = tuple(int(value, 0) for value in args[2:]) if len(args) == 5 else (0, 0, 300)
+        for bot in bots:
+            bot._projectile_spawn_id = (bot._projectile_spawn_id % 0x7fffffff) + 1
+            await bot.publish_projectile_spawn({
+                "id": bot._projectile_spawn_id, "kind": kind,
+                "x100": bot.x * 100, "y100": bot.y * 100, "z100": bot.z * 100,
+                "vx100": velocity[0], "vy100": velocity[1], "vz100": velocity[2],
+                "rx": 0, "ry": 0, "rz": 0, "scale100000": 10000,
+            })
+        print(f"throw kind={kind} for {len(bots)} bots")
+
     def _select_bots(self, selector: str) -> list[AnchorBot]:
         if selector.lower() == "all":
             return self.bots
@@ -642,9 +714,14 @@ Commands:
       Set only selected character.
   cutscene <all|N|A-B> <on|off>
       Bypass collision during a synthetic cutscene, or restore collision.
+  recovery <all|N|A-B> <on|off>
+      Toggle native hurt-recovery flicker while retaining transformation bits.
+  throw <all|N|A-B> <kind> [vx100 vy100 vz100]
+      Spawn one throw at each bot's position. Velocity is hundredths per game
+      tick; default is (0,0,300). The game accepts only its known throw kinds.
   follow <clientId|name substring>
       Move all synthetic clients in a ring around a server client.
-      The bots copy the target's room, character, and cutscene bypass while following.
+      The bots copy room, character, appearance, and cutscene bypass while following.
   stop-follow
       Stop following; bots remain at their current coordinates.
   spread <distance>

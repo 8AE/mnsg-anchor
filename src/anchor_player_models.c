@@ -37,6 +37,7 @@
 
 #include "anchor_player_models.h"
 #include "anchor_remote_animation.h"
+#include "anchor_remote_appearance.h"
 #include "anchor_remote_collision.h"
 #include "anchor_player_damage.h"
 #include "item_sync.h"
@@ -164,6 +165,10 @@ extern void func_80001640_2240(unsigned int rom_addr, void *dst, unsigned int si
 /* ROM start / end address of a file id. */
 extern unsigned int func_80001D68_2968(unsigned int file_id);
 extern unsigned int func_80001D94_2994(unsigned int file_id);
+
+/* Native frame-submission counter. The player recovery updater uses its
+ * low-bit parity for object +0x64 flicker; each client applies that cadence. */
+extern unsigned short D_800C7A78;
 
 /* Load a compressed resource by id into dst; returns end pointer. Used for
  * the per-action aux face/part resources (like func_801DC87C). */
@@ -580,6 +585,7 @@ static void hide_object(void *object)
     write_float_at(object, 0x20, 0.0f);
     write_float_at(object, 0x24, 0.0f);
     write_u8_at(object, 0x65, 1);
+    anchor_remote_appearance_apply_hurt(object, 0, 0);
 }
 
 static void show_object(void *object)
@@ -590,6 +596,7 @@ static void show_object(void *object)
     write_float_at(object, 0x20, scale);
     write_float_at(object, 0x24, scale);
     write_u8_at(object, 0x65, 0);
+    anchor_remote_appearance_apply_hurt(object, 0, 0);
 }
 
 /* Retire a peer without directly destroying its engine task. Remote children
@@ -1187,6 +1194,24 @@ void anchor_player_models_get_drive(int *x, int *z)
     *z = s_interaction_tick - s_drive_tick <= 1u ? s_drive_z : 0;
 }
 
+int anchor_player_models_peer_is_current(int cid, int session, int epoch)
+{
+    int i;
+    if (cid <= 0 || session <= 0 || epoch <= 0 ||
+        s_owner_task != D_801FC604_5B8514 || !is_linked_task(s_owner_task))
+        return 0;
+    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    {
+        const RemoteModelSlot *slot = &s_slots[i];
+        if (slot->active && slot->cid == cid && slot->pending_valid &&
+            slot->pending_room == D_800C7AB2 &&
+            slot->pending_remote.interaction_session == session &&
+            slot->pending_remote.player_epoch == epoch)
+            return 1;
+    }
+    return 0;
+}
+
 int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacity)
 {
     int i;
@@ -1511,6 +1536,11 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
         write_u16_at(slot->object, 0x18, 0);
     }
     write_float_at(slot->object, 0x28, slot->frame);
+    /* Flicker is a render flag only. Retiring the object with hide_object
+     * would incorrectly remove its collider on every hidden recovery frame.
+     * Animation, nameplates and collision continue through both phases. */
+    anchor_remote_appearance_apply_hurt(slot->object,
+        remote->appearance_flags, D_800C7A78);
     slot->last_seq = remote->seq;
     slot->last_remote_frame_100 = remote->anim_frame_100;
     slot->last_remote_frame_count_100 =

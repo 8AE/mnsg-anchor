@@ -130,6 +130,11 @@ _player_hits = deque(maxlen=32)
 _player_hit_seen: "dict[int, tuple[int, int, int, int]]" = {}
 _retired_interaction_sessions: "dict[int, set[int]]" = {}
 _player_movement_order: "dict[int, dict]" = {}
+_projectile_spawns: "dict[tuple[int, int, int, int], tuple[int, dict]]" = {}
+_projectile_seen: "dict[tuple[int, int, int, int], tuple[int, int]]" = {}
+_projectile_sent: "dict[tuple[int, int, int, int], tuple[int, ...]]" = {}
+_projectile_stats = {key: 0 for key in
+                     ("sent", "received", "acked", "expired", "rejected", "duplicate", "overflow", "deferred")}
 _position_seq: int = 0
 _race_status: str = ""
 _race_config_json: str = ""
@@ -144,10 +149,26 @@ ROOM_ID_PREFIX: str = "mnsg-"
 ROOM_ID_TRIM_CHARS: str = " \t\n\r\v\f"
 MOVEMENT_MIN_INTERVAL_MS: int = 50
 PLAYER_HIT_MAX_AGE_MS: int = 500
+PROJECTILE_MAX_AGE_MS: int = 750
+PROJECTILE_BATCH_COUNT: int = 16
+PROJECTILE_QUEUE_COUNT: int = 64
+PROJECTILE_MAX_JSON_BYTES: int = 512
 ANIMATION_RESTART_DELTA_100: int = 50
 APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
 APPEARANCE_MINI_EBISUMARU: int = 1 << 1
-APPEARANCE_MASK: int = APPEARANCE_SUDDEN_IMPACT | APPEARANCE_MINI_EBISUMARU
+APPEARANCE_HURT_RECOVERY: int = 1 << 2
+APPEARANCE_MASK: int = (APPEARANCE_SUDDEN_IMPACT | APPEARANCE_MINI_EBISUMARU |
+                       APPEARANCE_HURT_RECOVERY)
+_PROJECTILE_SPAWN_LIMITS = {
+    "id": (1, 0x7fffffff), "kind": (1, 255),
+    "x100": (-1000000000, 1000000000),
+    "y100": (-1000000000, 1000000000),
+    "z100": (-1000000000, 1000000000),
+    "vx100": (-1000000, 1000000), "vy100": (-1000000, 1000000),
+    "vz100": (-1000000, 1000000),
+    "rx": (-32768, 32767), "ry": (-32768, 32767), "rz": (-32768, 32767),
+    "scale100000": (1, 1000000),
+}
 _MOVEMENT_STATE_FIELDS: "tuple[str, ...]" = (
     "posX", "posY", "posZ", "velX", "velY", "velZ", "posSeq", "posT",
     "action", "animFrame100", "animFrameCount100", "rotX", "rotY", "rotZ",
@@ -291,6 +312,8 @@ def _merge_client_state(
             state[destination] = str(payload[source])
     if "online" in payload:
         state["online"] = bool(payload["online"])
+        if not state["online"]:
+            _drop_projectile_spawns(cid)
     if "isSaveLoaded" in payload:
         state["isSaveLoaded"] = bool(payload["isSaveLoaded"])
     for field in _MOVEMENT_STATE_FIELDS:
@@ -318,12 +341,19 @@ def _merge_client_state(
                 ("posSeq", "posT", "interactionSession", "playerEpoch")
                 if field in state
             }
-    if ("appearanceFlags" in payload or
+    if enforce_movement_order or "posX" in payload:
+        # Legacy movement has no hurt-recovery bit; never retain a newer
+        # sender's recovery state after that sender stops reporting it.
+        state["appearanceFlags"] = _appearance_flags_from_payload(
+            payload, int(state.get("appearanceFlags", 0)) & ~APPEARANCE_HURT_RECOVERY
+        )
+    elif ("appearanceFlags" in payload or
             "suddenImpact" in payload or
             "modelScale100000" in payload):
         state["appearanceFlags"] = _appearance_flags_from_payload(
             payload, int(state.get("appearanceFlags", 0))
         )
+    _prune_projectile_spawns(int(time.monotonic() * 1000))
     return True
 
 
@@ -377,11 +407,15 @@ def _replace_all_client_states(states: list) -> None:
                 )
             new_players[cid] = merged
         for cid, previous in previous_players.items():
+            replacement = new_players.get(cid, {})
+            if not replacement.get("online", False):
+                _drop_projectile_spawns(cid)
             if cid not in new_players:
                 order = _player_movement_order.pop(cid, previous)
                 _retire_interaction_session(cid, int(order.get("interactionSession", 0)))
         _player_states.clear()
         _player_states.update(new_players)
+        _prune_projectile_spawns(int(time.monotonic() * 1000))
 
 ###############################################################################
 # Room ID → area name lookup table
@@ -599,6 +633,15 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_player_hit(packet)
                     continue
 
+                if ptype == "MNSG_PROJECTILE_SPAWN":
+                    _receive_projectile_spawn(packet)
+                    continue
+
+                if ptype == "MNSG_PROJECTILES":
+                    # Retired continuous-visual protocol: never replay these
+                    # old packets through the durable item/event queue.
+                    continue
+
                 # Update a single player's status when they broadcast their state.
                 if ptype == "UPDATE_CLIENT_STATE":
                     # The server relays the packet as-is. We put clientId inside
@@ -675,6 +718,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _player_hit_seen.clear()
         _retired_interaction_sessions.clear()
         _player_movement_order.clear()
+        _reset_projectile_spawns()
 
 
 ###############################################################################
@@ -749,6 +793,7 @@ def connect(
         _player_hit_seen.clear()
         _retired_interaction_sessions.clear()
         _player_movement_order.clear()
+        _reset_projectile_spawns()
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -1001,6 +1046,227 @@ def poll_player_hit():
     return None
 
 
+def _reset_projectile_spawns() -> None:
+    """Reset connection-scoped transient state; caller holds the player lock."""
+    _projectile_spawns.clear()
+    _projectile_seen.clear()
+    _projectile_sent.clear()
+    for key in _projectile_stats:
+        _projectile_stats[key] = 0
+
+
+def _drop_projectile_spawns(cid: int) -> None:
+    if cid == _client_id:
+        _projectile_spawns.clear()
+    else:
+        for key in list(_projectile_spawns):
+            if key[0] == cid:
+                del _projectile_spawns[key]
+
+
+def _validate_projectile_spawn(entry):
+    """Validate the readable C schema; wire values use this exact field order."""
+    if type(entry) is not dict or entry.keys() != _PROJECTILE_SPAWN_LIMITS.keys():
+        return None
+    for field, (minimum, maximum) in _PROJECTILE_SPAWN_LIMITS.items():
+        value = entry[field]
+        if type(value) is not int or not minimum <= value <= maximum:
+            return None
+    return {key: entry[key] for key in _PROJECTILE_SPAWN_LIMITS}
+
+
+def _projectile_local_room() -> int:
+    # Membership temporarily resets the room-broadcast sentinel. The retained
+    # local hot room still identifies incoming throws during that short gap.
+    local = _player_states.get(_client_id, {})
+    room = _local_room_id if _local_room_id >= 0 else _last_position_room_id
+    return room if local.get("roomId") == room else -1
+
+
+def _projectile_owner_status(packet: dict) -> int:
+    """Return 0 rejected, 1 awaiting owner movement, or 2 ready; lock held."""
+    if packet.get("type") != "MNSG_PROJECTILE_SPAWN" or not _connected or _client_id <= 0:
+        return 0
+    for key in ("clientId", "interactionSession", "ownerEpoch"):
+        value = packet.get(key)
+        if type(value) is not int or not 0 < value <= _POSITION_SEQUENCE_MASK:
+            return 0
+    room = packet.get("currentRoomId")
+    if type(room) is not int or not 0 <= room <= 0xffff:
+        return 0
+    sender = packet["clientId"]
+    source = _player_states.get(sender, {})
+    local = _player_states.get(_client_id, {})
+    if (sender == _client_id or not source.get("online", False) or "posX" not in local or
+            room != _projectile_local_room() or _interaction_session <= 0 or
+            local.get("interactionSession") != _interaction_session or
+            local.get("playerEpoch", 0) <= 0 or
+            packet.get("localEpoch", local.get("playerEpoch")) != local.get("playerEpoch")):
+        return 0
+    session, epoch = packet["interactionSession"], packet["ownerEpoch"]
+    if session in _retired_interaction_sessions.get(sender, ()):
+        return 0
+    # Anchor relays broadcasts from separate goroutines, so a throw can arrive
+    # before its preceding movement. Retain it without exposing it to native
+    # code until the exact source generation and room are confirmed.
+    order = _player_movement_order.get(sender, source)
+    current_session = order.get("interactionSession", 0)
+    current_epoch = order.get("playerEpoch", 0)
+    if session != current_session:
+        return 1
+    if epoch < current_epoch:
+        return 0
+    if epoch > current_epoch:
+        return 1
+    if source.get("roomId") != room:
+        return 0
+    return 2 if ("posX" in source and source.get("interactionSession") == session and
+                 source.get("playerEpoch") == epoch) else 1
+
+
+def _prune_projectile_spawns(now_ms: int) -> None:
+    for key, (received_ms, packet) in list(_projectile_spawns.items()):
+        expired = now_ms - received_ms > PROJECTILE_MAX_AGE_MS
+        if expired or _projectile_owner_status(packet) == 0:
+            del _projectile_spawns[key]
+            if expired:
+                _projectile_stats["expired"] += 1
+
+
+def _receive_projectile_spawn(packet: dict) -> bool:
+    """Keep each distinct throw until native spawn succeeds and C acknowledges."""
+    if type(packet) is not dict:
+        return False
+    spawn = packet.get("spawn")
+    if type(spawn) is not list or len(spawn) != len(_PROJECTILE_SPAWN_LIMITS):
+        return False
+    entry = _validate_projectile_spawn(dict(zip(_PROJECTILE_SPAWN_LIMITS, spawn)))
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        status = _projectile_owner_status(packet)
+        if entry is None or status == 0:
+            _projectile_stats["rejected"] += 1
+            return False
+        sender, session, epoch = packet["clientId"], packet["interactionSession"], packet["ownerEpoch"]
+        identity = (sender, session, epoch, packet["currentRoomId"])
+        event_id = entry["id"]
+        previous = _projectile_seen.get(identity)
+        highest, bits = event_id, 1
+        if previous:
+            delta = (event_id - previous[0]) & _POSITION_SEQUENCE_MASK
+            if 0 < delta < _POSITION_SEQUENCE_HALF_RANGE:
+                bits = ((previous[1] << delta) | 1) & ((1 << 64) - 1) if delta < 64 else 1
+            else:
+                lag = (previous[0] - event_id) & _POSITION_SEQUENCE_MASK
+                if lag >= 64 or previous[1] & (1 << lag):
+                    _projectile_stats["duplicate"] += 1
+                    return False
+                highest, bits = previous[0], previous[1] | (1 << lag)
+        _prune_projectile_spawns(now_ms)
+        if len(_projectile_spawns) >= PROJECTILE_QUEUE_COUNT:
+            _projectile_stats["overflow"] += 1
+            return False
+        _projectile_seen[identity] = (highest, bits)
+        pending = {key: packet[key] for key in
+                   ("type", "clientId", "interactionSession", "ownerEpoch", "currentRoomId")}
+        pending["spawn"] = entry
+        pending["localEpoch"] = _player_states[_client_id].get("playerEpoch", 0)
+        _projectile_spawns[(sender, session, epoch, event_id)] = (now_ms, pending)
+        _projectile_stats["received"] += 1
+        if status == 1:
+            _projectile_stats["deferred"] += 1
+    logger.debug("anchor_mnsg: projectile accepted cid=%d epoch=%d id=%d", sender, epoch, event_id)
+    return True
+
+
+def get_projectile_session() -> int:
+    return _interaction_session if _connected else 0
+
+
+def send_projectile_spawn_json(session: int, owner_epoch: int, event_json: str) -> bool:
+    """Send a captured throw once; a false return lets C retry the same event."""
+    if (type(session) is not int or type(owner_epoch) is not int or
+            not 0 < owner_epoch <= _POSITION_SEQUENCE_MASK or
+            type(event_json) is not str or len(event_json) > PROJECTILE_MAX_JSON_BYTES):
+        return False
+    try:
+        entry = _validate_projectile_spawn(json.loads(event_json))
+    except (ValueError, RecursionError):
+        return False
+    if entry is None:
+        return False
+    spawn = tuple(entry.values())
+    with _player_states_lock:
+        local = _player_states.get(_client_id, {})
+        if (not _connected or _client_id <= 0 or session <= 0 or session != _interaction_session or
+                not 0 <= _local_room_id <= 0xffff or _last_position_room_id != _local_room_id or
+                "posX" not in local or local.get("roomId") != _local_room_id or
+                local.get("playerEpoch") != owner_epoch or local.get("interactionSession") != session):
+            return False
+        key = (session, owner_epoch, _local_room_id, entry["id"])
+        if key in _projectile_sent:
+            return _projectile_sent[key] == spawn
+        packet = {"type": "MNSG_PROJECTILE_SPAWN", "clientId": _client_id,
+                  "currentRoomId": _local_room_id, "interactionSession": session,
+                  "ownerEpoch": owner_epoch, "spawn": list(spawn), "quiet": True}
+    if not _send_raw(packet):
+        return False
+    with _player_states_lock:
+        _projectile_sent[key] = spawn
+        while len(_projectile_sent) > PROJECTILE_QUEUE_COUNT:
+            del _projectile_sent[next(iter(_projectile_sent))]
+        _projectile_stats["sent"] += 1
+    logger.debug("anchor_mnsg: projectile sent epoch=%d id=%d", owner_epoch, entry["id"])
+    return True
+
+
+def get_projectile_spawns_json(expected_epoch: "int | None" = None) -> str:
+    """Peek up to 16 throws, rotating retries so unavailable kinds cannot starve others."""
+    now_ms = int(time.monotonic() * 1000)
+    rows = []
+    with _player_states_lock:
+        local = _player_states.get(_client_id, {})
+        if (expected_epoch is not None and
+                (type(expected_epoch) is not int or expected_epoch <= 0 or
+                 local.get("playerEpoch") != expected_epoch or _projectile_local_room() < 0)):
+            return "[]"
+        _prune_projectile_spawns(now_ms)
+        peeked = []
+        for (sender, session, epoch, _event_id), (received_ms, packet) in _projectile_spawns.items():
+            if _projectile_owner_status(packet) != 2:
+                continue
+            rows.append({"cid": sender, "session": session, "epoch": epoch,
+                         "age": max(0, now_ms - received_ms), **packet["spawn"]})
+            peeked.append((sender, session, epoch, _event_id))
+            if len(rows) == PROJECTILE_BATCH_COUNT:
+                break
+        for key in peeked:
+            _projectile_spawns[key] = _projectile_spawns.pop(key)
+    return json.dumps(rows, separators=(",", ":"))
+
+
+def ack_projectile_spawn(cid: int, session: int, epoch: int, event_id: int) -> bool:
+    """Acknowledge local native creation only; this sends no network packet."""
+    identity = (cid, session, epoch, event_id)
+    if any(type(value) is not int or not 0 < value <= _POSITION_SEQUENCE_MASK for value in identity):
+        return False
+    with _player_states_lock:
+        _prune_projectile_spawns(int(time.monotonic() * 1000))
+        if (identity not in _projectile_spawns or
+                _projectile_owner_status(_projectile_spawns[identity][1]) != 2):
+            return False
+        del _projectile_spawns[identity]
+        _projectile_stats["acked"] += 1
+    logger.debug("anchor_mnsg: projectile acknowledged cid=%d epoch=%d id=%d", cid, epoch, event_id)
+    return True
+
+
+def get_projectile_spawn_stats_json() -> str:
+    """Connection-scoped counters for tracing capture/send/receive/spawn checks."""
+    with _player_states_lock:
+        return json.dumps({**_projectile_stats, "pending": len(_projectile_spawns)}, separators=(",", ":"))
+
+
 def get_server_message() -> str:
     """
     Return the latest SERVER_MESSAGE text received from the server, and clear it.
@@ -1211,8 +1477,8 @@ def set_position_anim(
         rot_x: Current model X rotation.
         rot_y: Current model Y rotation.
         rot_z: Current model Z rotation.
-        appearance_flags: Bitmap containing Sudden Impact (bit 0) and Mini
-            Ebisumaru (bit 1).
+        appearance_flags: Bitmap containing Sudden Impact (bit 0), Mini
+            Ebisumaru (bit 1), and native hurt recovery (bit 2).
         velocity_x: Optional final-frame X velocity in world units per second.
         velocity_y: Optional final-frame Y velocity in world units per second.
         velocity_z: Optional final-frame Z velocity in world units per second.
@@ -1438,6 +1704,10 @@ def set_local_room(room_id: int) -> bool:
     area_name = _ROOM_NAMES.get(room_id, "")
     # Update our own local entry immediately – the server won't echo us back.
     with _player_states_lock:
+        # ALL_CLIENT_STATE temporarily resets the broadcast baseline to -1;
+        # a same-room metadata refresh must preserve active remote visuals.
+        if _player_states.get(_client_id, {}).get("roomId") != room_id:
+            _projectile_spawns.clear()
         if _client_id in _player_states:
             _player_states[_client_id]["location"] = area_name
             _player_states[_client_id]["roomId"] = room_id
@@ -1611,7 +1881,7 @@ def get_lobby_positions_json() -> str:
       "x","y","z" – last broadcast world-space position (0 if not yet received).
       "hp"   – 1 if the player has sent at least one position update, 0 otherwise.
       "t"    – sender monotonic milliseconds, masked to a positive 31-bit value.
-      "ap"   – appearance bitmap: Sudden Impact bit 0, Mini Ebisumaru bit 1.
+      "ap"   – Sudden Impact bit 0, Mini Ebisumaru bit 1, hurt recovery bit 2.
       "cd"   – 1 while the sender requires cutscene/script collision bypass.
 
     Unlike get_teammate_positions_json(), this function:

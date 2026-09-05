@@ -40,6 +40,10 @@ int mnsg_json_writer_add_string(MnsgJsonObjectWriter *writer,
 int mnsg_json_writer_add_s32(MnsgJsonObjectWriter *writer,
                              const char *key, signed int value);
 
+/** Add an unsigned decimal integer without losing high color/flag bits. */
+int mnsg_json_writer_add_u32(MnsgJsonObjectWriter *writer,
+                             const char *key, unsigned int value);
+
 /** Close and null-terminate the object. */
 int mnsg_json_writer_finish(MnsgJsonObjectWriter *writer);
 

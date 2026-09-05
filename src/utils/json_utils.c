@@ -276,3 +276,22 @@ int mnsg_json_writer_finish(MnsgJsonObjectWriter *writer)
     writer->finished = 1;
     return 1;
 }
+
+int mnsg_json_writer_add_u32(MnsgJsonObjectWriter *writer,
+                             const char *key, unsigned int value)
+{
+    char reversed[10];
+    unsigned int count = 0;
+    if (!writer_begin_entry(writer, key))
+        return 0;
+    do
+    {
+        reversed[count++] = (char)('0' + value % 10u);
+        value /= 10u;
+    } while (value);
+    while (count)
+        if (!writer_append_char(writer, reversed[--count]))
+            return 0;
+    writer->has_entries = 1;
+    return 1;
+}

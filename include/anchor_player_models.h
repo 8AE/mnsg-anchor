@@ -6,6 +6,7 @@
 #define ANCHOR_PLAYER_MODEL_MAX 25
 #define ANCHOR_APPEARANCE_SUDDEN_IMPACT (1 << 0)
 #define ANCHOR_APPEARANCE_MINI_EBISUMARU (1 << 1)
+#define ANCHOR_APPEARANCE_HURT_RECOVERY (1 << 2)
 
 typedef struct AnchorPlayerModelRemote
 {
@@ -52,5 +53,6 @@ int anchor_player_models_get_position(int cid, float *x, float *y, float *z);
 int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacity);
 void anchor_player_models_get_drive(int *x, int *z);
 int anchor_player_models_get_epoch(void);
+int anchor_player_models_peer_is_current(int cid, int session, int epoch);
 
 #endif

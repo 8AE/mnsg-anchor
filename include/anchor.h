@@ -196,7 +196,8 @@ extern "C"
     * @param rot_y            Model Y rotation from object offset 0x16.
     * @param rot_z            Model Z rotation from object offset 0x18.
     * @param appearance_flags Appearance bitmap: bit 0 is Goemon's Sudden
-    *                         Impact; bit 1 is Mini Ebisumaru.
+    *                         Impact; bit 1 is Mini Ebisumaru; bit 2 is native
+    *                         hurt recovery (the receiver supplies blink phase).
     * @param velocity_x       Final frame-to-frame X displacement, units/sec.
     * @param velocity_y       Final frame-to-frame Y displacement, units/sec.
     * @param velocity_z       Final frame-to-frame Z displacement, units/sec.
@@ -227,6 +228,16 @@ extern "C"
                                 int has_animation_step,
                                 int collision_disabled,
                                 int drive_x, int drive_z, int player_epoch);
+
+   /* One compact event per throw. Capture stamps the connection session and
+    * owner epoch; a failed send can retry the same bounded JSON event/id.
+    * The getter peeks at up to 16 flat rows with cid/session/epoch/age metadata
+    * without consuming them. Acknowledge only after native creation succeeds.
+    * Events expire after 750 ms; caller must recomp_free() the getter string. */
+   int anchor_get_projectile_session(void);
+   int anchor_send_projectile_spawn_json(int session, int owner_epoch, const char *event_json);
+   char *anchor_get_projectile_spawns_json(void);
+   int anchor_ack_projectile_spawn(int cid, int session, int epoch, int event_id);
 
    /* Targeted, transient native player hits. Python validates live room,
     * connection sessions, player lifetimes, ordering and queue age. */

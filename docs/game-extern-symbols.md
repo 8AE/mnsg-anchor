@@ -417,6 +417,29 @@ step has completed. This preserves the engine's pre-render ordering and avoids
 changing face memory after a display list using that memory may already have
 been submitted to RT64.
 
+### Hurt recovery flicker
+
+`func_801D9CE8_595BF8` reads the player's byte countdown at task `+0xD4`.
+While it is nonzero, the function writes render-object byte `+0x64` from the
+low bit of unsigned 16-bit `D_800C7A78`: even frames display the model and odd
+frames hide it. The last countdown tick forces the model visible. Native
+`func_8000098C_158C` advances this halfword when it submits a prepared frame,
+and `func_80016C44_17844` skips drawing a kind-2 model when object `+0x64`
+bit 0 is set.
+
+Anchor publishes appearance bit 2 (`0x04`) while the native recovery countdown
+is active. The existing `appearanceFlags`/`ap` bitmap carries its start and end
+edges; individual blink phases do not create movement packets. Each receiver
+uses its own native counter parity, so clients can have opposite phases while
+retaining the native cadence.
+
+The remote appearance helper changes only object `+0x64` bit 0. Animation,
+model bindings, scale, nameplates and collision remain active during hidden
+frames. Binding, retirement and recovery completion clear the bit. The normal
+`hide_object` path still retires unusable models and their colliders; flicker
+does not call that path. Host tests cover both phases, pause, counter wrap and
+state preservation; live two-client visual certification remains separate.
+
 ### `func_8001B5AC_1C1AC`
 
 Resolves the bound segmented display pointer and returns its clip frame count.
@@ -461,3 +484,80 @@ playable actor code runs.
   resource changes during the engine's next scheduled pre-render update.
 - Overlay-local `file_18` creators are neither patched nor called while
   another overlay occupies their VRAM addresses.
+
+## Native Projectile Visual Evidence
+
+The projectile renderer uses the same plain task/kind-2 object allocator as
+remote characters. It never invokes the native projectile constructors,
+registers a native attack descriptor, or executes projectile update/damage
+callbacks. The following bounded USA native trace established the capture and
+render contract used by `src/anchor_projectile_models.c`.
+
+- `func_801E8964_5A4874` dispatches the playable character's projectile requests
+  to constructors through its manager at player `+0xdc`.
+  `func_801EE4AC_5AA3BC` copies manager `+0x5c` (the actual player task) to the
+  child `+0x5c`, writes the parent manager at child `+0x84`, and records native
+  projectile kind at child byte `+0x64`. Direct constructors such as
+  `801E8F50`, `801EA860`, `801EB180`, `801EB898`, and `801EBCE8` write that same
+  real-player owner explicitly. Secondary visual tasks can use kind zero;
+  ownership and the model recipe identify them, not kind alone.
+- `D_8020D220_5C9130` is a table-shaped alias whose only initialized native
+  entry is index zero. `801DC630` reserves `0x18000` bytes for it;
+  `801DC9C8` decompresses `D_80204020[character]` there and bounds the returned
+  end pointer. Character files are `0x120`, `0x124`, `0x128`, `0x12c` in
+  Goemon/Ebisumaru/Sasuke/Yae order. Capture requires player byte `+0x90 == 0`
+  and compares the actual object segment base to that buffer. A constructor's
+  nominal segment file ID can differ after its explicit base override.
+- `80034680` writes kind-2 model `+0x2c`, material/context `+0x30`, scales
+  `+0x1c/+0x20/+0x24`, position `+8/+0xc/+0x10`, 16-bit rotations
+  `+0x14/+0x16/+0x18`, and segment 8/9/10 IDs at `+0x34/+0x3c/+0x44` before
+  calling `80014218`. Bases are the following words `+0x38/+0x40/+0x48`.
+  Rotation `0x8000` is the native billboard sentinel, preserved as signed
+  `-32768` on the wire; `80019D40` explicitly tests it before building the
+  camera-facing matrix. Model frame is object float `+0x28`.
+- Goemon coin binding `801E92A4` uses model `0x49009498`; `801E9504` changes
+  it to `0x1900065c` on impact. Charged binding `801EA00C` uses `0x49009020`,
+  with `801E9AE0` adding `0x49009238` and `0x49009348` display records.
+  Ebisumaru's descriptor at `80204B98` selects `0x49007c40` and file `0x124`.
+  Sasuke's `801EBDC4`, `801EB454`, and `801EC414` bind `0x19000064`,
+  `0x49007f90`, and `0x49008470` using file `0x128` and the player's broad
+  buffer. Descriptor `80204DD0` selects `0x49008220` and file `0x128`;
+  `801EFACC`/`801F06AC` apply it to the thrown/fired object. Yae descriptors
+  `80204D70`/`80204E00` use `0x4900a350`/`0x4900a430` and file `0x12c`.
+  Shared shadow, spark and explosion models use file `0x80`.
+- `801EFF74` changes an impacted Sasuke object to the two model commands
+  `0x190006c4` and `0x19000a24` from table `80204F64`, while `801EFBDC` advances
+  their animation and fades their alpha by 12. It disables the projectile's outgoing
+  descriptor and eventually requests native task removal. Capture therefore
+  keeps the same object identity through its model/material change, then
+  removes it when native lifetime ends. Trails use `80204F7C..80204F88`.
+- `801DC554` constructs 24-byte or 32-byte material display lists: a
+  `0x06000000` template call, optional `0xfa000000` primitive RGB, a
+  `0xfb000000` environment RGBA, then `0xb8000000, 0`. The renderer decodes
+  only verified templates at `8006DDE8`, `802049C0`, `80204C28`, `80204C78`,
+  `80204C90`, and `80204CA8`, plus the direct standard context `8006D920`.
+  It preserves the outer context tag bits and rebuilds fresh local commands.
+  The blue Sasuke layer uses primitive `0x0000aa`, environment `0x0056ff`
+  and a fading alpha; the second layer uses `0x28d4ff` / `0xffffff`.
+- `801E8820`/`801E8858` call `801E8890`, which selects an entry from an
+  eight-byte native texture-frame table and writes object `+0x50` (segment
+  11) to segment 9 or 10 base plus its resource offset. A finite selector
+  table covers the verified entries at `802047A0..80205068`. The wire sends
+  the selector ID; it never sends the base, resource offset, or table pointer.
+  `80014218` leaves zero-ID segment pointers untouched, so a stale unused
+  `+0x50` value from object reuse is ignored when it is outside that table.
+
+Native projectile setup changes object byte `+5` among the verified values
+`2`, `3`, `5`, `7`, and `10`; the replica rejects other modes. It binds already
+staged character resources, shared model file `0x80`, and shared texture file
+`0x152`. Material commands use a 4096-byte double-buffered arena inside the
+original 8 MiB render address space, reserved after character staging. Hidden
+replica tasks are reused while their owner remains live, including retrying an
+object allocation without discarding its allocated task. Native owner teardown
+reclaims the children; the mod does not destroy them a second time.
+
+Host tests exercise the finite model/resource recipe map and exact native
+material command round trips, including the blue explosion and alpha decay.
+MIPS compilation verifies the imports and C implementation. Those checks do
+not establish native model presentation, resource headroom, or multiplayer
+timing; a fresh two-client projectile/flicker run remains necessary.

@@ -314,6 +314,60 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
     return result;
 }
 
+int anchor_get_projectile_session(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_get_projectile_session_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.get_projectile_session()\n");
+    int result = (int)REPY_FN_GET_S32("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_send_projectile_spawn_json(int session, int owner_epoch, const char *event_json)
+{
+    if (!event_json)
+        return 0;
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("session", session);
+    REPY_FN_SET_S32("owner_epoch", owner_epoch);
+    REPY_FN_SET_STR("event_json", event_json);
+    REPY_FN_EXEC_CACHE(anchor_send_projectile_spawn_json_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.send_projectile_spawn_json(session, owner_epoch, event_json)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+char *anchor_get_projectile_spawns_json(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("expected_epoch", anchor_player_models_get_epoch());
+    REPY_FN_EXEC_CACHE(anchor_get_projectile_spawns_json_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.get_projectile_spawns_json(expected_epoch)\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result; /* caller must recomp_free() */
+}
+
+int anchor_ack_projectile_spawn(int cid, int session, int epoch, int event_id)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("cid", cid);
+    REPY_FN_SET_S32("session", session);
+    REPY_FN_SET_S32("epoch", epoch);
+    REPY_FN_SET_S32("event_id", event_id);
+    REPY_FN_EXEC_CACHE(anchor_ack_projectile_spawn_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.ack_projectile_spawn(cid, session, epoch, event_id)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_send_player_hit(int target_cid, int target_epoch,
                            float hit_x, float hit_y, float hit_z)
 {
