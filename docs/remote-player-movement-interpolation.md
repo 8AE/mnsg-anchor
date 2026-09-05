@@ -220,16 +220,20 @@ held one packet behind, and action edges crossing the airborne boundary align
 the vertical root; XZ residual and deliberate rotation correction can still
 settle briefly.
 
-## Why native collision is not replayed
+## Prediction and local contact
 
 The native order is the guide: choose current motion, integrate one frame,
 resolve collision, then render the final float transform. The transmitted
 vector is a finite difference of two final display transforms, not the native
-`+0xE4/+0xE8` command or `+0xA4` velocity. Replaying floor tests or wall
-collision on a visual-only remote would create a second simulation with
-different timing and geometry state. The client instead carries the latest
+`+0xE4/+0xE8` command or `+0xA4` velocity. The predictor carries the latest
 resolved displacement for a bounded interval, derives only a short-lived Y
 acceleration from authoritative endpoints, and absorbs the next residual.
+
+After prediction, the renderer's [local contact solver](remote-player-collision.md)
+constrains the display position against the local world and player bodies.
+It preserves the incoming animation timeline and does not replay native input,
+actions, or gravity. Either client's scripted movement disables this contact
+constraint until control resumes.
 
 Host-side trajectory tests cover in-phase constant motion, alternating 5/7-tick
 arrivals, native takeoff gravity and terminal fall speed, sparse

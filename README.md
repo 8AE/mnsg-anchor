@@ -9,6 +9,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 * **In-game HUD** — a notification banner confirms connection success or failure; a persistent player-list panel (top-left) shows every player currently in the room, their character, and their position.
 * **Teams** — players can be grouped by Team Name within a room so that flag queues and save-state syncs are scoped to that team.
 * **Reconnect support** — client IDs are preserved across sessions so the server can deliver queued packets on reconnect.
+* **Remote player collision** — remote models collide with the local player, other remote players, and local world geometry. Collision is suspended during either client's cutscene or scripted movement. Use the updated mod on both clients for the remote cutscene exemption; see [collision behavior and validation](docs/remote-player-collision.md).
 
 ### What is synced
 

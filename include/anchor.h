@@ -207,6 +207,8 @@ extern "C"
     * @param animation_step_100 Final native animation advance for this game
     *                           tick, in hundredths of a clip frame.
     * @param has_animation_step Nonzero when animation_step_100 is valid.
+    * @param collision_disabled Nonzero while native cutscene/script movement
+    *                           requires peers to bypass local collision.
     * @return 1 if sent, 0 otherwise.
     */
    int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
@@ -219,7 +221,8 @@ extern "C"
                                 int angular_velocity_z,
                                 int force_motion_edge,
                                 int animation_step_100,
-                                int has_animation_step);
+                                int has_animation_step,
+                                int collision_disabled);
 
    /**
     * @brief Broadcast the local player's currently selected character.

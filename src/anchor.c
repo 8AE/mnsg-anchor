@@ -270,7 +270,8 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
                              int angular_velocity_z,
                              int force_motion_edge,
                              int animation_step_100,
-                             int has_animation_step)
+                             int has_animation_step,
+                             int collision_disabled)
 {
     REPY_FN_SETUP;
     REPY_FN_SET_S32("pos_x", pos_x);
@@ -292,6 +293,7 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
     REPY_FN_SET_S32("force_motion_edge", force_motion_edge);
     REPY_FN_SET_S32("animation_step_100", animation_step_100);
     REPY_FN_SET_S32("has_animation_step", has_animation_step);
+    REPY_FN_SET_S32("collision_disabled", collision_disabled);
     REPY_FN_EXEC_CACHE(anchor_set_position_anim_code,
                        "import anchor_mnsg\n"
                        "result = anchor_mnsg.set_position_anim(\n"
@@ -299,7 +301,8 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
                        "    frame_count_100, rot_x, rot_y, rot_z,\n"
                        "    appearance_flags, velocity_x, velocity_y, velocity_z,\n"
                        "    angular_velocity_x, angular_velocity_y, angular_velocity_z,\n"
-                       "    force_motion_edge, animation_step_100, has_animation_step\n"
+                       "    force_motion_edge, animation_step_100, has_animation_step,\n"
+                       "    collision_disabled\n"
                        ")\n");
     int result = (int)REPY_FN_GET_BOOL("result");
     REPY_FN_CLEANUP;

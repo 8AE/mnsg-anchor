@@ -37,7 +37,8 @@ typedef struct AnchorRemoteMotionOutput
 /* Per-peer visual-only motion state. The receiver carries the sender's latest
  * post-collision displacement every game tick and pays packet residuals in
  * a few fixed steps. It does not delay the transform by a packet or run a
- * second gameplay/collision simulation. */
+ * second gameplay simulation. The renderer separately constrains its output
+ * against local collision geometry and peer bodies. */
 typedef struct AnchorRemoteMotionState
 {
     int initialized;

@@ -65,6 +65,7 @@ class RemoteState:
     vel_y: int = 0
     vel_z: int = 0
     pos_seq: int = 0
+    collision_disabled: int = 0
     updated_at: float = field(default_factory=time.monotonic)
 
 
@@ -90,8 +91,6 @@ class WorldState:
                 player.online = bool(packet_state["online"])
             if "currentRoom" in packet_state:
                 player.room_name = str(packet_state["currentRoom"])
-            if "currentRoomId" in packet_state:
-                player.room_id = int(packet_state["currentRoomId"])
             if "currentCharacter" in packet_state:
                 player.character = str(packet_state["currentCharacter"])
             self._update_position_fields(player, packet_state)
@@ -119,7 +118,6 @@ class WorldState:
                 player.team_id = str(client_state.get("teamId", player.team_id))
                 player.online = bool(client_state.get("online", player.online))
                 player.room_name = str(client_state.get("currentRoom", player.room_name))
-                player.room_id = int(client_state.get("currentRoomId", player.room_id))
                 player.character = str(client_state.get("currentCharacter", player.character))
                 self._update_position_fields(player, client_state)
         return assigned_self_id
@@ -131,9 +129,9 @@ class WorldState:
         async with self._lock:
             player = self.players.setdefault(cid, RemoteState(client_id=cid, name=f"Player{cid}"))
             player.updated_at = time.monotonic()
-            if "currentRoomId" in packet:
-                player.room_id = int(packet["currentRoomId"])
             self._update_position_fields(player, packet)
+            # A fresh legacy movement sample must clear a previous bypass.
+            player.collision_disabled = 1 if int(packet.get("collisionDisabled", 0)) else 0
 
     async def snapshot(self) -> list[RemoteState]:
         async with self._lock:
@@ -156,8 +154,14 @@ class WorldState:
 
     @staticmethod
     def _update_position_fields(player: RemoteState, data: dict[str, Any]) -> None:
+        if "currentRoomId" in data:
+            next_room = int(data["currentRoomId"])
+            if next_room != player.room_id:
+                player.collision_disabled = 0
+            player.room_id = next_room
         if "posX" in data:
             player.x = int(data["posX"])
+            player.collision_disabled = 1 if int(data.get("collisionDisabled", 0)) else 0
         if "posY" in data:
             player.y = int(data["posY"])
         if "posZ" in data:
@@ -200,6 +204,7 @@ class AnchorBot:
         self.z = config.start_z
         self.room_id = config.start_room
         self.character = config.character
+        self.collision_disabled = 0
         self._last_pos: tuple[int, int, int] | None = None
         self._last_pos_ms = 0
         self._pos_seq = 0
@@ -246,6 +251,7 @@ class AnchorBot:
         z: int | None = None,
         room_id: int | None = None,
         character: str | None = None,
+        collision_disabled: int | None = None,
     ) -> None:
         if x is not None:
             self.x = x
@@ -253,6 +259,8 @@ class AnchorBot:
             self.y = y
         if z is not None:
             self.z = z
+        if collision_disabled is not None:
+            self.collision_disabled = 1 if collision_disabled else 0
         metadata_changed = False
         if room_id is not None and room_id != self.room_id:
             self.room_id = room_id
@@ -304,6 +312,7 @@ class AnchorBot:
             "velZ": vz,
             "posSeq": self._pos_seq,
             "posT": now_ms,
+            "collisionDisabled": self.collision_disabled,
             "quiet": True,
         })
 
@@ -451,6 +460,9 @@ class StressController:
         if cmd == "char":
             await self._command_char(args)
             return
+        if cmd == "cutscene":
+            await self._command_cutscene(args)
+            return
         print(f"unknown command: {cmd}")
 
     async def print_status(self) -> None:
@@ -497,6 +509,7 @@ class StressController:
             bot.x = int(target.x + math.cos(angle) * radius)
             bot.y = int(target.y)
             bot.z = int(target.z + math.sin(angle) * radius)
+            bot.collision_disabled = target.collision_disabled
             metadata_changed = False
             if target.room_id >= 0:
                 metadata_changed = metadata_changed or bot.room_id != target.room_id
@@ -541,6 +554,14 @@ class StressController:
         character = normalize_character(args[1])
         await asyncio.gather(*(bot.set_state(character=character) for bot in bots))
         print(f"changed character for {len(bots)} bots")
+
+    async def _command_cutscene(self, args: list[str]) -> None:
+        if len(args) != 2 or args[1].lower() not in {"on", "off"}:
+            raise ValueError("usage: cutscene <all|N|A-B> <on|off>")
+        bots = self._select_bots(args[0])
+        disabled = 1 if args[1].lower() == "on" else 0
+        await asyncio.gather(*(bot.set_state(collision_disabled=disabled) for bot in bots))
+        print(f"cutscene collision bypass {'on' if disabled else 'off'} for {len(bots)} bots")
 
     def _select_bots(self, selector: str) -> list[AnchorBot]:
         if selector.lower() == "all":
@@ -592,9 +613,11 @@ Commands:
       Set only room id. Hex like 0x1d1 is accepted.
   char <all|N|A-B> <Goemon|Ebisumaru|Sasuke|Yae>
       Set only selected character.
+  cutscene <all|N|A-B> <on|off>
+      Bypass collision during a synthetic cutscene, or restore collision.
   follow <clientId|name substring>
       Move all synthetic clients in a ring around a server client.
-      The bots copy the target's room and character while following.
+      The bots copy the target's room, character, and cutscene bypass while following.
   stop-follow
       Stop following; bots remain at their current coordinates.
   spread <distance>

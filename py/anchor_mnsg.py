@@ -118,6 +118,7 @@ _last_position_room_id: int = -1
 _last_position_action: int = -2
 _last_position_frame_100: int = 0
 _last_position_appearance_flags: int = -1
+_last_position_collision_disabled: int = -1
 _position_seq: int = 0
 _race_status: str = ""
 _race_config_json: str = ""
@@ -139,6 +140,7 @@ _MOVEMENT_STATE_FIELDS: "tuple[str, ...]" = (
     "posX", "posY", "posZ", "velX", "velY", "velZ", "posSeq", "posT",
     "action", "animFrame100", "animFrameCount100", "rotX", "rotY", "rotZ",
     "rotVelX", "rotVelY", "rotVelZ", "animStep100", "hasAnimStep",
+    "collisionDisabled",
 )
 _POSITION_SEQUENCE_MASK: int = 0x7fffffff
 _POSITION_SEQUENCE_HALF_RANGE: int = 0x40000000
@@ -264,6 +266,13 @@ def _merge_client_state(
     for field in _MOVEMENT_STATE_FIELDS:
         if field in payload:
             state[field] = int(payload[field])
+    if enforce_movement_order or "posX" in payload:
+        # Collision bypass belongs to this exact movement sample. Legacy
+        # senders omit it and must resume collision rather than inherit a
+        # cutscene bypass from an earlier sender version or connection.
+        state["collisionDisabled"] = (
+            1 if int(payload.get("collisionDisabled", 0)) else 0
+        )
     if ("appearanceFlags" in payload or
             "suddenImpact" in payload or
             "modelScale100000" in payload):
@@ -571,7 +580,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     global _sock, _connected, _local_room_id, _local_character, _local_save_loaded
     global _last_position_sent, _last_position_sent_ms, _last_position_room_id
     global _last_position_action, _last_position_frame_100
-    global _last_position_appearance_flags
+    global _last_position_appearance_flags, _last_position_collision_disabled
 
     # A receiver from an older connection must never close a newer socket.
     if expected_sock is not None and _sock is not expected_sock:
@@ -590,6 +599,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _last_position_action = -2
     _last_position_frame_100 = 0
     _last_position_appearance_flags = -1
+    _last_position_collision_disabled = -1
     _connected = False
     s = _sock
     _sock = None
@@ -632,7 +642,7 @@ def connect(
     global _last_position_sent, _last_position_sent_ms, _last_position_room_id
     global _position_seq, _local_character
     global _last_position_action, _last_position_frame_100
-    global _last_position_appearance_flags
+    global _last_position_appearance_flags, _last_position_collision_disabled
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
 
     normalized_room_id = normalize_room_id(room_id)
@@ -657,6 +667,7 @@ def connect(
     _last_position_action = -2
     _last_position_frame_100 = 0
     _last_position_appearance_flags = -1
+    _last_position_collision_disabled = -1
     _position_seq = 0
     _local_character = ""
     _local_save_loaded = False
@@ -960,6 +971,7 @@ def set_position_anim(
     force_motion_edge: int = 0,
     animation_step_100: int = 0,
     has_animation_step: int = 0,
+    collision_disabled: int = 0,
 ) -> bool:
     """
     Broadcast world-space position and the live animation phase to teammates.
@@ -995,13 +1007,15 @@ def set_position_anim(
             tick, in hundredths of a clip frame.
         has_animation_step: Nonzero when animation_step_100 is valid. A valid
             zero represents a paused native clip.
+        collision_disabled: Nonzero during native cutscene/script movement.
+            Both edges bypass the normal send interval.
 
     Returns True if the packet was sent.
     """
     global _last_position_sent, _last_position_sent_ms, _last_position_room_id
     global _position_seq
     global _last_position_action, _last_position_frame_100
-    global _last_position_appearance_flags
+    global _last_position_appearance_flags, _last_position_collision_disabled
 
     if not _connected:
         return False
@@ -1010,6 +1024,8 @@ def set_position_anim(
     room_changed = _last_position_room_id != _local_room_id
     appearance_flags = int(appearance_flags) & APPEARANCE_MASK
     appearance_changed = appearance_flags != _last_position_appearance_flags
+    collision_disabled = 1 if collision_disabled else 0
+    collision_changed = collision_disabled != _last_position_collision_disabled
     frame_restarted = (
         not action_changed
         and int(frame_100) + ANIMATION_RESTART_DELTA_100 < _last_position_frame_100
@@ -1020,6 +1036,7 @@ def set_position_anim(
         and not room_changed
         and not action_changed
         and not appearance_changed
+        and not collision_changed
         and not frame_restarted
         and not bool(force_motion_edge)
     ):
@@ -1086,6 +1103,7 @@ def set_position_anim(
         "rotVelY": rot_vel_y,
         "rotVelZ": rot_vel_z,
         "appearanceFlags": appearance_flags,
+        "collisionDisabled": collision_disabled,
         "quiet": True,
     })
     if not sent:
@@ -1097,6 +1115,7 @@ def set_position_anim(
     _last_position_action = int(action)
     _last_position_frame_100 = int(frame_100)
     _last_position_appearance_flags = appearance_flags
+    _last_position_collision_disabled = collision_disabled
     _position_seq = next_seq
 
     if _client_id:
@@ -1122,6 +1141,7 @@ def set_position_anim(
             local["rotVelY"] = rot_vel_y
             local["rotVelZ"] = rot_vel_z
             local["appearanceFlags"] = appearance_flags
+            local["collisionDisabled"] = collision_disabled
     return True
 
 
@@ -1337,7 +1357,7 @@ def get_lobby_positions_json() -> str:
     current room ID and world-space position, for use by the phantom actor system.
 
     Each entry includes identity, position, velocity, animation, rotation,
-    character, and appearance fields used by the remote cutscene-model
+    character, appearance, and collision fields used by the remote cutscene-model
     renderer.
 
     Fields:
@@ -1347,6 +1367,7 @@ def get_lobby_positions_json() -> str:
       "hp"   – 1 if the player has sent at least one position update, 0 otherwise.
       "t"    – sender monotonic milliseconds, masked to a positive 31-bit value.
       "ap"   – appearance bitmap: Sudden Impact bit 0, Mini Ebisumaru bit 1.
+      "cd"   – 1 while the sender requires cutscene/script collision bypass.
 
     Unlike get_teammate_positions_json(), this function:
       - Does NOT filter by team.
@@ -1397,6 +1418,7 @@ def get_lobby_positions_json() -> str:
                 "rvy": int(v.get("rotVelY", 0)),
                 "rvz": int(v.get("rotVelZ", 0)),
                 "ap": int(v.get("appearanceFlags", 0)) & APPEARANCE_MASK,
+                "cd": 1 if v.get("collisionDisabled", 0) else 0,
                 "tm": 1 if v.get("teamId", "") == _team_id else 0,
             })
     return json.dumps(result, separators=(",", ":"))

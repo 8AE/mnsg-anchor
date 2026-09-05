@@ -27,6 +27,7 @@ typedef struct AnchorPlayerModelRemote
     int rot_y;
     int rot_z;
     int appearance_flags;
+    int collision_disabled;
     int same_team;
 } AnchorPlayerModelRemote;
 
@@ -34,5 +35,6 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
                                  void *render_parent_task);
 void anchor_player_models_load_resources(void);
 void anchor_player_models_reset(void);
+int anchor_player_models_get_position(int cid, float *x, float *y, float *z);
 
 #endif

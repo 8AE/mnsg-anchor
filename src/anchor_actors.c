@@ -13,6 +13,7 @@
 #include "anchor_nameplates.h"
 #include "anchor_player_models.h"
 #include "anchor_remote_animation.h"
+#include "anchor_remote_collision.h"
 #include "anchor_remote_motion.h"
 #include "utils/string_utils.h"
 
@@ -76,6 +77,7 @@ typedef struct RemotePlayer
     int rot_vy;
     int rot_vz;
     int appearance_flags;
+    int collision_disabled;
     int motion_phase_frames;
     int new_motion_sample;
     int same_team;
@@ -139,6 +141,7 @@ static int s_last_sent_angular_velocity_x;
 static int s_last_sent_angular_velocity_y;
 static int s_last_sent_angular_velocity_z;
 static int s_last_sent_appearance_flags = -1;
+static int s_last_sent_collision_disabled = -1;
 static unsigned int s_last_sent_room = 0xffffffffu;
 static int s_have_previous_frame_position;
 static float s_previous_frame_x;
@@ -312,6 +315,8 @@ static int parse_lobby_positions(const char *json)
         s_remote_players[count].rot_vz = parse_int_after(p, "\"rvz\"", 0);
         s_remote_players[count].appearance_flags =
             parse_int_after(p, "\"ap\"", 0);
+        s_remote_players[count].collision_disabled =
+            parse_int_after(p, "\"cd\"", 0) != 0;
         s_remote_players[count].same_team = parse_int_after(p, "\"tm\"", 1);
         parse_string_after(p, "\"n\"", s_remote_players[count].name,
                            (int)sizeof(s_remote_players[count].name));
@@ -431,6 +436,7 @@ static void reset_last_sent_state(void)
     s_last_sent_frame_100 = 0;
     s_last_sent_frame_count_100 = 0;
     s_last_sent_appearance_flags = -1;
+    s_last_sent_collision_disabled = -1;
     s_last_sent_room = 0xffffffffu;
     reset_frame_motion_baseline();
 }
@@ -452,6 +458,7 @@ static void publish_local_state(PlayerObject *local_obj)
     int rot_y;
     int rot_z;
     int appearance_flags;
+    int collision_disabled;
     int velocity_x = 0;
     int velocity_y = 0;
     int velocity_z = 0;
@@ -640,6 +647,10 @@ static void publish_local_state(PlayerObject *local_obj)
         }
     }
 
+    /* Transmit both script boundaries immediately, even when a stationary
+     * player keeps the same action and animation throughout the transition. */
+    collision_disabled = anchor_remote_collision_is_scripted();
+
     if (!s_have_sent_position)
     {
         should_send_position = 1;
@@ -665,6 +676,7 @@ static void publish_local_state(PlayerObject *local_obj)
     should_send_animation =
         action != s_last_sent_action ||
         appearance_flags != s_last_sent_appearance_flags ||
+        collision_disabled != s_last_sent_collision_disabled ||
         frame_restarted ||
         (s_state_send_timer <= 0 &&
          (anim_delta >= ANIMATION_SEND_DELTA_100 ||
@@ -685,7 +697,7 @@ static void publish_local_state(PlayerObject *local_obj)
                                  velocity_z, angular_velocity_x,
                                  angular_velocity_y, angular_velocity_z,
                                  force_motion_edge, animation_step_100,
-                                 has_animation_step))
+                                 has_animation_step, collision_disabled))
     {
         s_have_sent_position = 1;
         s_last_sent_x = x;
@@ -704,6 +716,7 @@ static void publish_local_state(PlayerObject *local_obj)
         s_last_sent_angular_velocity_y = angular_velocity_y;
         s_last_sent_angular_velocity_z = angular_velocity_z;
         s_last_sent_appearance_flags = appearance_flags;
+        s_last_sent_collision_disabled = collision_disabled;
         s_state_send_timer = POSITION_SEND_FRAMES;
         s_position_keepalive_timer = POSITION_KEEPALIVE_FRAMES;
     }
@@ -839,9 +852,16 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
             model->rot_y = smoothed_remote.rot_y;
             model->rot_z = smoothed_remote.rot_z;
             model->appearance_flags = smoothed_remote.appearance_flags;
+            model->collision_disabled = smoothed_remote.collision_disabled;
             model->same_team = smoothed_remote.same_team;
         }
 
+        /* Contact can constrain the displayed model away from its predicted
+         * network target. Keep the nameplate on the actual visible body. */
+        if (!smoothed_remote.collision_disabled &&
+            !anchor_remote_collision_is_scripted())
+            anchor_player_models_get_position(smoothed_remote.cid,
+                &smoothed_remote.x, &smoothed_remote.y, &smoothed_remote.z);
         visible_nameplates +=
             render_remote_nameplate(slot_index, &smoothed_remote, local_obj);
         slot_index++;
