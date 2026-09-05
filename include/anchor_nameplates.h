@@ -1,8 +1,6 @@
 #ifndef ANCHOR_NAMEPLATES_H
 #define ANCHOR_NAMEPLATES_H
 
-#define ANCHOR_NAMEPLATE_MAX 25
-
 typedef struct AnchorNameplateCamera
 {
     float player_x;

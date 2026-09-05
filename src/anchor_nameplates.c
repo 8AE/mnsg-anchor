@@ -5,6 +5,7 @@
 
 #include "recompui.h"
 #include "anchor_nameplates.h"
+#include "utils/array_utils.h"
 #include "icon_goemon.h"
 #include "icon_ebisumaru.h"
 #include "icon_sasuke.h"
@@ -21,9 +22,16 @@
 static const int s_nameplates_disabled = 1;
 
 static RecompuiContext s_nameplate_ctx = RECOMPUI_NULL_CONTEXT;
-static RecompuiResource s_nameplate_cards[ANCHOR_NAMEPLATE_MAX];
-static RecompuiResource s_nameplate_icons[ANCHOR_NAMEPLATE_MAX];
-static RecompuiResource s_nameplate_labels[ANCHOR_NAMEPLATE_MAX];
+typedef struct NameplateSlot
+{
+    RecompuiResource card;
+    RecompuiResource icon;
+    RecompuiResource label;
+} NameplateSlot;
+
+static NameplateSlot *s_nameplates;
+static int s_nameplate_capacity;
+static int s_nameplate_count;
 static int s_nameplate_initialized;
 static int s_nameplate_ctx_visible;
 static RecompuiTextureHandle s_nameplate_char_textures[4];
@@ -53,51 +61,73 @@ static void nameplates_load_textures(void)
         (void *)icon_yae_data, ICON_YAE_WIDTH, ICON_YAE_HEIGHT);
 }
 
-static void nameplates_ensure_init(void)
+static int nameplates_ensure_init(int needed)
 {
     int i;
     RecompuiResource root;
 
-    if (s_nameplates_disabled || s_nameplate_initialized)
-        return;
-    s_nameplate_initialized = 1;
-
-    nameplates_load_textures();
-
-    s_nameplate_ctx = recompui_create_context();
-    recompui_set_context_captures_input(s_nameplate_ctx, 0);
-    recompui_set_context_captures_mouse(s_nameplate_ctx, 0);
+    if (s_nameplates_disabled || needed < 0)
+        return 0;
+    if (!mnsg_array_reserve((void **)&s_nameplates, &s_nameplate_capacity,
+                            needed, sizeof(*s_nameplates)))
+        return 0;
+    if (!s_nameplate_initialized)
+    {
+        nameplates_load_textures();
+        s_nameplate_ctx = recompui_create_context();
+        if (s_nameplate_ctx == RECOMPUI_NULL_CONTEXT)
+            return 0;
+        recompui_set_context_captures_input(s_nameplate_ctx, 0);
+        recompui_set_context_captures_mouse(s_nameplate_ctx, 0);
+        s_nameplate_initialized = 1;
+    }
+    if (needed <= s_nameplate_count)
+        return 1;
     recompui_open_context(s_nameplate_ctx);
 
     root = recompui_context_root(s_nameplate_ctx);
-    for (i = 0; i < ANCHOR_NAMEPLATE_MAX; ++i)
+    for (i = s_nameplate_count; i < needed; ++i)
     {
-        s_nameplate_cards[i] = recompui_create_element(s_nameplate_ctx, root);
-        recompui_set_position(s_nameplate_cards[i], POSITION_ABSOLUTE);
-        recompui_set_width(s_nameplate_cards[i], 220.0f, UNIT_DP);
-        recompui_set_margin_left(s_nameplate_cards[i], -110.0f, UNIT_DP);
-        recompui_set_display(s_nameplate_cards[i], DISPLAY_NONE);
-        recompui_set_flex_direction(s_nameplate_cards[i], FLEX_DIRECTION_ROW);
-        recompui_set_align_items(s_nameplate_cards[i], ALIGN_ITEMS_CENTER);
-        recompui_set_justify_content(s_nameplate_cards[i], JUSTIFY_CONTENT_CENTER);
-        recompui_set_gap(s_nameplate_cards[i], 6.0f, UNIT_DP);
-        recompui_set_background_color(s_nameplate_cards[i], &NAMEPLATE_BG);
-        recompui_set_border_radius(s_nameplate_cards[i], 4.0f, UNIT_DP);
-        recompui_set_padding(s_nameplate_cards[i], 3.0f, UNIT_DP);
+        s_nameplates[i].card = recompui_create_element(s_nameplate_ctx, root);
+        if (s_nameplates[i].card == RECOMPUI_NULL_RESOURCE)
+            break;
+        recompui_set_position(s_nameplates[i].card, POSITION_ABSOLUTE);
+        recompui_set_width(s_nameplates[i].card, 220.0f, UNIT_DP);
+        recompui_set_margin_left(s_nameplates[i].card, -110.0f, UNIT_DP);
+        recompui_set_display(s_nameplates[i].card, DISPLAY_NONE);
+        recompui_set_flex_direction(s_nameplates[i].card, FLEX_DIRECTION_ROW);
+        recompui_set_align_items(s_nameplates[i].card, ALIGN_ITEMS_CENTER);
+        recompui_set_justify_content(s_nameplates[i].card, JUSTIFY_CONTENT_CENTER);
+        recompui_set_gap(s_nameplates[i].card, 6.0f, UNIT_DP);
+        recompui_set_background_color(s_nameplates[i].card, &NAMEPLATE_BG);
+        recompui_set_border_radius(s_nameplates[i].card, 4.0f, UNIT_DP);
+        recompui_set_padding(s_nameplates[i].card, 3.0f, UNIT_DP);
 
-        s_nameplate_icons[i] = recompui_create_imageview(
-            s_nameplate_ctx, s_nameplate_cards[i], s_nameplate_blank_texture);
-        recompui_set_width(s_nameplate_icons[i], NAMEPLATE_ICON_SIZE, UNIT_DP);
-        recompui_set_height(s_nameplate_icons[i], NAMEPLATE_ICON_SIZE, UNIT_DP);
+        s_nameplates[i].icon = recompui_create_imageview(
+            s_nameplate_ctx, s_nameplates[i].card, s_nameplate_blank_texture);
+        if (s_nameplates[i].icon == RECOMPUI_NULL_RESOURCE)
+        {
+            recompui_destroy_element(root, s_nameplates[i].card);
+            break;
+        }
+        recompui_set_width(s_nameplates[i].icon, NAMEPLATE_ICON_SIZE, UNIT_DP);
+        recompui_set_height(s_nameplates[i].icon, NAMEPLATE_ICON_SIZE, UNIT_DP);
 
-        s_nameplate_labels[i] = recompui_create_label(s_nameplate_ctx, s_nameplate_cards[i], "", LABELSTYLE_ANNOTATION);
-        recompui_set_text_align(s_nameplate_labels[i], TEXT_ALIGN_CENTER);
-        recompui_set_font_size(s_nameplate_labels[i], 20.0f, UNIT_DP);
-        recompui_set_font_weight(s_nameplate_labels[i], 700);
-        recompui_set_color(s_nameplate_labels[i], &NAMEPLATE_TEXT);
+        s_nameplates[i].label = recompui_create_label(s_nameplate_ctx, s_nameplates[i].card, "", LABELSTYLE_ANNOTATION);
+        if (s_nameplates[i].label == RECOMPUI_NULL_RESOURCE)
+        {
+            recompui_destroy_element(root, s_nameplates[i].card);
+            break;
+        }
+        recompui_set_text_align(s_nameplates[i].label, TEXT_ALIGN_CENTER);
+        recompui_set_font_size(s_nameplates[i].label, 20.0f, UNIT_DP);
+        recompui_set_font_weight(s_nameplates[i].label, 700);
+        recompui_set_color(s_nameplates[i].label, &NAMEPLATE_TEXT);
+        ++s_nameplate_count;
     }
 
     recompui_close_context(s_nameplate_ctx);
+    return s_nameplate_count >= needed;
 }
 
 static float clamp_dp(float value, float lo, float hi)
@@ -128,14 +158,13 @@ void anchor_nameplates_hide_slot(int slot_index)
     if (s_nameplates_disabled)
         return;
 
-    if (slot_index < 0 || slot_index >= ANCHOR_NAMEPLATE_MAX)
+    if (slot_index < 0 || slot_index >= s_nameplate_count)
         return;
 
-    nameplates_ensure_init();
-    if (s_nameplate_cards[slot_index] != RECOMPUI_NULL_RESOURCE)
+    if (s_nameplates[slot_index].card != RECOMPUI_NULL_RESOURCE)
     {
         recompui_open_context(s_nameplate_ctx);
-        recompui_set_display(s_nameplate_cards[slot_index], DISPLAY_NONE);
+        recompui_set_display(s_nameplates[slot_index].card, DISPLAY_NONE);
         recompui_close_context(s_nameplate_ctx);
     }
 }
@@ -145,7 +174,8 @@ void anchor_nameplates_set_context_visible(int visible)
     if (s_nameplates_disabled)
         return;
 
-    nameplates_ensure_init();
+    if (!nameplates_ensure_init(0))
+        return;
     if (visible)
     {
         if (!s_nameplate_ctx_visible)
@@ -199,10 +229,8 @@ int anchor_nameplates_render_slot(
     if (s_nameplates_disabled)
         return 0;
 
-    nameplates_ensure_init();
-    if (slot_index < 0 || slot_index >= ANCHOR_NAMEPLATE_MAX ||
-        !remote || !camera ||
-        s_nameplate_cards[slot_index] == RECOMPUI_NULL_RESOURCE)
+    if (slot_index < 0 || slot_index == 0x7fffffff || !remote || !camera ||
+        !nameplates_ensure_init(slot_index + 1))
     {
         anchor_nameplates_hide_slot(slot_index);
         return 0;
@@ -253,22 +281,22 @@ int anchor_nameplates_render_slot(
     screen_y = clamp_dp(half_height - (rel_y / vertical_depth) * focal_y, 60.0f, 980.0f);
 
     recompui_open_context(s_nameplate_ctx);
-    recompui_set_width(s_nameplate_cards[slot_index], card_width, UNIT_DP);
-    recompui_set_margin_left(s_nameplate_cards[slot_index], -(card_width * 0.5f), UNIT_DP);
-    recompui_set_gap(s_nameplate_cards[slot_index], 6.0f * label_scale, UNIT_DP);
-    recompui_set_padding(s_nameplate_cards[slot_index], 3.0f * label_scale, UNIT_DP);
-    recompui_set_border_radius(s_nameplate_cards[slot_index], 4.0f * label_scale, UNIT_DP);
-    recompui_set_width(s_nameplate_icons[slot_index], icon_size, UNIT_DP);
-    recompui_set_height(s_nameplate_icons[slot_index], icon_size, UNIT_DP);
+    recompui_set_width(s_nameplates[slot_index].card, card_width, UNIT_DP);
+    recompui_set_margin_left(s_nameplates[slot_index].card, -(card_width * 0.5f), UNIT_DP);
+    recompui_set_gap(s_nameplates[slot_index].card, 6.0f * label_scale, UNIT_DP);
+    recompui_set_padding(s_nameplates[slot_index].card, 3.0f * label_scale, UNIT_DP);
+    recompui_set_border_radius(s_nameplates[slot_index].card, 4.0f * label_scale, UNIT_DP);
+    recompui_set_width(s_nameplates[slot_index].icon, icon_size, UNIT_DP);
+    recompui_set_height(s_nameplates[slot_index].icon, icon_size, UNIT_DP);
     recompui_set_imageview_texture(
-        s_nameplate_icons[slot_index],
+        s_nameplates[slot_index].icon,
         (remote->ch >= 0 && remote->ch < 4) ? s_nameplate_char_textures[remote->ch] : s_nameplate_blank_texture);
-    recompui_set_text(s_nameplate_labels[slot_index], remote->name ? remote->name : "");
-    recompui_set_font_size(s_nameplate_labels[slot_index], font_size, UNIT_DP);
-    recompui_set_color(s_nameplate_labels[slot_index], remote->same_team ? &NAMEPLATE_TEXT : &NAMEPLATE_TEXT_OPPONENT);
-    recompui_set_left(s_nameplate_cards[slot_index], screen_x, UNIT_DP);
-    recompui_set_top(s_nameplate_cards[slot_index], screen_y, UNIT_DP);
-    recompui_set_display(s_nameplate_cards[slot_index], DISPLAY_FLEX);
+    recompui_set_text(s_nameplates[slot_index].label, remote->name ? remote->name : "");
+    recompui_set_font_size(s_nameplates[slot_index].label, font_size, UNIT_DP);
+    recompui_set_color(s_nameplates[slot_index].label, remote->same_team ? &NAMEPLATE_TEXT : &NAMEPLATE_TEXT_OPPONENT);
+    recompui_set_left(s_nameplates[slot_index].card, screen_x, UNIT_DP);
+    recompui_set_top(s_nameplates[slot_index].card, screen_y, UNIT_DP);
+    recompui_set_display(s_nameplates[slot_index].card, DISPLAY_FLEX);
     recompui_close_context(s_nameplate_ctx);
     return 1;
 }

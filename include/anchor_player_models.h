@@ -3,7 +3,6 @@
 
 #include "anchor_remote_collision.h"
 
-#define ANCHOR_PLAYER_MODEL_MAX 25
 #define ANCHOR_APPEARANCE_SUDDEN_IMPACT (1 << 0)
 #define ANCHOR_APPEARANCE_MINI_EBISUMARU (1 << 1)
 #define ANCHOR_APPEARANCE_HURT_RECOVERY (1 << 2)
@@ -50,6 +49,10 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
 void anchor_player_models_load_resources(void);
 void anchor_player_models_reset(void);
 int anchor_player_models_get_position(int cid, float *x, float *y, float *z);
+int anchor_player_models_capacity(void);
+int anchor_player_models_is_remote_object(const void *object);
+const void *anchor_player_models_resolve_render_address(const void *object,
+    unsigned int encoded, unsigned int bytes);
 int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacity);
 void anchor_player_models_get_drive(int *x, int *z);
 int anchor_player_models_get_epoch(void);

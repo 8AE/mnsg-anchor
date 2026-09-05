@@ -3,8 +3,9 @@
 #include "recompui.h"
 #include "anchor.h"
 #include "anchor_runtime.h"
+#include "utils/array_utils.h"
+#include "utils/json_utils.h"
 
-#define MAX_LOBBY_ROWS 32
 #define LOBBY_TEXT_LEN 96
 #define JOIN_CHECK_FRAMES 60
 #define REFRESH_FRAMES 20
@@ -25,8 +26,16 @@ static RecompuiResource s_title_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_configure_btn = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_start_btn = RECOMPUI_NULL_RESOURCE;
-static RecompuiResource s_rows[MAX_LOBBY_ROWS];
-static char s_row_text[MAX_LOBBY_ROWS][LOBBY_TEXT_LEN];
+typedef struct LobbyRow
+{
+    RecompuiResource label;
+    char text[LOBBY_TEXT_LEN];
+} LobbyRow;
+
+static LobbyRow *s_rows;
+static int s_row_capacity;
+static int s_row_count;
+static RecompuiResource s_rows_container = RECOMPUI_NULL_RESOURCE;
 
 static int s_ui_built = 0;
 static int s_initialized = 0;
@@ -51,64 +60,6 @@ static int text_equal(const char *a, const char *b)
         i++;
     }
     return a[i] == b[i];
-}
-
-static const char *find_text(const char *text, const char *needle)
-{
-    int i;
-    int j;
-    if (!text || !needle || !needle[0])
-        return 0;
-    for (i = 0; text[i]; i++)
-    {
-        for (j = 0; needle[j] && text[i + j] == needle[j]; j++)
-            ;
-        if (!needle[j])
-            return &text[i];
-    }
-    return 0;
-}
-
-static int parse_int_after(const char *text, const char *key, int fallback)
-{
-    const char *p = find_text(text, key);
-    int value = 0;
-    int found = 0;
-    if (!p)
-        return fallback;
-    while (*p && *p != ':')
-        p++;
-    if (*p == ':')
-        p++;
-    while (*p >= '0' && *p <= '9')
-    {
-        value = value * 10 + (*p - '0');
-        found = 1;
-        p++;
-    }
-    return found ? value : fallback;
-}
-
-static void parse_string_after(const char *text, const char *key, char *out, int out_len)
-{
-    const char *p = find_text(text, key);
-    int i = 0;
-    if (!out || out_len <= 0)
-        return;
-    out[0] = '\0';
-    if (!p)
-        return;
-    while (*p && *p != ':')
-        p++;
-    if (*p == ':')
-        p++;
-    while (*p && *p != '"')
-        p++;
-    if (*p == '"')
-        p++;
-    while (*p && *p != '"' && i < out_len - 1)
-        out[i++] = *p++;
-    out[i] = '\0';
 }
 
 static void copy_text(char *dst, const char *src, int max_len)
@@ -211,73 +162,106 @@ static void update_buttons(void)
     recompui_close_context(s_ctx);
 }
 
+static int ensure_lobby_rows(int needed)
+{
+    int i;
+    if (!mnsg_array_reserve((void **)&s_rows, &s_row_capacity,
+                            needed, sizeof(*s_rows)))
+        return 0;
+    recompui_open_context(s_ctx);
+    for (i = s_row_count; i < needed; ++i)
+    {
+        s_rows[i].label = recompui_create_label(s_ctx, s_rows_container, "", LABELSTYLE_SMALL);
+        if (s_rows[i].label == RECOMPUI_NULL_RESOURCE)
+            break;
+        recompui_set_font_size(s_rows[i].label, 14.0f, UNIT_DP);
+        recompui_set_color(s_rows[i].label, &L_WHITE);
+        recompui_set_display(s_rows[i].label, DISPLAY_NONE);
+        ++s_row_count;
+    }
+    recompui_close_context(s_ctx);
+    return s_row_count >= needed;
+}
+
 static void refresh_lobby_rows(void)
 {
     char *json;
-    const char *p;
+    char *cursor;
+    char *p;
+    char *obj_end;
     char last_team[40];
     int row = 0;
+    int required = 0;
 
     if (!anchor_is_connected())
         return;
 
     json = anchor_get_race_lobby_json();
-    p = json;
+    cursor = json;
+    while (mnsg_json_next_object(&cursor, &obj_end))
+    {
+        if (required > 0x7fffffff - 2)
+        {
+            recomp_free(json);
+            return;
+        }
+        required += 2; /* Every player may begin a separate team section. */
+    }
+    if (!ensure_lobby_rows(required))
+    {
+        if (json)
+            recomp_free(json);
+        return;
+    }
+    cursor = json;
     last_team[0] = '\0';
 
     recompui_open_context(s_ctx);
-    while (p && *p && row < MAX_LOBBY_ROWS)
+    while ((p = mnsg_json_next_object(&cursor, &obj_end)) != 0)
     {
         char name[40];
         char team[40];
         char status[20];
-        const char *obj_end;
-        int cid;
-
-        p = find_text(p, "{");
-        if (!p)
-            break;
-        obj_end = find_text(p, "}");
-        if (!obj_end)
-            break;
-
-        cid = parse_int_after(p, "\"cid\"", 0);
-        parse_string_after(p, "\"n\"", name, (int)sizeof(name));
-        parse_string_after(p, "\"t\"", team, (int)sizeof(team));
-        parse_string_after(p, "\"s\"", status, (int)sizeof(status));
+        int cid = 0;
+        char saved = *obj_end;
+        *obj_end = 0;
+        name[0] = team[0] = status[0] = 0;
+        mnsg_json_get_s32(p, "cid", &cid);
+        mnsg_json_copy_display_string(p, "n", name, sizeof(name));
+        mnsg_json_copy_display_string(p, "t", team, sizeof(team));
+        mnsg_json_copy_display_string(p, "s", status, sizeof(status));
+        *obj_end = saved;
         if (!team[0])
             copy_text(team, "default", (int)sizeof(team));
 
-        if (!text_equal(team, last_team) && row < MAX_LOBBY_ROWS)
+        if (!text_equal(team, last_team))
         {
-            copy_text(s_row_text[row], "Team: ", LOBBY_TEXT_LEN);
-            append_text(s_row_text[row], team, LOBBY_TEXT_LEN);
-            recompui_set_text(s_rows[row], s_row_text[row]);
-            recompui_set_color(s_rows[row], &L_TEAL);
-            recompui_set_display(s_rows[row], DISPLAY_BLOCK);
+            copy_text(s_rows[row].text, "Team: ", LOBBY_TEXT_LEN);
+            append_text(s_rows[row].text, team, LOBBY_TEXT_LEN);
+            recompui_set_text(s_rows[row].label, s_rows[row].text);
+            recompui_set_color(s_rows[row].label, &L_TEAL);
+            recompui_set_display(s_rows[row].label, DISPLAY_BLOCK);
             copy_text(last_team, team, (int)sizeof(last_team));
             row++;
         }
 
-        if (row < MAX_LOBBY_ROWS)
         {
-            copy_text(s_row_text[row], "  ", LOBBY_TEXT_LEN);
-            append_text(s_row_text[row], name[0] ? name : "Player", LOBBY_TEXT_LEN);
+            copy_text(s_rows[row].text, "  ", LOBBY_TEXT_LEN);
+            append_text(s_rows[row].text, name[0] ? name : "Player", LOBBY_TEXT_LEN);
             if (cid == (int)anchor_get_race_host_id())
-                append_text(s_row_text[row], "  [Host]", LOBBY_TEXT_LEN);
+                append_text(s_rows[row].text, "  [Host]", LOBBY_TEXT_LEN);
             if (text_equal(status, "started"))
-                append_text(s_row_text[row], "  [Started]", LOBBY_TEXT_LEN);
-            recompui_set_text(s_rows[row], s_row_text[row]);
-            recompui_set_color(s_rows[row], &L_WHITE);
-            recompui_set_display(s_rows[row], DISPLAY_BLOCK);
+                append_text(s_rows[row].text, "  [Started]", LOBBY_TEXT_LEN);
+            recompui_set_text(s_rows[row].label, s_rows[row].text);
+            recompui_set_color(s_rows[row].label, &L_WHITE);
+            recompui_set_display(s_rows[row].label, DISPLAY_BLOCK);
             row++;
         }
-        p = obj_end + 1;
     }
 
-    while (row < MAX_LOBBY_ROWS)
+    while (row < s_row_count)
     {
-        recompui_set_display(s_rows[row], DISPLAY_NONE);
+        recompui_set_display(s_rows[row].label, DISPLAY_NONE);
         row++;
     }
     recompui_close_context(s_ctx);
@@ -289,8 +273,6 @@ static void refresh_lobby_rows(void)
 
 static void race_lobby_ui_init(void)
 {
-    int i;
-
     if (s_ui_built)
         return;
     s_ui_built = 1;
@@ -366,13 +348,9 @@ static void race_lobby_ui_init(void)
         recompui_set_border_radius(list, 5.0f, UNIT_DP);
         recompui_set_min_height(list, 280.0f, UNIT_DP);
 
-        for (i = 0; i < MAX_LOBBY_ROWS; i++)
-        {
-            s_rows[i] = recompui_create_label(s_ctx, list, "", LABELSTYLE_SMALL);
-            recompui_set_font_size(s_rows[i], 14.0f, UNIT_DP);
-            recompui_set_color(s_rows[i], &L_WHITE);
-            recompui_set_display(s_rows[i], DISPLAY_NONE);
-        }
+        s_rows_container = list;
+        recompui_set_max_height(list, 420.0f, UNIT_DP);
+        recompui_set_overflow_y(list, OVERFLOW_AUTO);
 
         actions = recompui_create_element(s_ctx, body);
         recompui_set_display(actions, DISPLAY_FLEX);

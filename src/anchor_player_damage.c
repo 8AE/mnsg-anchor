@@ -1,4 +1,5 @@
 #include "anchor_player_damage.h"
+#include "anchor_remote_model_pool.h"
 
 #include "anchor_remote_collision.h"
 #include "anchor_runtime.h"
@@ -50,7 +51,8 @@ static void clear_hit_storage(void *storage, unsigned int size)
 static int is_rdram_pointer(const void *pointer)
 {
     unsigned int physical = (unsigned int)(unsigned long)pointer & 0x1fffffffu;
-    return physical >= 0x1000u && physical < 0x800000u;
+    return (physical >= 0x1000u && physical < 0x800000u) ||
+           anchor_remote_model_pool_contains(pointer);
 }
 
 static int valid_hit_coordinate(float value)

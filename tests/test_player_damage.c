@@ -33,6 +33,7 @@ static int s_reentrant_result;
 static int s_replace_player;
 static int s_cleanup_calls;
 
+int anchor_remote_model_pool_contains(const void *pointer) { (void)pointer; return 0; }
 int anchor_is_connected(void) { return s_connected; }
 int item_sync_save_is_loaded(void) { return s_loaded; }
 int anchor_remote_collision_is_scripted(void) { return s_scripted; }

@@ -29,6 +29,8 @@
 #include "recompconfig.h"
 #include "anchor.h"
 #include "anchor_runtime.h"
+#include "utils/array_utils.h"
+#include "utils/json_utils.h"
 #include "icon_goemon.h"
 #include "icon_ebisumaru.h"
 #include "icon_sasuke.h"
@@ -47,9 +49,6 @@ extern void debug_ui_bump_toggle_ctx(void);
 
 /** Frames between player-list refreshes (~1 s @ 60 fps). */
 #define PLAYER_LIST_REFRESH_FRAMES 60
-
-/** Maximum player rows shown in the list panel. */
-#define MAX_DISPLAY_PLAYERS 16
 
 /** Icon image size in DP units (square). */
 #define ICON_SIZE 24.0f
@@ -142,9 +141,19 @@ typedef struct
     RecompuiResource player_row; /* inner flex-row: icon + label                     */
     RecompuiResource icon;
     RecompuiResource label;
+    char name[128];
+    char team[40];
+    int character;
+    int room;
+    int has_pos;
+    int x;
+    int y;
+    int z;
 } PlayerRowUI;
 
-static PlayerRowUI s_plist_rows[MAX_DISPLAY_PLAYERS];
+static PlayerRowUI *s_plist_rows;
+static int s_plist_capacity;
+static int s_plist_row_count;
 static RecompuiResource s_plist_rows_container = RECOMPUI_NULL_RESOURCE;
 
 /* Pre-loaded character textures: 0=Goemon, 1=Ebisumaru, 2=Sasuke, 3=Yae. */
@@ -217,39 +226,10 @@ static void append_int_limited(char *dst, int *pos, int max_len, int value)
         append_char_limited(dst, pos, max_len, tmp[--len]);
 }
 
-static int parse_json_int_field(const char *p, char key0, char key1, int key_len, int default_value)
+static int plist_int_field(const char *object, const char *key, int fallback)
 {
-    while (*p && *p != '}')
-    {
-        int matched = 0;
-        if (key_len == 1)
-        {
-            matched = (*p == '"' && *(p + 1) == key0 && *(p + 2) == '"' && *(p + 3) == ':');
-        }
-        else
-        {
-            matched = (*p == '"' && *(p + 1) == key0 && *(p + 2) == key1 &&
-                       *(p + 3) == '"' && *(p + 4) == ':');
-        }
-
-        if (matched)
-        {
-            int sign = 1;
-            int value = 0;
-            p += key_len + 3; /* skip "key": */
-            if (*p == '-')
-            {
-                sign = -1;
-                p++;
-            }
-            while (*p >= '0' && *p <= '9')
-                value = value * 10 + (*p++ - '0');
-            return value * sign;
-        }
-        p++;
-    }
-
-    return default_value;
+    int value;
+    return mnsg_json_get_s32(object, key, &value) ? value : fallback;
 }
 
 static void plist_ensure_init(void)
@@ -300,22 +280,34 @@ static void plist_ensure_init(void)
     recompui_set_display(s_plist_rows_container, DISPLAY_FLEX);
     recompui_set_flex_direction(s_plist_rows_container, FLEX_DIRECTION_COLUMN);
     recompui_set_gap(s_plist_rows_container, 4.0f, UNIT_DP);
+    recompui_set_max_height(s_plist_rows_container, 850.0f, UNIT_DP);
+    recompui_set_overflow_y(s_plist_rows_container, OVERFLOW_AUTO);
 
-    /* Pre-allocate MAX_DISPLAY_PLAYERS slots; all start hidden.
-     * Each slot is a column: an optional team-section header on top,
-     * followed by the player row.  The team header is only shown when
-     * the player is the first member of a new team in the sorted list. */
-    for (int i = 0; i < MAX_DISPLAY_PLAYERS; i++)
+    recompui_close_context(s_plist_ctx);
+}
+
+static int plist_ensure_rows(int needed)
+{
+    int i;
+    if (!mnsg_array_reserve((void **)&s_plist_rows, &s_plist_capacity,
+                            needed, sizeof(*s_plist_rows)))
+        return 0;
+    recompui_open_context(s_plist_ctx);
+    for (i = s_plist_row_count; i < needed; ++i)
     {
         /* ── Outer slot: column layout, hidden until assigned. ─────── */
         s_plist_rows[i].row = recompui_create_element(
             s_plist_ctx, s_plist_rows_container);
+        if (s_plist_rows[i].row == RECOMPUI_NULL_RESOURCE)
+            goto failed;
         recompui_set_display(s_plist_rows[i].row, DISPLAY_NONE);
         recompui_set_flex_direction(s_plist_rows[i].row, FLEX_DIRECTION_COLUMN);
 
         /* ── Team section header (hidden by default). ──────────────── */
         s_plist_rows[i].team_hdr = recompui_create_element(
             s_plist_ctx, s_plist_rows[i].row);
+        if (s_plist_rows[i].team_hdr == RECOMPUI_NULL_RESOURCE)
+            goto failed;
         recompui_set_display(s_plist_rows[i].team_hdr, DISPLAY_NONE);
         recompui_set_padding_left(s_plist_rows[i].team_hdr, 2.0f, UNIT_DP);
         recompui_set_padding_top(s_plist_rows[i].team_hdr, 2.0f, UNIT_DP);
@@ -326,12 +318,16 @@ static void plist_ensure_init(void)
 
         s_plist_rows[i].team_label = recompui_create_label(
             s_plist_ctx, s_plist_rows[i].team_hdr, "", LABELSTYLE_ANNOTATION);
+        if (s_plist_rows[i].team_label == RECOMPUI_NULL_RESOURCE)
+            goto failed;
         recompui_set_color(s_plist_rows[i].team_label, &COLOR_TEAM_HDR);
         recompui_set_font_weight(s_plist_rows[i].team_label, 700);
 
         /* ── Player row: flex-row with icon and label. ─────────────── */
         s_plist_rows[i].player_row = recompui_create_element(
             s_plist_ctx, s_plist_rows[i].row);
+        if (s_plist_rows[i].player_row == RECOMPUI_NULL_RESOURCE)
+            goto failed;
         recompui_set_display(s_plist_rows[i].player_row, DISPLAY_FLEX);
         recompui_set_flex_direction(s_plist_rows[i].player_row, FLEX_DIRECTION_ROW);
         recompui_set_align_items(s_plist_rows[i].player_row, ALIGN_ITEMS_CENTER);
@@ -341,16 +337,27 @@ static void plist_ensure_init(void)
         /* Character icon image view. */
         s_plist_rows[i].icon = recompui_create_imageview(
             s_plist_ctx, s_plist_rows[i].player_row, s_blank_texture);
+        if (s_plist_rows[i].icon == RECOMPUI_NULL_RESOURCE)
+            goto failed;
         recompui_set_width(s_plist_rows[i].icon, ICON_SIZE, UNIT_DP);
         recompui_set_height(s_plist_rows[i].icon, ICON_SIZE, UNIT_DP);
 
         /* Player name + location label. */
         s_plist_rows[i].label = recompui_create_label(
             s_plist_ctx, s_plist_rows[i].player_row, "", LABELSTYLE_SMALL);
+        if (s_plist_rows[i].label == RECOMPUI_NULL_RESOURCE)
+            goto failed;
         recompui_set_color(s_plist_rows[i].label, &COLOR_DIM);
+        ++s_plist_row_count;
     }
 
     recompui_close_context(s_plist_ctx);
+    return 1;
+failed:
+    if (s_plist_rows[i].row != RECOMPUI_NULL_RESOURCE)
+        recompui_destroy_element(s_plist_rows_container, s_plist_rows[i].row);
+    recompui_close_context(s_plist_ctx);
+    return 0;
 }
 
 /* =========================================================================
@@ -430,108 +437,44 @@ void anchor_ui_update(void)
     if (!info_json)
         return;
 
-    /* Parse info_json into local row data arrays (no JSON library needed:
-     * the format is fixed and machine-generated).
-     * Python already sorts entries by (teamId, clientId). */
-    static char row_name_buf[MAX_DISPLAY_PLAYERS][128];
-    static char row_team_buf[MAX_DISPLAY_PLAYERS][40]; /* team ID string, may be empty */
-    static int row_char_idx[MAX_DISPLAY_PLAYERS];
-    static int row_room_id[MAX_DISPLAY_PLAYERS]; /* raw 16-bit room ID, -1 = unknown */
-    static int row_has_pos[MAX_DISPLAY_PLAYERS];
-    static int row_pos_x[MAX_DISPLAY_PLAYERS];
-    static int row_pos_y[MAX_DISPLAY_PLAYERS];
-    static int row_pos_z[MAX_DISPLAY_PLAYERS];
+    /* Python sorts by team/client identity. Allocate every roster entry,
+     * then bound all field reads to its own object (names may contain braces). */
     int row_count = 0;
-    const char *p = info_json;
-
-    while (*p && row_count < MAX_DISPLAY_PLAYERS)
+    int required = 0;
+    char *cursor = info_json;
+    char *object;
+    char *end;
+    while (mnsg_json_next_object(&cursor, &end))
     {
-        /* Locate the "n":" key. */
-        while (*p && !(*p == '"' && *(p + 1) == 'n' && *(p + 2) == '"' && *(p + 3) == ':' && *(p + 4) == '"'))
-            p++;
-        if (!*p)
-            break;
-        p += 5; /* skip "n":" */
-
-        /* Read name string until the closing quote (honour \" escapes). */
-        int n = 0;
-        while (*p && *p != '"' && n < (int)sizeof(row_name_buf[0]) - 1)
+        if (required == 0x7fffffff)
         {
-            if (*p == '\\' && *(p + 1))
-                p++; /* skip escape prefix */
-            row_name_buf[row_count][n++] = *p++;
+            recomp_free(info_json);
+            return;
         }
-        row_name_buf[row_count][n] = '\0';
-        if (*p == '"')
-            p++;
-
-        /* Locate the "c": key. */
-        while (*p && !(*p == '"' && *(p + 1) == 'c' && *(p + 2) == '"' && *(p + 3) == ':'))
-            p++;
-        if (!*p)
-            break;
-        p += 4; /* skip "c": */
-
-        /* Read integer value (may be negative for -1). */
-        int sign = 1;
-        if (*p == '-')
-        {
-            sign = -1;
-            p++;
-        }
-        int cidx = 0;
-        while (*p >= '0' && *p <= '9')
-            cidx = cidx * 10 + (*p++ - '0');
-        row_char_idx[row_count] = cidx * sign;
-
-        /* Locate the "r": key (raw room ID). */
-        row_room_id[row_count] = -1;
-        {
-            const char *q = p;
-            while (*q && !(*q == '"' && *(q + 1) == 'r' && *(q + 2) == '"' && *(q + 3) == ':'))
-                q++;
-            if (*q)
-            {
-                q += 4; /* skip "r": */
-                int rsign = 1;
-                if (*q == '-')
-                {
-                    rsign = -1;
-                    q++;
-                }
-                int rid = 0;
-                while (*q >= '0' && *q <= '9')
-                    rid = rid * 10 + (*q++ - '0');
-                row_room_id[row_count] = rid * rsign;
-            }
-        }
-
-        row_has_pos[row_count] = parse_json_int_field(p, 'h', 'p', 2, 0);
-        row_pos_x[row_count] = parse_json_int_field(p, 'x', '\0', 1, 0);
-        row_pos_y[row_count] = parse_json_int_field(p, 'y', '\0', 1, 0);
-        row_pos_z[row_count] = parse_json_int_field(p, 'z', '\0', 1, 0);
-
-        /* Locate the "t":" key (team ID string). */
-        row_team_buf[row_count][0] = '\0';
-        {
-            const char *q = p;
-            while (*q && !(*q == '"' && *(q + 1) == 't' && *(q + 2) == '"' && *(q + 3) == ':' && *(q + 4) == '"'))
-                q++;
-            if (*q)
-            {
-                q += 5; /* skip "t":" */
-                int tn = 0;
-                while (*q && *q != '"' && tn < (int)sizeof(row_team_buf[0]) - 1)
-                {
-                    if (*q == '\\' && *(q + 1))
-                        q++;
-                    row_team_buf[row_count][tn++] = *q++;
-                }
-                row_team_buf[row_count][tn] = '\0';
-            }
-        }
-
-        row_count++;
+        ++required;
+    }
+    if (!plist_ensure_rows(required))
+    {
+        recomp_free(info_json);
+        return;
+    }
+    cursor = info_json;
+    while ((object = mnsg_json_next_object(&cursor, &end)) != 0)
+    {
+        PlayerRowUI *row = &s_plist_rows[row_count++];
+        char saved = *end;
+        *end = 0;
+        row->name[0] = 0;
+        row->team[0] = 0;
+        mnsg_json_copy_display_string(object, "n", row->name, sizeof(row->name));
+        mnsg_json_copy_display_string(object, "t", row->team, sizeof(row->team));
+        row->character = plist_int_field(object, "c", -1);
+        row->room = plist_int_field(object, "r", -1);
+        row->has_pos = plist_int_field(object, "hp", 0);
+        row->x = plist_int_field(object, "x", 0);
+        row->y = plist_int_field(object, "y", 0);
+        row->z = plist_int_field(object, "z", 0);
+        *end = saved;
     }
 
     recomp_free(info_json);
@@ -550,7 +493,7 @@ void anchor_ui_update(void)
         int new_team = (i == 0);
         if (!new_team)
         {
-            const char *a = row_team_buf[i], *b = row_team_buf[i - 1];
+            const char *a = s_plist_rows[i].team, *b = s_plist_rows[i - 1].team;
             while (*a && *b && *a == *b)
             {
                 ++a;
@@ -566,7 +509,7 @@ void anchor_ui_update(void)
         /* Team section header – visible only for the first player of each team. */
         if (new_team)
         {
-            const char *tname = row_team_buf[i][0] ? row_team_buf[i] : "default";
+            const char *tname = s_plist_rows[i].team[0] ? s_plist_rows[i].team : "default";
             recompui_set_text(s_plist_rows[i].team_label, tname);
             recompui_set_display(s_plist_rows[i].team_hdr, DISPLAY_FLEX);
         }
@@ -576,7 +519,7 @@ void anchor_ui_update(void)
         }
 
         /* Character icon. */
-        int ci = row_char_idx[i];
+        int ci = s_plist_rows[i].character;
         RecompuiTextureHandle tex =
             (ci >= 0 && ci < 4) ? s_char_textures[ci] : s_blank_texture;
         recompui_set_imageview_texture(s_plist_rows[i].icon, tex);
@@ -584,14 +527,14 @@ void anchor_ui_update(void)
         /* Player label, optionally with room and position details appended. */
         {
             int len = 0;
-            const char *src = row_name_buf[i];
+            const char *src = s_plist_rows[i].name;
             while (*src && len < 127)
                 label_buf[len++] = *src++;
 
-            if (show_room_hex && row_room_id[i] >= 0)
+            if (show_room_hex && s_plist_rows[i].room >= 0)
             {
                 append_text_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, " (0x");
-                unsigned int rid = (unsigned int)row_room_id[i];
+                unsigned int rid = (unsigned int)s_plist_rows[i].room;
                 append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, s_hex_chars[(rid >> 12) & 0xF]);
                 append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, s_hex_chars[(rid >> 8) & 0xF]);
                 append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, s_hex_chars[(rid >> 4) & 0xF]);
@@ -599,14 +542,14 @@ void anchor_ui_update(void)
                 append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, ')');
             }
 
-            if (show_positions && row_has_pos[i])
+            if (show_positions && s_plist_rows[i].has_pos)
             {
                 append_text_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, " [");
-                append_int_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, row_pos_x[i]);
+                append_int_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, s_plist_rows[i].x);
                 append_text_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, ", ");
-                append_int_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, row_pos_y[i]);
+                append_int_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, s_plist_rows[i].y);
                 append_text_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, ", ");
-                append_int_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, row_pos_z[i]);
+                append_int_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, s_plist_rows[i].z);
                 append_char_limited(label_buf, &len, PLAYER_LABEL_BUF_LEN, ']');
             }
 
@@ -615,7 +558,7 @@ void anchor_ui_update(void)
         }
     }
     /* Hide any slots beyond the current player count. */
-    for (int i = row_count; i < MAX_DISPLAY_PLAYERS; i++)
+    for (int i = row_count; i < s_plist_row_count; i++)
         recompui_set_display(s_plist_rows[i].row, DISPLAY_NONE);
     recompui_close_context(s_plist_ctx);
 

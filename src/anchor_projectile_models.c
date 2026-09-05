@@ -1,4 +1,5 @@
 #include "anchor_projectile_models.h"
+#include "anchor_remote_model_pool.h"
 
 /* Native projectile constructors bind these exact model commands. Resource
  * families 0..3 are the character broad files; family 4 is common file 0x80.
@@ -220,7 +221,8 @@ static void projectile_task_update(void *task, void *object);
 static int rdram(const void *pointer)
 {
     unsigned int address = physical((unsigned int)(unsigned long)pointer);
-    return address >= 0x1000u && address < 0x800000u;
+    return (address >= 0x1000u && address < 0x800000u) ||
+           anchor_remote_model_pool_contains(pointer);
 }
 
 static int linked(const void *task)

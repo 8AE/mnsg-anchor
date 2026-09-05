@@ -572,6 +572,73 @@ static int test_player_pressure_moves_recipient_until_world_or_peer_blocks(void)
     return 0;
 }
 
+static void fill_distant_peers(AnchorCollisionBody *peers, int count)
+{
+    int i;
+    for (i = 0; i < count; ++i)
+    {
+        peers[i].position = (AnchorCollisionVec3){1000.0f + 20.0f * i,
+                                                 0.0f, 1000.0f};
+        peers[i].radius = 7.0f;
+        peers[i].height = 18.5f;
+    }
+}
+
+static int test_large_roster_sweeps_the_last_peer_and_preserves_free_motion(void)
+{
+    AnchorCollisionBody moving = {{0.0f, 0.0f, 0.0f}, 7.0f, 18.5f};
+    AnchorCollisionBody peers[128];
+    AnchorCollisionVec3 target = {100.0f, 0.0f, 0.0f};
+    AnchorCollisionVec3 out;
+    fill_distant_peers(peers, 128);
+    clear_scene();
+    CHECK(anchor_collision_move_body(&moving, &target, 0.1f, peers, 128, &out));
+    CHECK(near_float(out.x, 100.0f));
+
+    /* Only a peer beyond the former limit blocks this fast crossing. The
+     * target and origin both lie outside that peer, so endpoint-only checks
+     * would allow tunneling. World resolution must retain the same contact. */
+    peers[127] = (AnchorCollisionBody){{43.0f, 0.0f, 0.0f}, 7.0f, 18.5f};
+    add_plane(0, 50.0f, -1.0f, 0);
+    CHECK(anchor_collision_move_body(&moving, &target, 0.1f, peers, 128, &out));
+    CHECK(out.x <= 29.001f && out.x > 28.8f);
+    CHECK(bodies_separate(&moving, out, &peers[127]));
+    return 0;
+}
+
+static int test_large_roster_spawn_escape_keeps_late_peers_swept(void)
+{
+    AnchorCollisionBody moving = {{43.0f, 0.0f, 0.0f}, 7.0f, 18.5f};
+    AnchorCollisionBody peers[128];
+    AnchorCollisionVec3 out;
+    AnchorCollisionVec3 compact;
+    int i;
+    fill_distant_peers(peers, 128);
+    peers[126] = moving;
+    peers[127] = (AnchorCollisionBody){{20.0f, 0.0f, 0.0f}, 7.0f, 18.5f};
+    clear_scene();
+    add_plane(0, 50.0f, -1.0f, 0);
+    CHECK(anchor_collision_move_body(&moving, &moving.position, 0.1f,
+                                      peers + 126, 2, &compact));
+    CHECK(anchor_collision_move_body(&moving, &moving.position, 0.1f,
+                                      peers, 128, &out));
+    CHECK(out.x == compact.x && out.y == compact.y && out.z == compact.z);
+    CHECK(out.x <= 43.001f && out.x > peers[127].position.x);
+    for (i = 0; i < 128; ++i)
+        CHECK(bodies_separate(&moving, out, &peers[i]));
+
+    /* All peers can also overlap the origin: the filtered path is empty,
+     * but every one still participates in final clearance validation. */
+    for (i = 0; i < 128; ++i)
+        peers[i] = moving;
+    CHECK(anchor_collision_move_body(&moving, &moving.position, 0.1f,
+                                      peers, 128, &out));
+    CHECK(out.x <= 43.001f);
+    for (i = 0; i < 128; ++i)
+        CHECK(bodies_separate(&moving, out, &peers[i]));
+    return 0;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -594,5 +661,7 @@ int main(void)
     failures += test_fully_blocked_spawn_reports_failure_without_an_invalid_collider();
     failures += test_normal_contact_free_motion_uses_only_one_world_resolution();
     failures += test_player_pressure_moves_recipient_until_world_or_peer_blocks();
+    failures += test_large_roster_sweeps_the_last_peer_and_preserves_free_motion();
+    failures += test_large_roster_spawn_escape_keeps_late_peers_swept();
     return failures != 0;
 }

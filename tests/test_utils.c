@@ -82,6 +82,39 @@ static int test_json_writer(void)
     return 0;
 }
 
+static int test_json_roster_objects(void)
+{
+    char json[] = "[{\"n\":\"A } \\\"cid\\\":999\"},"
+                  "{\"cid\":27,\"n\":\"Long Player Name\"}]";
+    char *cursor = json;
+    char *end;
+    char *object;
+    char saved;
+    char name[8];
+    int cid;
+
+    CHECK(!mnsg_json_next_object(0, &end));
+    CHECK(!mnsg_json_next_object(&cursor, 0));
+    object = mnsg_json_next_object(&cursor, &end);
+    CHECK(object == json + 1);
+    saved = *end;
+    *end = 0;
+    CHECK(!mnsg_json_get_s32(object, "cid", &cid));
+    mnsg_json_copy_display_string(object, "n", name, sizeof(name));
+    CHECK(mnsg_string_equal(name, "A } \"ci"));
+    *end = saved;
+    object = mnsg_json_next_object(&cursor, &end);
+    CHECK(object != 0);
+    saved = *end;
+    *end = 0;
+    CHECK(mnsg_json_get_s32(object, "cid", &cid) && cid == 27);
+    mnsg_json_copy_display_string(object, "n", name, sizeof(name));
+    CHECK(mnsg_string_equal(name, "Long Pl"));
+    *end = saved;
+    CHECK(!mnsg_json_next_object(&cursor, &end));
+    return 0;
+}
+
 int main(void)
 {
     int result = test_strings();
@@ -89,6 +122,9 @@ int main(void)
     if (result)
         return result;
     result = test_json_reader();
+    if (result)
+        return result;
+    result = test_json_roster_objects();
     if (result)
         return result;
     return test_json_writer();

@@ -4,16 +4,33 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-static AnchorPlayerHitTarget s_targets[ANCHOR_PLAYER_MODEL_MAX];
+static AnchorPlayerHitTarget s_targets[256];
+static int s_fail_alloc;
 static int s_target_count;
 static int s_sent;
 static int s_send_ok;
 static int s_last_cid;
 static int s_last_epoch;
 static AnchorCollisionVec3 s_last_center;
-static int s_actor_ids[70];
+static int s_actor_ids[140];
+
+void *recomp_alloc(unsigned long size)
+{
+    return s_fail_alloc ? 0 : malloc(size);
+}
+
+void recomp_free(void *memory)
+{
+    free(memory);
+}
+
+int anchor_player_models_capacity(void)
+{
+    return 256;
+}
 
 int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacity)
 {
@@ -151,7 +168,7 @@ static void transport_failure_and_epoch_changes(void)
     assert(s_sent == 4);
 }
 
-static void bounded_cache_and_invalid_spheres(void)
+static void growing_cache_and_invalid_spheres(void)
 {
     AnchorPlayerAttackSample a;
     int i;
@@ -163,18 +180,49 @@ static void bounded_cache_and_invalid_spheres(void)
     a.center.x = INFINITY;
     anchor_player_attack_observe(&a);
     assert(s_sent == 0);
-    for (i = 0; i < 70; ++i)
+    for (i = 0; i < 140; ++i)
     {
         a = sample(i);
         anchor_player_attack_observe(&a);
     }
-    assert(s_sent == 64);
-    for (i = 0; i < 70; ++i)
+    assert(s_sent == 140);
+    for (i = 0; i < 140; ++i)
     {
         a = sample(i);
         anchor_player_attack_observe(&a);
     }
-    assert(s_sent == 64); /* Capacity never evicts an already hit attack. */
+    assert(s_sent == 140); /* Capacity never evicts an already hit attack. */
+}
+
+static void growing_roster_and_failed_dedup_reserve(void)
+{
+    AnchorPlayerAttackSample a = sample(0);
+    int i;
+    setup();
+    s_target_count = 100;
+    for (i = 0; i < 200; ++i)
+        s_targets[i] = (AnchorPlayerHitTarget){i + 1, 3, {{0, 0, 0}, 5, 20}};
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 100);
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 100); /* No truncation or duplicate damage after slot25. */
+    s_target_count = 200;
+    s_fail_alloc = 1;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 128); /* Existing capacity works; unsaved hits never send. */
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 128);
+    s_fail_alloc = 0;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 200); /* Retry sends only the previously unsaved hits. */
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 200);
+    ++s_targets[199].epoch;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 201 && s_last_cid == 200 && s_last_epoch == 4);
+    s_target_count = 1;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 201); /* Shrinking the roster retains attack dedup. */
 }
 
 int main(void)
@@ -183,7 +231,8 @@ int main(void)
     one_hit_per_swing_and_target();
     projectile_lifetime_and_rearm();
     transport_failure_and_epoch_changes();
-    bounded_cache_and_invalid_spheres();
+    growing_cache_and_invalid_spheres();
+    growing_roster_and_failed_dedup_reserve();
     puts("player attack geometry and episode tests passed");
     return 0;
 }

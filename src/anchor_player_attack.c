@@ -1,10 +1,15 @@
 #include "anchor_player_attack.h"
 #include "anchor_player_models.h"
+#include "utils/array_utils.h"
 
 extern int anchor_send_player_hit(int target_cid, int target_epoch,
                                   float hit_x, float hit_y, float hit_z);
 
-#define ATTACK_EPISODES 64
+typedef struct AttackHit
+{
+    int cid;
+    int epoch;
+} AttackHit;
 
 typedef struct AttackEpisode
 {
@@ -15,11 +20,14 @@ typedef struct AttackEpisode
     unsigned int seen_frame;
     float animation_frame;
     int hit_count;
-    int hit_cids[ANCHOR_PLAYER_MODEL_MAX];
-    int hit_epochs[ANCHOR_PLAYER_MODEL_MAX];
+    int hit_capacity;
+    AttackHit *hits;
 } AttackEpisode;
 
-static AttackEpisode s_episodes[ATTACK_EPISODES];
+static AttackEpisode *s_episodes;
+static int s_episode_capacity;
+static AnchorPlayerHitTarget *s_targets;
+static int s_target_capacity;
 static unsigned int s_frame;
 static int s_enabled;
 static int s_player_epoch;
@@ -27,7 +35,7 @@ static int s_player_epoch;
 void anchor_player_attack_reset(void)
 {
     int i;
-    for (i = 0; i < ATTACK_EPISODES; ++i)
+    for (i = 0; i < s_episode_capacity; ++i)
         s_episodes[i].task = 0;
     s_enabled = 0;
     s_frame = 0;
@@ -42,7 +50,7 @@ void anchor_player_attack_begin_frame(int enabled, int player_epoch)
     s_enabled = enabled;
     s_player_epoch = player_epoch;
     ++s_frame;
-    for (i = 0; i < ATTACK_EPISODES; ++i)
+    for (i = 0; i < s_episode_capacity; ++i)
     {
         if (s_episodes[i].task &&
             s_frame - s_episodes[i].seen_frame > 1u)
@@ -78,7 +86,7 @@ static AttackEpisode *find_episode(const AnchorPlayerAttackSample *sample)
     int i;
     int restart;
 
-    for (i = 0; i < ATTACK_EPISODES; ++i)
+    for (i = 0; i < s_episode_capacity; ++i)
     {
         if (s_episodes[i].task == sample->task)
         {
@@ -88,10 +96,16 @@ static AttackEpisode *find_episode(const AnchorPlayerAttackSample *sample)
         if (!s_episodes[i].task && !episode)
             episode = &s_episodes[i];
     }
-    /* Retain existing deduplication when saturated; do not evict an attack
-     * that can still be visited by another native victim-list scan. */
     if (!episode)
-        return 0;
+    {
+        int index = s_episode_capacity;
+        /* Growing the roster must not evict a live attack's hit history. */
+        if (index == 0x7fffffff ||
+            !mnsg_array_reserve((void **)&s_episodes, &s_episode_capacity,
+                                index + 1, sizeof(*s_episodes)))
+            return 0;
+        episode = &s_episodes[index];
+    }
     restart = !episode->task || episode->object != sample->object ||
               episode->descriptor != sample->descriptor;
     if (sample->is_player &&
@@ -111,7 +125,6 @@ static AttackEpisode *find_episode(const AnchorPlayerAttackSample *sample)
 
 void anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
 {
-    AnchorPlayerHitTarget targets[ANCHOR_PLAYER_MODEL_MAX];
     AttackEpisode *episode;
     int count;
     int i;
@@ -124,28 +137,38 @@ void anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
         !valid_float(sample->center.x) || !valid_float(sample->center.y) ||
         !valid_float(sample->center.z))
         return;
-    count = anchor_player_models_get_hit_targets(targets, ANCHOR_PLAYER_MODEL_MAX);
-    if (count > ANCHOR_PLAYER_MODEL_MAX)
-        count = ANCHOR_PLAYER_MODEL_MAX;
+    count = anchor_player_models_capacity();
+    if (!mnsg_array_reserve((void **)&s_targets, &s_target_capacity, count,
+                            sizeof(*s_targets)))
+        return;
+    count = anchor_player_models_get_hit_targets(s_targets, s_target_capacity);
+    if (count < 0 || count > s_target_capacity)
+        return;
     for (i = 0; i < count; ++i)
     {
         int j;
-        if (!sphere_hits_body(sample, &targets[i].body))
+        if (!sphere_hits_body(sample, &s_targets[i].body))
             continue;
         for (j = 0; j < episode->hit_count; ++j)
         {
-            if (episode->hit_cids[j] == targets[i].cid &&
-                episode->hit_epochs[j] == targets[i].epoch)
+            if (episode->hits[j].cid == s_targets[i].cid &&
+                episode->hits[j].epoch == s_targets[i].epoch)
                 break;
         }
-        if (j != episode->hit_count || j >= ANCHOR_PLAYER_MODEL_MAX)
+        if (j != episode->hit_count)
             continue;
-        if (anchor_send_player_hit(targets[i].cid, targets[i].epoch,
+        /* Reserve dedup state before emitting damage. Allocation failure can
+         * retry safely on a later sphere; a sent hit must always be recorded. */
+        if (j == 0x7fffffff ||
+            !mnsg_array_reserve((void **)&episode->hits, &episode->hit_capacity,
+                                j + 1, sizeof(*episode->hits)))
+            continue;
+        if (anchor_send_player_hit(s_targets[i].cid, s_targets[i].epoch,
                                     sample->center.x, sample->center.y,
                                     sample->center.z))
         {
-            episode->hit_cids[j] = targets[i].cid;
-            episode->hit_epochs[j] = targets[i].epoch;
+            episode->hits[j].cid = s_targets[i].cid;
+            episode->hits[j].epoch = s_targets[i].epoch;
             ++episode->hit_count;
         }
     }

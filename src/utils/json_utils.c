@@ -11,39 +11,110 @@ static int is_json_value_end(char c)
     return c == '\0' || c == ',' || c == '}' || c == ']';
 }
 
-/* Preserve the old packet parser's whole-document lookup semantics: compact
- * team state may place progression fields inside a nested `state` object. */
-static const char *find_value(const char *json, const char *key)
+static const char *skip_json_string(const char *p)
 {
-    const char *p;
+    ++p;
+    while (*p && *p != '"')
+    {
+        if (*p == '\\' && p[1])
+            ++p;
+        ++p;
+    }
+    return *p ? p + 1 : p;
+}
 
-    if (!json || !key || !*key)
+char *mnsg_json_next_object(char **cursor, char **end)
+{
+    char *p;
+    char *start;
+    int depth = 0;
+    if (!cursor || !end)
         return 0;
+    p = *cursor;
+    if (!p)
+        return 0;
+    while (*p == '[' || *p == ',' || *p == ' ' || *p == '\t' ||
+           *p == '\r' || *p == '\n')
+        ++p;
+    if (*p != '{')
+        return 0;
+    start = p;
+    do
+    {
+        if (*p == '"')
+        {
+            p = (char *)skip_json_string(p);
+            if (!*p)
+                return 0;
+            continue;
+        }
+        if (*p == '{')
+            ++depth;
+        if (*p == '}' && !--depth)
+        {
+            *end = p;
+            *cursor = p + 1;
+            return start;
+        }
+        ++p;
+    } while (*p);
+    return 0;
+}
 
-    for (p = json; *p; ++p)
+void mnsg_json_copy_display_string(const char *json, const char *key,
+                                   char *out, unsigned int out_size)
+{
+    const char *p = mnsg_json_find_value(json, key);
+    unsigned int n = 0;
+    if (!out || !out_size)
+        return;
+    out[0] = 0;
+    if (!p || *p++ != '"')
+        return;
+    while (*p && *p != '"' && n + 1 < out_size)
+    {
+        if (*p == '\\' && p[1])
+            ++p;
+        out[n++] = *p++;
+    }
+    out[n] = 0;
+}
+
+/* Whole-document lookup is intentional for nested team state. Skip string
+ * values completely so escaped field-like text in a display name cannot match. */
+const char *mnsg_json_find_value(const char *json, const char *key)
+{
+    const char *p = json;
+    if (!p || !key || !*key)
+        return 0;
+    while (*p)
     {
         const char *candidate;
         const char *wanted;
-
+        const char *end;
         if (*p != '"')
+        {
+            ++p;
             continue;
+        }
         candidate = p + 1;
         wanted = key;
-        while (*wanted && *candidate == *wanted)
+        end = skip_json_string(p);
+        while (*wanted && candidate < end && *candidate == *wanted)
         {
             ++candidate;
             ++wanted;
         }
-        if (*wanted || *candidate != '"')
-            continue;
-        ++candidate;
-        while (is_json_space(*candidate))
-            ++candidate;
-        if (*candidate++ != ':')
-            continue;
-        while (is_json_space(*candidate))
-            ++candidate;
-        return candidate;
+        p = end;
+        while (is_json_space(*p))
+            ++p;
+        if (!*wanted && candidate + 1 == end && *candidate == '"' && *p == ':')
+        {
+            ++p;
+            while (is_json_space(*p))
+                ++p;
+            return p;
+        }
     }
     return 0;
 }
@@ -51,7 +122,7 @@ static const char *find_value(const char *json, const char *key)
 int mnsg_json_string_equals(const char *json, const char *key,
                             const char *expected)
 {
-    const char *value = find_value(json, key);
+    const char *value = mnsg_json_find_value(json, key);
 
     if (!value || !expected || *value++ != '"')
         return 0;
@@ -66,7 +137,7 @@ int mnsg_json_string_equals(const char *json, const char *key,
 int mnsg_json_get_string(const char *json, const char *key,
                          char *out, unsigned int out_size)
 {
-    const char *value = find_value(json, key);
+    const char *value = mnsg_json_find_value(json, key);
     unsigned int written = 0;
 
     if (!value || !out || out_size == 0 || *value++ != '"')
@@ -110,7 +181,7 @@ int mnsg_json_get_string(const char *json, const char *key,
 
 int mnsg_json_get_s32(const char *json, const char *key, signed int *out)
 {
-    const char *value = find_value(json, key);
+    const char *value = mnsg_json_find_value(json, key);
 
     if (!value || !mnsg_parse_s32(&value, out))
         return 0;
@@ -121,7 +192,7 @@ int mnsg_json_get_s32(const char *json, const char *key, signed int *out)
 
 int mnsg_json_get_u32(const char *json, const char *key, unsigned int *out)
 {
-    const char *value = find_value(json, key);
+    const char *value = mnsg_json_find_value(json, key);
     unsigned int parsed = 0;
 
     if (!value || !out || *value < '0' || *value > '9')

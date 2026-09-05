@@ -12,6 +12,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 * **Remote player collision** — remote models collide with the local player, other remote players, and local world geometry. Collision is suspended during either client's cutscene or scripted movement. Use the updated mod on both clients for the remote cutscene exemption; see [collision behavior and validation](docs/remote-player-collision.md).
 * **Player combat and pushing** — players in the same area can hit each other with native melee and player-owned projectile attack volumes, and push each other by moving into contact. Hits use the victim's native armour, hurt reaction and recovery; both interactions pause during cutscenes. Install the updated mod on all clients.
 * **Projectile and recovery visuals** — other clients render thrown weapons, their trails and impact effects, and the player's blinking during hurt recovery. Install the updated mod on all clients; see [projectile synchronization and validation](docs/remote-projectiles.md).
+* **Growing room capacity** — remote rosters, interactions, and native task/model pools expand as needed, with shared expression textures. See [capacity, crash protection, and validation](docs/multiplayer-capacity.md) for the engine's remaining resource constraints.
 
 ### What is synced
 

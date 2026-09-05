@@ -22,8 +22,8 @@
  * stock Sudden Impact display-pointer replacement cannot mutate another
  * remote's model. The broad character files are registered by the normal scene
  * resource loader. Face/part resources are different: their pixels are
- * referenced by generated N64 display-list commands, so their per-slot double
- * buffers are carved from the stock scene arena below 0x80800000 instead of
+ * referenced by generated N64 display-list commands, so shared immutable
+ * expression pages are carved from the stock scene arena below 0x80800000 instead of
  * the extended recomp heap.
  *
  * Object segment binding (matches the player object layout):
@@ -31,11 +31,12 @@
  *         slot-private current-action slice rebased by its file offset)
  *   +0x3c broad file id / +0x40 broad file base (segment 9)
  *   +0x50 / +0x58 aux face/part resources (segments from D_80203FF0),
- *         loaded per action with FUN_800145B4 into double buffers
+ *         loaded per resource with FUN_800145B4 into shared texture pages
  *   +0x2c action record model pointer | 0x60000000
  */
 
 #include "anchor_player_models.h"
+#include "anchor_remote_model_pool.h"
 #include "anchor_remote_animation.h"
 #include "anchor_remote_appearance.h"
 #include "anchor_remote_collision.h"
@@ -44,6 +45,8 @@
 #include "anchor.h"
 #include "modding.h"
 #include "recomputils.h"
+#include "utils/array_utils.h"
+#include "utils/texture_cache.h"
 
 #define REMOTE_PLAYER_ACTION_IDLE 0
 #define REMOTE_PLAYER_ACTION_MAX 0xe8
@@ -57,7 +60,6 @@
 #define REMOTE_YAW_SPEED_THRESHOLD_SQ 64
 #define REMOTE_MODEL_SCALE 0.1f
 
-#define REMOTE_MODEL_SLOT_COUNT ANCHOR_PLAYER_MODEL_MAX
 #define CHARACTER_GOEMON 0
 #define CHARACTER_EBISUMARU 1
 #define CHARACTER_COUNT 4
@@ -67,15 +69,13 @@
 #define MINI_SCALE_CURVE 0.001171875f
 #define AUX_BUFFER_SIZE 0x1000u
 #define AUX_RESOURCE_COUNT 2
-#define AUX_FLIP_COUNT 2
 #define AUX_SEQUENCE_MAX_STEPS 32
 #define AUX_RESOURCE_ID_LIMIT 0x8770u
 #define BUFFER_ALIGN 16u
 #define SCENE_RESOURCE_ENTRY_COUNT 48
 #define RENDER_RDRAM_END 0x80800000u
-#define AUX_ARENA_SIZE                                                     \
-    (REMOTE_MODEL_SLOT_COUNT * AUX_RESOURCE_COUNT * AUX_FLIP_COUNT *       \
-     AUX_BUFFER_SIZE)
+#define AUX_CACHE_PAGES 100
+#define AUX_ARENA_SIZE (AUX_CACHE_PAGES * AUX_BUFFER_SIZE)
 
 typedef struct SceneResourceEntry
 {
@@ -88,6 +88,7 @@ typedef struct CharacterModelCache
 {
     int ready;
     unsigned char *broad;       /* resident broad file from the scene registry */
+    unsigned int broad_size;
     unsigned char *action;      /* whole action-model file, raw ROM image */
     unsigned int action_size;
     unsigned int max_action_model_size;
@@ -115,9 +116,8 @@ typedef struct RemoteModelSlot
     void *object;
     unsigned char *private_action;
     unsigned int private_action_size;
-    unsigned char *aux_buffer[AUX_RESOURCE_COUNT][AUX_FLIP_COUNT];
+    int aux_cache_index[AUX_RESOURCE_COUNT];
     unsigned int aux_resource_id[AUX_RESOURCE_COUNT];
-    int aux_flip[AUX_RESOURCE_COUNT];
     unsigned char aux_cursor[AUX_RESOURCE_COUNT];
     unsigned char aux_skip_update[AUX_RESOURCE_COUNT];
     float aux_last_frame;
@@ -229,7 +229,10 @@ extern int func_8001C3E0_1CFE0(void *object, unsigned int model_ptr,
 #define STOCK_DMA_MODE (*(volatile unsigned char *)0x8015C5D4)
 
 static CharacterModelCache s_char_cache[CHARACTER_COUNT];
-static RemoteModelSlot s_slots[REMOTE_MODEL_SLOT_COUNT];
+static RemoteModelSlot *s_slots;
+static int s_slot_capacity;
+static AnchorCollisionBody *s_collision_peers;
+static int s_collision_peer_capacity;
 static void *s_owner_task;
 static unsigned int s_interaction_tick;
 static void *s_interaction_task;
@@ -241,8 +244,8 @@ static int s_player_epoch = 1;
 static int s_drive_x;
 static int s_drive_z;
 static unsigned int s_drive_tick;
-static unsigned char *s_aux_arena_next;
-static unsigned char *s_aux_arena_end;
+static unsigned char *s_aux_arena;
+static MnsgTextureCacheEntry s_aux_cache[AUX_CACHE_PAGES];
 
 static void remote_model_task_update(void *task, void *object);
 
@@ -272,9 +275,10 @@ static int is_rdram_pointer(const void *ptr)
     unsigned int phys = addr & 0x1fffffffu;
 
     /* Exclude the engine's 0x80000000 invalid-link sentinel as well as null.
-     * Every task, object, and resident resource used here is above the first
-     * RDRAM page. */
-    return phys >= 0x00001000u && phys < 0x00800000u;
+     * Stock resources live above the first RDRAM page; additional CPU task
+     * and skeleton records must belong to a registered pool chunk. */
+    return (phys >= 0x00001000u && phys < 0x00800000u) ||
+           anchor_remote_model_pool_contains(ptr);
 }
 
 /* Ghidra: a live task's +0x04 field points to the list word that currently
@@ -317,20 +321,23 @@ static void invalidate_aux_render_arena(void)
 {
     int slot_index;
     int channel;
-    int flip;
+    int i;
 
-    s_aux_arena_next = 0;
-    s_aux_arena_end = 0;
-    for (slot_index = 0; slot_index < REMOTE_MODEL_SLOT_COUNT; ++slot_index)
+    s_aux_arena = 0;
+    for (i = 0; i < AUX_CACHE_PAGES; ++i)
+    {
+        s_aux_cache[i].resource = 0;
+        s_aux_cache[i].references = 0;
+        s_aux_cache[i].released_frame = 0;
+    }
+    for (slot_index = 0; slot_index < s_slot_capacity; ++slot_index)
     {
         RemoteModelSlot *slot = &s_slots[slot_index];
 
         for (channel = 0; channel < AUX_RESOURCE_COUNT; ++channel)
         {
-            for (flip = 0; flip < AUX_FLIP_COUNT; ++flip)
-                slot->aux_buffer[channel][flip] = 0;
+            slot->aux_cache_index[channel] = -1;
             slot->aux_resource_id[channel] = 0;
-            slot->aux_flip[channel] = 0;
             slot->aux_cursor[channel] = 0;
             slot->aux_skip_update[channel] = 0;
         }
@@ -386,22 +393,22 @@ static int reserve_aux_render_arena(void)
     /* Advance the external scene loader's sentinel because later resident
      * resources must begin after the remote face buffers, not overwrite them. */
     free_entry->data = (unsigned char *)(unsigned long)end;
-    s_aux_arena_next = (unsigned char *)(unsigned long)start;
-    s_aux_arena_end = (unsigned char *)(unsigned long)end;
+    s_aux_arena = (unsigned char *)(unsigned long)start;
     recomp_printf("[remote_models] face arena reserved at %x..%x\n", start, end);
     return 1;
 }
 
-static unsigned char *alloc_aux_render_buffer(void)
+static void release_slot_aux(RemoteModelSlot *slot)
 {
-    unsigned char *buffer;
-
-    if (!s_aux_arena_next || !s_aux_arena_end ||
-        s_aux_arena_next > s_aux_arena_end - AUX_BUFFER_SIZE)
-        return 0;
-    buffer = s_aux_arena_next;
-    s_aux_arena_next += AUX_BUFFER_SIZE;
-    return buffer;
+    int channel;
+    for (channel = 0; channel < AUX_RESOURCE_COUNT; ++channel)
+    {
+        if (slot->aux_resource_id[channel])
+            mnsg_texture_cache_release(&s_aux_cache[slot->aux_cache_index[channel]],
+                                        D_800C7A78);
+        slot->aux_resource_id[channel] = 0;
+        slot->aux_cache_index[channel] = -1;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -422,6 +429,28 @@ static unsigned char *resident_resource_base(unsigned int file_id)
     if (!is_rdram_pointer((void *)(unsigned long)address))
         return 0;
     return (unsigned char *)(unsigned long)address;
+}
+
+/* The next registry allocation (including the sentinel cursor) bounds the
+ * resident file. Use the closest later base so preflight cannot walk into
+ * another asset or into the graphics arenas reserved after staging. */
+static unsigned int resident_resource_size(const unsigned char *base)
+{
+    unsigned int start = (unsigned int)(unsigned long)base;
+    unsigned int end = 0;
+    int i;
+    if (!base)
+        return 0;
+    for (i = 0; i < SCENE_RESOURCE_ENTRY_COUNT; ++i)
+    {
+        unsigned int next = (unsigned int)(unsigned long)
+            D_80167FC0_168BC0[i].data & 0xbfffffffu;
+        if (next > start && next <= RENDER_RDRAM_END && (!end || next < end))
+            end = next;
+        if (!D_80167FC0_168BC0[i].file_id)
+            break;
+    }
+    return end ? end - start : 0;
 }
 
 static int action_model_range(int ch, int action, unsigned int *offset_out,
@@ -539,12 +568,14 @@ void anchor_player_models_load_resources(void)
 
         cache->ready = 0;
         cache->broad = 0;
+        cache->broad_size = 0;
 
         /* Use the scene loader during the stage-load return hook so every
          * character's clothed broad render resources are resident before any
          * per-frame remote task runs. */
         func_80013B14_14714(broad_id);
         cache->broad = resident_resource_base(broad_id);
+        cache->broad_size = resident_resource_size(cache->broad);
         if (!cache->broad || !cache_action_file(ch))
         {
             recomp_printf("[remote_models] ch %d resource staging failed\n", ch);
@@ -576,9 +607,14 @@ static void hide_object(void *object)
     if (!object)
         return;
 
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    for (i = 0; i < s_slot_capacity; ++i)
         if (s_slots[i].object == object)
+        {
             s_slots[i].collision_ready = 0;
+            /* A failed new expression must not leave a hidden model pinning
+             * all cache pages forever. Retirement still protects GPU reads. */
+            release_slot_aux(&s_slots[i]);
+        }
 
     write_u32_at(object, 0x2c, 0);
     write_float_at(object, 0x1c, 0.0f);
@@ -619,6 +655,7 @@ static void clear_slot_state(RemoteModelSlot *slot, int preserve_live_task)
         }
     }
 
+    release_slot_aux(slot);
     slot->active = 0;
     slot->cid = 0;
     slot->seen = 0;
@@ -653,7 +690,7 @@ void anchor_player_models_reset(void)
 {
     int i;
 
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    for (i = 0; i < s_slot_capacity; ++i)
         clear_slot_state(&s_slots[i], 0);
     s_owner_task = 0;
 }
@@ -662,7 +699,7 @@ static RemoteModelSlot *find_slot(int cid)
 {
     int i;
 
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    for (i = 0; i < s_slot_capacity; ++i)
     {
         if (s_slots[i].active && s_slots[i].cid == cid)
             return &s_slots[i];
@@ -688,17 +725,88 @@ static RemoteModelSlot *alloc_slot(int cid)
 {
     int i;
 
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    for (i = 0; i < s_slot_capacity; ++i)
     {
         if (!s_slots[i].active)
         {
-            /* Reuse a hidden task/object retained under the same live owner;
-             * this bounds the task count to the fixed remote slot count. */
+            /* Reuse an existing hidden task/object before growing the roster. */
             clear_slot_state(&s_slots[i], 1);
             s_slots[i].active = 1;
             s_slots[i].cid = cid;
             return &s_slots[i];
         }
+    }
+    i = s_slot_capacity;
+    if (!mnsg_array_reserve((void **)&s_slots, &s_slot_capacity, i + 1,
+                            sizeof(*s_slots)))
+        return 0;
+    clear_slot_state(&s_slots[i], 0);
+    s_slots[i].active = 1;
+    s_slots[i].cid = cid;
+    return &s_slots[i];
+}
+
+int anchor_player_models_capacity(void)
+{
+    return s_slot_capacity;
+}
+
+int anchor_player_models_is_remote_object(const void *object)
+{
+    int i;
+    if (!object || s_owner_task != D_801FC604_5B8514)
+        return 0;
+    for (i = 0; i < s_slot_capacity; ++i)
+        if (s_slots[i].active && s_slots[i].object == object &&
+            is_linked_remote_task(s_slots[i].task))
+            return 1;
+    return 0;
+}
+
+static int range_contains(const void *base, unsigned int size,
+                           unsigned int address, unsigned int bytes)
+{
+    unsigned int start = (unsigned int)(unsigned long)base;
+    return base && address >= start && bytes <= size &&
+           address - start <= size - bytes;
+}
+
+const void *anchor_player_models_resolve_render_address(const void *object,
+    unsigned int encoded, unsigned int bytes)
+{
+    unsigned int address = encoded;
+    int i;
+    if (!object || !encoded || !bytes)
+        return 0;
+    if (!(encoded & 0x80000000u))
+    {
+        unsigned int segment = encoded <= 0x08000000u ? 0u :
+            ((encoded >> 24) & 15u) - 8u;
+        unsigned int base;
+        unsigned int offset = encoded & 0x00ffffffu;
+        if (segment >= 6)
+            return 0;
+        base = *(const unsigned int *)((const unsigned char *)object +
+                                       0x38 + segment * 8);
+        address = base + offset;
+        if (address < base)
+            return 0;
+    }
+    address &= 0x8fffffffu;
+    for (i = 0; i < s_slot_capacity; ++i)
+    {
+        const RemoteModelSlot *slot = &s_slots[i];
+        const CharacterModelCache *cache;
+        if (!slot->active || slot->object != object ||
+            slot->bound_ch < 0 || slot->bound_ch >= CHARACTER_COUNT)
+            continue;
+        cache = &s_char_cache[slot->bound_ch];
+        if (range_contains(cache->action, cache->action_size, address, bytes) ||
+            range_contains(cache->broad, cache->broad_size, address, bytes) ||
+            range_contains(slot->private_action, slot->private_action_size,
+                           address, bytes))
+            return (const void *)(unsigned long)address;
+        return 0;
     }
     return 0;
 }
@@ -788,58 +896,45 @@ static int bind_aux_resource(RemoteModelSlot *slot, int channel,
 {
     unsigned char *buffer;
     unsigned char *end;
-    int flip;
+    int index;
 
     if (resource == 0)
         return 1;
-    if (channel < 0 || channel >= AUX_RESOURCE_COUNT ||
+    if (!s_aux_arena || channel < 0 || channel >= AUX_RESOURCE_COUNT ||
         segment < 1 || segment > 5 || resource == 0xffu ||
         resource >= AUX_RESOURCE_ID_LIMIT)
         return 0;
 
-    if (slot->aux_resource_id[channel] == resource)
-    {
-        buffer = slot->aux_buffer[channel][slot->aux_flip[channel]];
-        if (!buffer)
-            return 0;
-        write_u32_at(slot->object, 0x38 + segment * 8,
-                     (unsigned int)(unsigned long)buffer);
-        return 1;
-    }
-
-    /* Use the stock resource-size query to reject an unrelated table value
-     * before FUN_800145B4 is allowed to write into a face buffer. Correct
-     * player aux resources fit the 0x1000-byte buffers from FUN_801DC630. */
+    /* Every character using the same expression can share immutable pixels.
+     * References prevent eviction while a model binds a page; retired pages
+     * also survive the native renderer's two in-flight display lists. */
+    index = mnsg_texture_cache_find(s_aux_cache, AUX_CACHE_PAGES, resource);
+    if (index < 0)
     {
         int stored_size = func_80014698_15298(resource, 0);
-
         if (stored_size <= 0 || stored_size > (int)AUX_BUFFER_SIZE)
-        {
-            recomp_printf("[remote_models] invalid aux resource %x size %d\n",
-                          resource, stored_size);
             return 0;
-        }
+        index = mnsg_texture_cache_victim(s_aux_cache, AUX_CACHE_PAGES,
+                                         D_800C7A78);
+        if (index < 0)
+            return 0;
+        buffer = s_aux_arena + (unsigned int)index * AUX_BUFFER_SIZE;
+        s_aux_cache[index].resource = 0;
+        end = func_800145B4_151B4(resource, buffer);
+        if (!end || end < buffer || end > buffer + AUX_BUFFER_SIZE)
+            return 0;
+        s_aux_cache[index].resource = resource;
     }
-
-    /* Match FUN_801DC87C's double buffer so a display list can finish using
-     * the previous expression while the next face/part resource is loaded. */
-    flip = slot->aux_flip[channel] ^ 1;
-    if (!slot->aux_buffer[channel][flip])
-        slot->aux_buffer[channel][flip] = alloc_aux_render_buffer();
-    buffer = slot->aux_buffer[channel][flip];
-    if (!buffer)
-        return 0;
-
-    /* Use the stock small-resource loader because face resources may be raw or
-     * compressed; validate its end pointer before exposing the segment base. */
-    end = func_800145B4_151B4(resource, buffer);
-    if (!end || end < buffer || end > buffer + AUX_BUFFER_SIZE)
+    buffer = s_aux_arena + (unsigned int)index * AUX_BUFFER_SIZE;
+    if (slot->aux_resource_id[channel] != resource)
     {
-        recomp_printf("[remote_models] aux resource %x overflow\n", resource);
-        return 0;
+        if (slot->aux_resource_id[channel])
+            mnsg_texture_cache_release(&s_aux_cache[slot->aux_cache_index[channel]],
+                                        D_800C7A78);
+        ++s_aux_cache[index].references;
+        slot->aux_cache_index[channel] = index;
+        slot->aux_resource_id[channel] = resource;
     }
-    slot->aux_flip[channel] = flip;
-    slot->aux_resource_id[channel] = resource;
     write_u32_at(slot->object, 0x38 + segment * 8,
                  (unsigned int)(unsigned long)buffer);
     return 1;
@@ -1123,7 +1218,7 @@ static int collect_collision_peers(const RemoteModelSlot *self,
     if (s_owner_task != D_801FC604_5B8514 ||
         !is_linked_task(s_owner_task) || !anchor_is_connected())
         return 0;
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    for (i = 0; i < s_slot_capacity; ++i)
     {
         RemoteModelSlot *peer = &s_slots[i];
         if (peer == self || !peer->active || !peer->pending_valid ||
@@ -1200,7 +1295,7 @@ int anchor_player_models_peer_is_current(int cid, int session, int epoch)
     if (cid <= 0 || session <= 0 || epoch <= 0 ||
         s_owner_task != D_801FC604_5B8514 || !is_linked_task(s_owner_task))
         return 0;
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    for (i = 0; i < s_slot_capacity; ++i)
     {
         const RemoteModelSlot *slot = &s_slots[i];
         if (slot->active && slot->cid == cid && slot->pending_valid &&
@@ -1221,7 +1316,7 @@ int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacit
         s_interaction_scripted || !anchor_is_connected() ||
         s_owner_task != D_801FC604_5B8514 || !is_linked_task(s_owner_task))
         return 0;
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT && count < capacity; ++i)
+    for (i = 0; i < s_slot_capacity && count < capacity; ++i)
     {
         RemoteModelSlot *slot = &s_slots[i];
         if (!slot->active || !slot->pending_valid || !slot->collision_ready ||
@@ -1268,7 +1363,7 @@ static AnchorCollisionVec3 incoming_player_push(const AnchorCollisionBody *body)
     AnchorCollisionVec3 total = {0.0f, 0.0f, 0.0f};
     float length_squared;
     int i;
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    for (i = 0; i < s_slot_capacity; ++i)
     {
         RemoteModelSlot *slot = &s_slots[i];
         AnchorCollisionVec3 push;
@@ -1305,7 +1400,7 @@ static int resolve_slot_collision(RemoteModelSlot *slot,
     AnchorCollisionVec3 position;
     AnchorCollisionVec3 from = slot->collision_ready ?
         slot->collision_body.position : target;
-    AnchorCollisionBody peers[REMOTE_MODEL_SLOT_COUNT + 1];
+    AnchorCollisionBody *peers;
     AnchorCollisionBody moving = collision_body_at(from, remote->ch, scale);
     AnchorCollisionBody local;
     float local_scale;
@@ -1321,6 +1416,15 @@ static int resolve_slot_collision(RemoteModelSlot *slot,
         return 1;
     }
 
+    if (!mnsg_array_reserve((void **)&s_collision_peers,
+                            &s_collision_peer_capacity, s_slot_capacity + 1,
+                            sizeof(*s_collision_peers)))
+    {
+        hide_object(slot->object);
+        slot->bound_action = -1;
+        return 0;
+    }
+    peers = s_collision_peers;
     count = collect_collision_peers(slot, peers);
     if (local_collision_body(&local, &local_scale))
         peers[count++] = local;
@@ -1369,7 +1473,7 @@ void anchor_collision_before_local_movement(void *task)
 RECOMP_HOOK_RETURN("func_801CBAF8_587A08")
 void anchor_collision_after_local_movement(void)
 {
-    AnchorCollisionBody peers[REMOTE_MODEL_SLOT_COUNT];
+    AnchorCollisionBody *peers;
     AnchorCollisionVec3 target;
     AnchorCollisionVec3 native_target;
     AnchorCollisionVec3 push;
@@ -1402,6 +1506,11 @@ void anchor_collision_after_local_movement(void)
             s_drive_z = (int)(dz * 3000.0f);
         }
     }
+    if (!mnsg_array_reserve((void **)&s_collision_peers,
+                            &s_collision_peer_capacity, s_slot_capacity + 1,
+                            sizeof(*s_collision_peers)))
+        return;
+    peers = s_collision_peers;
     count = collect_collision_peers(0, peers);
     if (!count)
         return;
@@ -1580,7 +1689,7 @@ static void remote_model_task_update(void *task, void *object)
     int i;
 
     (void)object;
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    for (i = 0; i < s_slot_capacity; ++i)
     {
         if (s_slots[i].active && s_slots[i].task == task)
         {
@@ -1673,7 +1782,7 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
         s_owner_task = render_parent_task;
     }
 
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    for (i = 0; i < s_slot_capacity; ++i)
         s_slots[i].seen = 0;
 
     for (i = 0; remotes && i < count; ++i)
@@ -1688,7 +1797,7 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
         if (!slot)
             slot = alloc_slot(remote->cid);
         if (!slot)
-            continue; /* more remotes than model slots; nameplate only */
+            continue; /* Heap exhaustion: retry this peer next frame. */
 
         slot->seen = 1;
         if (!ensure_slot_task(slot, remote, render_parent_task))
@@ -1708,7 +1817,7 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
         slot->pending_valid = 1;
     }
 
-    for (i = 0; i < REMOTE_MODEL_SLOT_COUNT; ++i)
+    for (i = 0; i < s_slot_capacity; ++i)
     {
         if (s_slots[i].active && !s_slots[i].seen)
             clear_slot_state(&s_slots[i], 1);

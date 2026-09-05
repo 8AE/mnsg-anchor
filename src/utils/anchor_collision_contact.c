@@ -33,18 +33,26 @@ static int same_position(const AnchorCollisionVec3 *a,
     return a->x == b->x && a->y == b->y && a->z == b->z;
 }
 
+static int clear_at_origin(const AnchorCollisionBody *peer, const void *context)
+{
+    const AnchorCollisionBody *moving = context;
+    return !overlaps(moving, &moving->position, peer);
+}
+
 /* A second world sweep is only needed when a peer changed the target. The
  * final overlap check is essential: a wall can reject the peer separation. */
 static void resolve_candidate(const AnchorCollisionBody *moving,
                                const AnchorCollisionVec3 *target, float scale,
                                const AnchorCollisionBody *peers, int count,
+                               AnchorCollisionPeerFilter include,
                                AnchorCollisionVec3 *out)
 {
     AnchorCollisionVec3 contact;
     anchor_collision_world_move(&moving->position, target, scale, out);
     if (!count)
         return;
-    anchor_collision_move_peers(moving, out, peers, count, &contact);
+    anchor_collision_move_peers_filtered(moving, out, peers, count, include,
+                                         moving, &contact);
     if (!same_position(&contact, out))
         anchor_collision_world_move(&moving->position, &contact, scale, out);
 }
@@ -59,7 +67,6 @@ int anchor_collision_move_body(const AnchorCollisionBody *moving,
         {0.70710678f, 0.70710678f}, {-0.70710678f, 0.70710678f},
         {0.70710678f, -0.70710678f}, {-0.70710678f, -0.70710678f},
     };
-    AnchorCollisionBody path_peers[ANCHOR_COLLISION_MAX_PEERS];
     AnchorCollisionVec3 resolved;
     AnchorCollisionVec3 best;
     float best_distance = 0.0f;
@@ -71,11 +78,10 @@ int anchor_collision_move_body(const AnchorCollisionBody *moving,
     if (!moving || !target || !out)
         return 0;
     *out = moving->position;
-    if (count < 0 || count > ANCHOR_COLLISION_MAX_PEERS ||
-        (count && !peers))
+    if (count < 0 || (count && !peers))
         return 0;
 
-    resolve_candidate(moving, target, scale, peers, count, &resolved);
+    resolve_candidate(moving, target, scale, peers, count, 0, &resolved);
     if (clear_of_peers(moving, &resolved, peers, count))
     {
         *out = resolved;
@@ -96,8 +102,8 @@ int anchor_collision_move_body(const AnchorCollisionBody *moving,
      * only peers already overlapping its origin. Every other body remains
      * a swept obstacle, so an escape cannot jump across a third player. */
     for (i = 0; i < count; ++i)
-        if (!overlaps(moving, &moving->position, &peers[i]))
-            path_peers[path_count++] = peers[i];
+        if (clear_at_origin(&peers[i], moving))
+            ++path_count;
     if (path_count == count)
         return 0;
 
@@ -128,8 +134,9 @@ int anchor_collision_move_body(const AnchorCollisionBody *moving,
         }
         candidate.x += dx * distance;
         candidate.z += dz * distance;
-        resolve_candidate(moving, &candidate, scale, path_peers, path_count,
-                           &resolved);
+        resolve_candidate(moving, &candidate, scale, peers,
+                           path_count ? count : 0,
+                           clear_at_origin, &resolved);
         if (!clear_of_peers(moving, &resolved, peers, count))
             continue;
         dx = resolved.x - moving->position.x;

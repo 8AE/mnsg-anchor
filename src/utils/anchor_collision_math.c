@@ -95,10 +95,13 @@ static int sweep_body(const AnchorCollisionBody *moving,
     return 1;
 }
 
-void anchor_collision_move_peers(const AnchorCollisionBody *moving,
-                                 const AnchorCollisionVec3 *target,
-                                 const AnchorCollisionBody *obstacles,
-                                 int count, AnchorCollisionVec3 *out)
+void anchor_collision_move_peers_filtered(const AnchorCollisionBody *moving,
+                                          const AnchorCollisionVec3 *target,
+                                          const AnchorCollisionBody *obstacles,
+                                          int count,
+                                          AnchorCollisionPeerFilter include,
+                                          const void *context,
+                                          AnchorCollisionVec3 *out)
 {
     AnchorCollisionVec3 position = moving->position;
     AnchorCollisionVec3 delta;
@@ -113,6 +116,8 @@ void anchor_collision_move_peers(const AnchorCollisionBody *moving,
         for (i = 0; i < count; ++i)
         {
             const AnchorCollisionBody *other = &obstacles[i];
+            if (include && !include(other, context))
+                continue;
             float x = position.x - other->position.x;
             float z = position.z - other->position.z;
             float radius = moving->radius + other->radius;
@@ -161,6 +166,8 @@ void anchor_collision_move_peers(const AnchorCollisionBody *moving,
         {
             float time;
             AnchorCollisionVec3 normal;
+            if (include && !include(&obstacles[i], context))
+                continue;
             if (sweep_body(moving, position, delta, &obstacles[i],
                            &time, &normal) && time <= first_time)
             {
@@ -185,4 +192,13 @@ void anchor_collision_move_peers(const AnchorCollisionBody *moving,
         }
     }
     *out = position;
+}
+
+void anchor_collision_move_peers(const AnchorCollisionBody *moving,
+                                 const AnchorCollisionVec3 *target,
+                                 const AnchorCollisionBody *obstacles,
+                                 int count, AnchorCollisionVec3 *out)
+{
+    anchor_collision_move_peers_filtered(moving, target, obstacles, count,
+                                         0, 0, out);
 }

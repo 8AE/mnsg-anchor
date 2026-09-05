@@ -8,17 +8,22 @@
  * playable constructor, player actor, controls, or behavior callback is used.
  */
 
+#ifndef ANCHOR_ACTORS_HOST_TEST
 #include "modding.h"
 #include "anchor.h"
+#endif
 #include "anchor_nameplates.h"
 #include "anchor_player_models.h"
 #include "anchor_projectile_models.h"
 #include "anchor_remote_animation.h"
 #include "anchor_remote_collision.h"
 #include "anchor_remote_motion.h"
+#include "anchor_remote_model_pool.h"
+#include "anchor_render_scratch.h"
 #include "utils/string_utils.h"
+#include "utils/array_utils.h"
+#include "utils/json_utils.h"
 
-#define ANCHOR_REMOTE_MAX 25
 #define POSITION_SEND_FRAMES 6
 #define POSITION_KEEPALIVE_FRAMES 120
 #define POSITION_MIN_DELTA_SQ 36
@@ -125,9 +130,13 @@ extern float func_8001B5AC_1C1AC(void *model);
  * routines reading and writing this stable global alongside player task +0x60. */
 #define CURRENT_CHAR_PTR ((volatile unsigned int *)0x8015C5DC)
 
-static RemotePlayer s_remote_players[ANCHOR_REMOTE_MAX];
-static RemoteSmoothing s_remote_smoothing[ANCHOR_REMOTE_MAX];
-static AnchorPlayerModelRemote s_remote_models[ANCHOR_REMOTE_MAX];
+static RemotePlayer *s_remote_players;
+static RemoteSmoothing *s_remote_smoothing;
+static AnchorPlayerModelRemote *s_remote_models;
+static int s_remote_capacity;
+static int s_smoothing_capacity;
+static int s_model_capacity;
+static int s_nameplate_count;
 static int s_remote_count;
 static int s_state_send_timer;
 static int s_position_keepalive_timer;
@@ -172,6 +181,7 @@ static int s_lobby_refresh_timer;
 static const char *const s_char_names[4] = {
     "Goemon", "Ebisumaru", "Sasuke", "Yae"};
 
+#ifndef ANCHOR_ACTORS_HOST_TEST
 static unsigned char read_u8_at(const void *obj, unsigned int offset)
 {
     return *(const unsigned char *)((const unsigned char *)obj + offset);
@@ -199,7 +209,8 @@ static int is_rdram_pointer(const void *ptr)
 
     /* The engine uses 0x80000000 as an invalid-link sentinel during task
      * teardown; it must not pass the same test as a live RDRAM object. */
-    return phys >= 0x00001000u && phys < 0x00800000u;
+    return (phys >= 0x00001000u && phys < 0x00800000u) ||
+           anchor_remote_model_pool_contains(ptr);
 }
 
 static int round_float_to_int(float value)
@@ -229,112 +240,84 @@ void anchor_load_remote_cutscene_resources(void)
     anchor_player_models_load_resources();
     /* Projectile recipes share the already staged character broad files. */
     anchor_projectile_models_load_resources();
+    anchor_render_scratch_load_resources();
 }
+
+#endif
 
 static int parse_int_after(const char *obj, const char *key, int fallback)
 {
-    const char *p = mnsg_string_find(obj, key);
-    int sign = 1;
-    int value = 0;
-    int saw_digit = 0;
-
-    if (!p)
+    const char *p = mnsg_json_find_value(obj, key);
+    int value;
+    if (!p || !mnsg_parse_s32(&p, &value))
         return fallback;
-    while (*p && *p != ':')
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
         ++p;
-    if (*p == ':')
-        ++p;
-    while (*p == ' ' || *p == '\t')
-        ++p;
-    if (*p == '-')
-    {
-        sign = -1;
-        ++p;
-    }
-    while (*p >= '0' && *p <= '9')
-    {
-        saw_digit = 1;
-        value = value * 10 + (*p - '0');
-        ++p;
-    }
-    return saw_digit ? value * sign : fallback;
+    return !*p || *p == ',' ? value : fallback;
 }
 
-static void parse_string_after(const char *obj, const char *key, char *out, int out_size)
+static int parse_lobby_positions(char *json)
 {
-    const char *p = mnsg_string_find(obj, key);
-    int n = 0;
-
-    if (out_size <= 0)
-        return;
-    out[0] = '\0';
-    if (!p)
-        return;
-    while (*p && *p != ':')
-        ++p;
-    if (*p == ':')
-        ++p;
-    while (*p == ' ' || *p == '\t')
-        ++p;
-    if (*p != '"')
-        return;
-    ++p;
-    while (*p && *p != '"' && n < out_size - 1)
-    {
-        if (*p == '\\' && *(p + 1))
-            ++p;
-        out[n++] = *p++;
-    }
-    out[n] = '\0';
-}
-
-static int parse_lobby_positions(const char *json)
-{
-    const char *p = json;
+    char *cursor = json;
+    char *p;
+    char *end;
+    int required = 0;
     int count = 0;
 
-    while (p && *p && count < ANCHOR_REMOTE_MAX)
+    while ((p = mnsg_json_next_object(&cursor, &end)) != 0)
+    {
+        if (required == 0x7fffffff)
+            return -1;
+        ++required;
+    }
+    if (!mnsg_array_reserve((void **)&s_remote_players, &s_remote_capacity,
+                            required, sizeof(*s_remote_players)) ||
+        !mnsg_array_reserve((void **)&s_remote_models, &s_model_capacity,
+                            required, sizeof(*s_remote_models)))
+        return -1;
+    cursor = json;
+    while ((p = mnsg_json_next_object(&cursor, &end)) != 0)
     {
         int ch;
-
-        p = mnsg_string_find(p, "{");
-        if (!p)
-            break;
-        s_remote_players[count].cid = parse_int_after(p, "\"cid\"", 0);
-        s_remote_players[count].room = parse_int_after(p, "\"room\"", -1);
-        s_remote_players[count].x = parse_int_after(p, "\"x\"", 0);
-        s_remote_players[count].y = parse_int_after(p, "\"y\"", 0);
-        s_remote_players[count].z = parse_int_after(p, "\"z\"", 0);
-        s_remote_players[count].has_pos = parse_int_after(p, "\"hp\"", 0);
-        ch = parse_int_after(p, "\"ch\"", -1);
+        char saved = *end;
+        /* Temporarily delimit this object so absent legacy fields cannot
+         * accidentally read the next player's values. The bridge owns json. */
+        *end = 0;
+        s_remote_players[count].cid = parse_int_after(p, "cid", 0);
+        s_remote_players[count].room = parse_int_after(p, "room", -1);
+        s_remote_players[count].x = parse_int_after(p, "x", 0);
+        s_remote_players[count].y = parse_int_after(p, "y", 0);
+        s_remote_players[count].z = parse_int_after(p, "z", 0);
+        s_remote_players[count].has_pos = parse_int_after(p, "hp", 0);
+        ch = parse_int_after(p, "ch", -1);
         s_remote_players[count].ch = (ch >= 0 && ch < 4) ? ch : -1;
-        s_remote_players[count].vx = parse_int_after(p, "\"vx\"", 0);
-        s_remote_players[count].vy = parse_int_after(p, "\"vy\"", 0);
-        s_remote_players[count].vz = parse_int_after(p, "\"vz\"", 0);
-        s_remote_players[count].seq = parse_int_after(p, "\"s\"", 0);
+        s_remote_players[count].vx = parse_int_after(p, "vx", 0);
+        s_remote_players[count].vy = parse_int_after(p, "vy", 0);
+        s_remote_players[count].vz = parse_int_after(p, "vz", 0);
+        s_remote_players[count].seq = parse_int_after(p, "s", 0);
         s_remote_players[count].timestamp_ms =
-            parse_int_after(p, "\"t\"", 0);
-        s_remote_players[count].action = parse_int_after(p, "\"a\"", -1);
-        s_remote_players[count].anim_frame_100 = parse_int_after(p, "\"af\"", 0);
-        s_remote_players[count].anim_frame_count_100 = parse_int_after(p, "\"al\"", 0);
-        s_remote_players[count].anim_step_100 = parse_int_after(p, "\"as\"", 0);
-        s_remote_players[count].has_anim_step = parse_int_after(p, "\"ah\"", 0);
-        s_remote_players[count].rot_x = parse_int_after(p, "\"rx\"", 0);
-        s_remote_players[count].rot_y = parse_int_after(p, "\"ry\"", 0);
-        s_remote_players[count].rot_z = parse_int_after(p, "\"rz\"", 0);
-        s_remote_players[count].rot_vx = parse_int_after(p, "\"rvx\"", 0);
-        s_remote_players[count].rot_vy = parse_int_after(p, "\"rvy\"", 0);
-        s_remote_players[count].rot_vz = parse_int_after(p, "\"rvz\"", 0);
+            parse_int_after(p, "t", 0);
+        s_remote_players[count].action = parse_int_after(p, "a", -1);
+        s_remote_players[count].anim_frame_100 = parse_int_after(p, "af", 0);
+        s_remote_players[count].anim_frame_count_100 = parse_int_after(p, "al", 0);
+        s_remote_players[count].anim_step_100 = parse_int_after(p, "as", 0);
+        s_remote_players[count].has_anim_step = parse_int_after(p, "ah", 0);
+        s_remote_players[count].rot_x = parse_int_after(p, "rx", 0);
+        s_remote_players[count].rot_y = parse_int_after(p, "ry", 0);
+        s_remote_players[count].rot_z = parse_int_after(p, "rz", 0);
+        s_remote_players[count].rot_vx = parse_int_after(p, "rvx", 0);
+        s_remote_players[count].rot_vy = parse_int_after(p, "rvy", 0);
+        s_remote_players[count].rot_vz = parse_int_after(p, "rvz", 0);
         s_remote_players[count].appearance_flags =
-            parse_int_after(p, "\"ap\"", 0);
+            parse_int_after(p, "ap", 0);
         s_remote_players[count].collision_disabled =
-            parse_int_after(p, "\"cd\"", 0) != 0;
-        s_remote_players[count].drive_x = parse_int_after(p, "\"dx\"", 0);
-        s_remote_players[count].drive_z = parse_int_after(p, "\"dz\"", 0);
-        s_remote_players[count].player_epoch = parse_int_after(p, "\"pe\"", 0);
-        s_remote_players[count].interaction_session = parse_int_after(p, "\"ps\"", 0);
-        s_remote_players[count].same_team = parse_int_after(p, "\"tm\"", 1);
-        parse_string_after(p, "\"n\"", s_remote_players[count].name,
+            parse_int_after(p, "cd", 0) != 0;
+        s_remote_players[count].drive_x = parse_int_after(p, "dx", 0);
+        s_remote_players[count].drive_z = parse_int_after(p, "dz", 0);
+        s_remote_players[count].player_epoch = parse_int_after(p, "pe", 0);
+        s_remote_players[count].interaction_session = parse_int_after(p, "ps", 0);
+        s_remote_players[count].same_team = parse_int_after(p, "tm", 1);
+        mnsg_json_copy_display_string(p, "n", s_remote_players[count].name,
                            (int)sizeof(s_remote_players[count].name));
         if (!s_remote_players[count].name[0])
         {
@@ -343,9 +326,7 @@ static int parse_lobby_positions(const char *json)
         }
         if (s_remote_players[count].cid > 0)
             count++;
-        p = mnsg_string_find(p, "}");
-        if (p)
-            ++p;
+        *end = saved;
     }
     return count;
 }
@@ -355,15 +336,24 @@ static RemoteSmoothing *find_remote_smoothing(int cid, int create)
     int i;
     int free_index = -1;
 
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+    for (i = 0; i < s_smoothing_capacity; ++i)
     {
         if (s_remote_smoothing[i].active && s_remote_smoothing[i].cid == cid)
             return &s_remote_smoothing[i];
         if (!s_remote_smoothing[i].active && free_index < 0)
             free_index = i;
     }
-    if (!create || free_index < 0)
+    if (!create)
         return 0;
+    if (free_index < 0)
+    {
+        free_index = s_smoothing_capacity;
+        if (free_index == 0x7fffffff ||
+            !mnsg_array_reserve((void **)&s_remote_smoothing,
+                &s_smoothing_capacity, free_index + 1,
+                sizeof(*s_remote_smoothing)))
+            return 0;
+    }
     s_remote_smoothing[free_index].cid = cid;
     s_remote_smoothing[free_index].active = 1;
     s_remote_smoothing[free_index].seen = 0;
@@ -377,7 +367,7 @@ static void clear_remote_smoothing(void)
 {
     int i;
 
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+    for (i = 0; i < s_smoothing_capacity; ++i)
         s_remote_smoothing[i].active = 0;
 }
 
@@ -385,7 +375,7 @@ static void begin_remote_smoothing_frame(void)
 {
     int i;
 
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+    for (i = 0; i < s_smoothing_capacity; ++i)
         s_remote_smoothing[i].seen = 0;
 }
 
@@ -393,7 +383,7 @@ static void end_remote_smoothing_frame(void)
 {
     int i;
 
-    for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+    for (i = 0; i < s_smoothing_capacity; ++i)
     {
         if (s_remote_smoothing[i].active && !s_remote_smoothing[i].seen)
             s_remote_smoothing[i].active = 0;
@@ -452,6 +442,7 @@ static void smooth_remote_player(const RemotePlayer *remote, RemotePlayer *out)
     out->new_motion_sample = motion.consumed_sample;
 }
 
+#ifndef ANCHOR_ACTORS_HOST_TEST
 static void reset_last_sent_state(void)
 {
     s_state_send_timer = 0;
@@ -778,7 +769,12 @@ static void refresh_lobby(void)
     }
     s_lobby_refresh_timer = LOBBY_REFRESH_FRAMES;
     json = anchor_get_lobby_positions_json();
-    s_remote_count = parse_lobby_positions(json ? json : "[]");
+    if (json)
+    {
+        int count = parse_lobby_positions(json);
+        if (count >= 0)
+            s_remote_count = count;
+    }
     if (json)
         recomp_free(json);
 }
@@ -829,8 +825,9 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
          * handles without dereferencing or deleting that stale external task. */
         anchor_player_models_reset();
         clear_remote_smoothing();
-        for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+        for (i = 0; i < s_nameplate_count; ++i)
             anchor_nameplates_hide_slot(i);
+        s_nameplate_count = 0;
         anchor_nameplates_set_context_visible(0);
         return;
     }
@@ -841,8 +838,9 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
         /* An empty update hides and retires all remote objects. Their reusable
          * child tasks remain owned by the player task until engine teardown. */
         anchor_player_models_update(0, 0, owner_task);
-        for (i = 0; i < ANCHOR_REMOTE_MAX; ++i)
+        for (i = 0; i < s_nameplate_count; ++i)
             anchor_nameplates_hide_slot(i);
+        s_nameplate_count = 0;
         anchor_nameplates_set_context_visible(0);
         return;
     }
@@ -850,7 +848,7 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
     begin_remote_smoothing_frame();
 
     for (remote_index = 0;
-         remote_index < s_remote_count && slot_index < ANCHOR_REMOTE_MAX;
+         remote_index < s_remote_count;
          ++remote_index)
     {
         RemotePlayer *remote = &s_remote_players[remote_index];
@@ -869,8 +867,7 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
         if (remote->room != (int)D_800C7AB2)
             continue;
         if (remote->ch >= CHARACTER_GOEMON &&
-            remote->ch < CHARACTER_COUNT &&
-            model_count < ANCHOR_REMOTE_MAX)
+            remote->ch < CHARACTER_COUNT)
         {
             AnchorPlayerModelRemote *model = &s_remote_models[model_count++];
 
@@ -921,8 +918,9 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
      * objects. This call never runs playable constructors or behavior code. */
     anchor_player_models_update(s_remote_models, model_count,
                                 owner_task);
-    for (i = slot_index; i < ANCHOR_REMOTE_MAX; ++i)
+    for (i = slot_index; i < s_nameplate_count; ++i)
         anchor_nameplates_hide_slot(i);
+    s_nameplate_count = slot_index;
     anchor_nameplates_set_context_visible(visible_nameplates > 0);
 }
 
@@ -939,3 +937,5 @@ void anchor_actors_update_cutscene_models(void)
     refresh_lobby();
     update_remote_cutscene_models(local_obj);
 }
+
+#endif /* !ANCHOR_ACTORS_HOST_TEST */

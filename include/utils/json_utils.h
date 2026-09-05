@@ -11,6 +11,20 @@ typedef struct
     int finished;
 } MnsgJsonObjectWriter;
 
+/* Advance through an array of objects, skipping braces inside JSON strings.
+ * end points at the object's closing brace, which callers may temporarily
+ * replace with NUL to bound field lookup; restore it before freeing the JSON. */
+char *mnsg_json_next_object(char **cursor, char **end);
+
+/* Find a field's value, skipping quoted string contents; key is unquoted.
+ * To restrict lookup to one object, terminate it at the boundary above. */
+const char *mnsg_json_find_value(const char *json, const char *key);
+
+/* Copy a bounded display label, retaining the roster's legacy escape handling
+ * and truncation behavior. Always terminate out when out_size is nonzero. */
+void mnsg_json_copy_display_string(const char *json, const char *key,
+                                   char *out, unsigned int out_size);
+
 /** Return non-zero when the first matching string field equals expected. */
 int mnsg_json_string_equals(const char *json, const char *key,
                             const char *expected);

@@ -1,4 +1,5 @@
 #include "anchor.h"
+#include "anchor_remote_model_pool.h"
 #include "anchor_player_models.h"
 #include "anchor_projectile_models.h"
 #include "anchor_projectile_source.h"
@@ -20,7 +21,8 @@ static unsigned int s_tick;
 static int rdram(const void *pointer)
 {
     unsigned int physical = (unsigned int)(unsigned long)pointer & 0x1fffffffu;
-    return physical >= 0x1000u && physical < 0x800000u;
+    return (physical >= 0x1000u && physical < 0x800000u) ||
+           anchor_remote_model_pool_contains(pointer);
 }
 
 static int linked(const void *task)

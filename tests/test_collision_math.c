@@ -106,6 +106,39 @@ static void native_script_gate(void)
     assert(!anchor_remote_collision_is_scripted());
 }
 
+static int except_peer(const AnchorCollisionBody *peer, const void *excluded)
+{
+    return peer != excluded;
+}
+
+static void filtered_peers_preserve_separation_and_sweep_order(void)
+{
+    AnchorCollisionBody moving = body(-50, 0, 0, 5, 20);
+    AnchorCollisionBody peers[3] = {
+        {{-50, 0, 0}, 60, 20}, /* Excluded from separation and the sweep. */
+        {{20, 0, 0}, 5, 20}, {{0, 0, 0}, 5, 20}
+    };
+    AnchorCollisionVec3 target = {50, 0, 0};
+    AnchorCollisionVec3 filtered;
+    AnchorCollisionVec3 compact;
+    anchor_collision_move_peers(&moving, &target, peers + 1, 2, &compact);
+    anchor_collision_move_peers_filtered(&moving, &target, peers, 3,
+                                         except_peer, peers, &filtered);
+    assert(filtered.x == compact.x && filtered.y == compact.y &&
+           filtered.z == compact.z);
+    assert(near(filtered.x, -10.02f));
+
+    /* The retained peer must still separate an overlapping origin. */
+    peers[1] = moving;
+    target = moving.position;
+    anchor_collision_move_peers(&moving, &target, peers + 1, 2, &compact);
+    anchor_collision_move_peers_filtered(&moving, &target, peers, 3,
+                                         except_peer, peers, &filtered);
+    assert(filtered.x == compact.x && filtered.y == compact.y &&
+           filtered.z == compact.z);
+    assert(near(filtered.x, -39.98f));
+}
+
 int main(void)
 {
     fast_crossing_and_retreat();
@@ -113,6 +146,7 @@ int main(void)
     vertical_crossing();
     coincident_spawn_and_mini();
     nearest_peer_and_empty_list();
+    filtered_peers_preserve_separation_and_sweep_order();
     native_script_gate();
     puts("collision math and scripted gate tests passed");
     return 0;

@@ -145,6 +145,37 @@ class CollisionTransportTests(unittest.TestCase):
         }])
         self.assertNotIn("collisionDisabled", anchor_mnsg._player_states[2])
 
+    def test_large_lobby_retains_all_rooms_and_hot_combat_appearance_fields(self) -> None:
+        members = []
+        for cid in range(2, 202):
+            room = 99 if cid < 100 else 10
+            members.append({
+                "clientId": cid,
+                "clientState": {
+                    "name": f'Player {cid} }} "cid":999',
+                    "currentRoomId": room,
+                    "character": "Sasuke",
+                    "online": True,
+                },
+            })
+            self.assertTrue(anchor_mnsg._merge_client_state(cid, {
+                "currentRoomId": room, "posX": cid, "posY": 2, "posZ": 3,
+                "posSeq": 1, "posT": 1234, "appearanceFlags": 7,
+                "collisionDisabled": 1, "driveX": -3000, "driveZ": 4000,
+                "playerEpoch": 9, "interactionSession": 17,
+                "action": 11, "animFrame100": 120,
+            }, enforce_movement_order=True))
+        anchor_mnsg._replace_all_client_states(members)
+        lobby = json.loads(anchor_mnsg.get_lobby_positions_json())
+        self.assertEqual(len(lobby), 200)
+        self.assertEqual([p["cid"] for p in lobby], list(range(2, 202)))
+        self.assertEqual(lobby[-1]["room"], 10)
+        for player in lobby:
+            self.assertEqual((player["ap"], player["cd"], player["dx"], player["dz"]),
+                             (7, 1, -3000, 4000))
+            self.assertEqual((player["pe"], player["ps"], player["a"], player["af"]),
+                             (9, 17, 11, 120))
+
     def test_gate_survives_an_atomic_room_change_and_normalizes_to_boolean(self) -> None:
         self.assertTrue(self.receive_sample(10, 0))
         self.assertTrue(self.receive_sample(11, 7, room=11))
