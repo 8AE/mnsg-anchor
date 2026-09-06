@@ -1,7 +1,8 @@
-"""Congo invitation transport and lifecycle tests; no game or server required."""
+"""Boss arena invitation transport/lifecycle tests; no game or server required."""
 
 import importlib.util
 import json
+import re
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -134,7 +135,7 @@ class BossInvitationTransportTests(unittest.TestCase):
         self.assertEqual([(p["seq"], p["entered"]) for p in packets], [(2, False), (3, True)])
 
     def test_sender_rejects_unsupported_arena_unloaded_save_and_missing_identity(self):
-        for arena in (-1, 2, True, "1", None):
+        for arena in (-1, 5, 0x155, True, "1", None):
             with self.subTest(arena=arena):
                 self.assertFalse(self.client.set_boss_arena(arena))
         for field, value in (("_local_save_loaded", False), ("_connected", False),
@@ -159,7 +160,8 @@ class BossInvitationTransportTests(unittest.TestCase):
 
     def test_receiver_rejects_self_other_teams_and_malformed_packets(self):
         invalid = [{"type": "SET_FLAG"}, {"clientId": 1}, {"targetTeamId": "red"},
-                   {"arena": 2}, {"arena": True}, {"entered": 1}, {"entered": "true"}]
+                   {"arena": 0}, {"arena": 5}, {"arena": 0x155}, {"arena": True},
+                   {"entered": 1}, {"entered": "true"}]
         for field in ("clientId", "session", "seq"):
             invalid.extend({field: value} for value in (0, -1, 0x80000000, True, "2", None))
         for changes in invalid:
@@ -429,6 +431,187 @@ class BossInvitationTransportTests(unittest.TestCase):
         self.assertEqual(next_invitation["cid"], 3)
         self.assertEqual(next_invitation["name"], ('A "name"\n' + "é" * 100)[:64])
         self.assertTrue(self.current(cid=3, session=303))
+
+    def test_every_arena_round_trips_real_entry_and_exit_packets(self):
+        for arena, room in self.client.BOSS_ARENA_ROOMS.items():
+            with self.subTest(arena=arena, room=room):
+                self.client._reset_boss_invitations()
+                self.client._merge_client_state(2, {"currentRoomId": room})
+                sender = load_client(2, 202, room=room)
+                self.addCleanup(sender.disconnect)
+                self.assertTrue(sender.set_boss_arena(arena, 8))
+                self.assertTrue(sender.set_boss_arena(arena, 8))
+                self.assertEqual(len(sender._sock.sent), 1)
+                raw = sender._sock.sent[0]
+                self.assertEqual(json.loads(raw[:-1]), self.packet(arena=arena))
+                self.assertLess(len(raw), 160)
+                self.route_bytes(raw[:9], raw[9:])
+                self.assertEqual(self.invitation()["arena"], arena)
+                self.assertTrue(self.current())
+
+                self.assertTrue(sender.set_boss_arena(0))
+                self.assertEqual(json.loads(sender._sock.sent[-1][:-1]),
+                                 self.packet(arena=arena, entered=False, seq=2))
+                self.route_bytes(sender._sock.sent[-1])
+                self.assertIsNone(self.invitation())
+                self.assertFalse(self.current())
+                self.assertFalse(self.receive(arena=arena, seq=1))
+                sender.disconnect()
+
+    def test_python_destination_map_matches_explicit_native_catalog_constants(self):
+        header = (MODULE_PATH.parents[1] / "include" / "anchor_boss_arenas.h").read_text()
+        constants = {name: int(value.rstrip("uU"), 0) for name, value in re.findall(
+            r"^#define\s+(ANCHOR_BOSS_(?:ARENA|ROOM)_[A-Z_]+)\s+(0x[0-9a-fA-F]+[uU]?|[0-9]+)\s*$",
+            header, re.MULTILINE)}
+        names = {name.removeprefix("ANCHOR_BOSS_ARENA_") for name in constants
+                 if name.startswith("ANCHOR_BOSS_ARENA_")}
+        self.assertEqual(names, {"CONGO", "DHARUMANYO", "TSURAMI", "CONTROL_MACHINE"})
+        native_map = {constants[f"ANCHOR_BOSS_ARENA_{name}"]:
+                      constants[f"ANCHOR_BOSS_ROOM_{name}"] for name in names}
+        self.assertEqual(self.client.BOSS_ARENA_ROOMS, native_map)
+        self.assertEqual(native_map, {1: 22, 2: 73, 3: 113, 4: 341})
+
+    def test_only_matching_destination_suppresses_a_recipient(self):
+        for local_arena in (0, *self.client.BOSS_ARENA_ROOMS):
+            for arena, room in self.client.BOSS_ARENA_ROOMS.items():
+                with self.subTest(local=local_arena, destination=arena):
+                    self.client._reset_boss_invitations()
+                    self.assertTrue(self.client.set_boss_arena(local_arena))
+                    self.client._merge_client_state(2, {"currentRoomId": room})
+                    self.assertTrue(self.receive(arena=arena))
+                    invitation = self.invitation()
+                    if local_arena == arena:
+                        self.assertIsNone(invitation)
+                        self.assertTrue(self.client.set_boss_arena(0))
+                        self.assertIsNone(self.invitation())
+                    else:
+                        self.assertEqual(invitation["arena"], arena)
+
+    def test_each_arena_requires_its_own_source_room_and_keeps_metadata_grace(self):
+        for arena, room in self.client.BOSS_ARENA_ROOMS.items():
+            wrong_rooms = [10, *(other for other in self.client.BOSS_ARENA_ROOMS.values()
+                                 if other != room)]
+            for wrong_room in wrong_rooms:
+                with self.subTest(arena=arena, wrong_room=wrong_room):
+                    self.client._reset_boss_invitations()
+                    self.client._merge_client_state(2, {"currentRoomId": wrong_room})
+                    self.assertTrue(self.receive(arena=arena))
+                    self.assertIsNone(self.invitation())
+                    self.assertFalse(self.current())
+                    # A new entry can legitimately precede its room metadata.
+                    self.client._merge_client_state(2, {"currentRoomId": room})
+                    self.assertEqual(self.invitation()["arena"], arena)
+                    self.assertTrue(self.current())
+
+    def test_arena_transition_replaces_old_invitation_before_new_room_metadata(self):
+        arenas = list(self.client.BOSS_ARENA_ROOMS.items())
+        for old_arena, old_room in arenas:
+            for new_arena, new_room in arenas:
+                if old_arena == new_arena:
+                    continue
+                with self.subTest(old=old_arena, new=new_arena):
+                    self.client._reset_boss_invitations()
+                    self.client._merge_client_state(2, {"currentRoomId": old_room})
+                    sender = load_client(2, 202, room=old_room)
+                    self.addCleanup(sender.disconnect)
+                    self.assertTrue(sender.set_boss_arena(old_arena, 1))
+                    self.route_bytes(sender._sock.sent[-1])
+                    self.assertTrue(self.current())
+                    self.assertTrue(sender.set_boss_arena(new_arena, 2))
+                    self.assertEqual(json.loads(sender._sock.sent[-1][:-1]),
+                                     self.packet(arena=new_arena, seq=2))
+                    self.route_bytes(sender._sock.sent[-1])
+                    self.assertFalse(self.current())
+                    self.assertIsNone(self.invitation())
+                    self.client._merge_client_state(2, {"currentRoomId": new_room})
+                    self.assertEqual(self.invitation()["arena"], new_arena)
+                    self.assertTrue(self.current(sequence=2))
+                    self.client.dismiss_boss_invitation(2, 202, 1)
+                    self.assertFalse(self.receive(arena=old_arena, seq=1,
+                                                  entered=False))
+                    self.assertTrue(self.current(sequence=2))
+                    self.assertTrue(sender.set_boss_arena(0))
+                    self.assertEqual(json.loads(sender._sock.sent[-1][:-1]),
+                                     self.packet(arena=new_arena, seq=3, entered=False))
+                    self.route_bytes(sender._sock.sent[-1])
+                    self.assertIsNone(self.invitation())
+                    sender.disconnect()
+
+    def test_failed_arena_transition_preserves_actual_exit_arena_and_sequence(self):
+        arenas = list(self.client.BOSS_ARENA_ROOMS)
+        for old_arena in arenas:
+            for new_arena in arenas:
+                if old_arena == new_arena:
+                    continue
+                with self.subTest(old=old_arena, new=new_arena):
+                    self.client._reset_boss_invitations()
+                    self.sock.sent.clear()
+                    self.assertTrue(self.client.set_boss_arena(old_arena))
+                    with mock.patch.object(self.client, "_send_raw", return_value=False):
+                        self.assertFalse(self.client.set_boss_arena(new_arena))
+                    self.assertEqual(self.client._arena_local_state[1], old_arena)
+                    self.assertTrue(self.client.set_boss_arena(0))
+                    packet = json.loads(self.sock.sent[-1][:-1])
+                    self.assertEqual((packet["arena"], packet["seq"], packet["entered"]),
+                                     (old_arena, 2, False))
+
+    def test_confirmed_visit_cannot_revive_after_inter_arena_metadata_round_trip(self):
+        for arena, room in self.client.BOSS_ARENA_ROOMS.items():
+            for snapshot in (False, True):
+                with self.subTest(arena=arena, snapshot=snapshot):
+                    self.client._reset_boss_invitations()
+                    self.client._merge_client_state(2, {"currentRoomId": room})
+                    self.assertTrue(self.receive(arena=arena))
+                    self.assertTrue(self.current())
+                    other_room = next(r for r in self.client.BOSS_ARENA_ROOMS.values()
+                                      if r != room)
+                    for destination in (other_room, room):
+                        state = {"clientId": 2, "currentRoomId": destination,
+                                 "teamId": "blue", "isSaveLoaded": True,
+                                 "online": True, "interactionSession": 202}
+                        if snapshot:
+                            self.route_packets({"type": "ALL_CLIENT_STATE", "state": [state]})
+                        else:
+                            self.route_packets({"type": "UPDATE_CLIENT_STATE", "state": state})
+                    self.assertFalse(self.current())
+                    self.assertIsNone(self.invitation())
+                    self.assertFalse(self.receive(arena=arena))
+                    self.assertTrue(self.receive(arena=arena, seq=2))
+                    self.assertTrue(self.current(sequence=2))
+
+    def test_old_observed_session_entry_cannot_replace_new_arena_invitation(self):
+        self.assertTrue(self.receive())
+        self.assertTrue(self.current())
+        next_arena = next(a for a in self.client.BOSS_ARENA_ROOMS
+                          if a != self.client.CONGO_ARENA)
+        self.assertTrue(self.receive(arena=next_arena, session=303))
+        self.assertFalse(self.current())
+        # New session and room metadata may both follow the event. Until then
+        # the old hot-movement session has not been retired by its subsystem.
+        self.assertNotIn(202, self.client._retired_interaction_sessions.get(2, ()))
+        self.assertFalse(self.receive(seq=99))
+        self.assertFalse(self.receive(seq=100, entered=False))
+        self.client._merge_client_state(2, {
+            "currentRoomId": self.client.BOSS_ARENA_ROOMS[next_arena],
+            "interactionSession": 303,
+        })
+        self.assertEqual(self.invitation()["arena"], next_arena)
+        self.assertTrue(self.current(session=303))
+        self.client.disconnect()
+        self.assertEqual(self.client._arena_retired_sessions, {})
+        self.assertEqual(self.client._arena_confirmed_sessions, {})
+
+    def test_expired_unconfirmed_session_does_not_retire_valid_sender_stream(self):
+        self.assertTrue(self.receive())
+        self.assertTrue(self.current())
+        self.assertTrue(self.receive(arena=2, session=303))
+        self.assertFalse(self.receive(seq=2))
+        self.assertIsNone(self.invitation())
+        self.clock.return_value += self.client.ARENA_METADATA_WAIT_MS / 1000 + 0.001
+        self.assertIsNone(self.invitation())
+        self.assertNotIn(202, self.client._arena_retired_sessions.get(2, ()))
+        self.assertTrue(self.receive(seq=3))
+        self.assertTrue(self.current(sequence=3))
 
 
 if __name__ == "__main__":

@@ -146,6 +146,8 @@ _arena_local_state: "tuple[str, int, int]" = ("", 0, 0)
 _arena_sequence: int = 0
 _arena_events: dict = {}
 _arena_seen: dict = {}
+_arena_retired_sessions: "dict[int, set[int]]" = {}
+_arena_confirmed_sessions: "dict[int, int]" = {}
 
 ###############################################################################
 # Constants
@@ -163,6 +165,12 @@ PROJECTILE_QUEUE_COUNT: int = 64
 PROJECTILE_MAX_JSON_BYTES: int = 512
 CONGO_ARENA: int = 1
 CONGO_ROOM: int = 0x16
+BOSS_ARENA_ROOMS: "dict[int, int]" = {
+    CONGO_ARENA: CONGO_ROOM,
+    2: 0x49,  # Dharumanyo
+    3: 0x71,  # Tsurami
+    4: 0x155,  # Control Machine (Koryuta dragon flight)
+}
 ARENA_METADATA_WAIT_MS: int = 5000
 ANIMATION_RESTART_DELTA_100: int = 50
 APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
@@ -364,6 +372,11 @@ def _merge_client_state(
         state["appearanceFlags"] = _appearance_flags_from_payload(
             payload, int(state.get("appearanceFlags", 0))
         )
+
+    # A confirmed visit ends at the metadata edge, even if the sender returns
+    # before the game's next invitation poll. Unconfirmed entries retain their
+    # grace period because room/session metadata may follow the arena event.
+    _invalidate_confirmed_boss_invitation(cid)
     _prune_projectile_spawns(int(time.monotonic() * 1000))
     return True
 
@@ -435,6 +448,8 @@ def _replace_all_client_states(states: list) -> None:
                 _retire_interaction_session(cid, int(order.get("interactionSession", 0)))
         _player_states.clear()
         _player_states.update(new_players)
+        for cid in list(_arena_events):
+            _invalidate_confirmed_boss_invitation(cid)
         _prune_projectile_spawns(int(time.monotonic() * 1000))
 
 ###############################################################################
@@ -1359,17 +1374,28 @@ def _reset_boss_invitations() -> None:
     _arena_sequence = 0
     _arena_events.clear()
     _arena_seen.clear()
+    _arena_retired_sessions.clear()
+    _arena_confirmed_sessions.clear()
+
+
+def _invalidate_confirmed_boss_invitation(cid: int) -> None:
+    """Called under the roster lock after metadata is merged/replaced."""
+    event = _arena_events.get(cid)
+    if (event and event["confirmed"] and
+            not _boss_invitation_is_current(event, int(time.monotonic() * 1000))):
+        _arena_events.pop(cid, None)
 
 
 def set_boss_arena(arena: int, visit: int = 0) -> bool:
     """Publish entry/exit edges supplied by the native loaded-room observer.
 
-    Congo is the sole supported arena in this draft. Metadata refreshes and
-    movement packets cannot generate an edge. Failed sends retain the old
-    state, so the next frame retries the same sequence number.
+    Metadata refreshes and movement packets cannot generate an edge. Each
+    entry supersedes that sender's previous arena; exits name the last arena
+    published successfully. Failed sends retain the old state, so the next
+    frame retries the same sequence number.
     """
     global _arena_local_state, _arena_sequence
-    if (type(arena) is not int or arena not in (0, CONGO_ARENA) or
+    if (type(arena) is not int or (arena != 0 and arena not in BOSS_ARENA_ROOMS) or
             type(visit) is not int or not 0 <= visit <= _POSITION_SEQUENCE_MASK or
             not _connected or _client_id <= 0 or _interaction_session <= 0):
         return False
@@ -1385,7 +1411,7 @@ def set_boss_arena(arena: int, visit: int = 0) -> bool:
     if sequence > _POSITION_SEQUENCE_MASK:
         return False
     packet = {"type": "MNSG_BOSS_ARENA", "clientId": _client_id,
-              "targetTeamId": _team_id, "arena": CONGO_ARENA,
+              "targetTeamId": _team_id, "arena": arena or _arena_local_state[1],
               "entered": arena != 0, "session": _interaction_session,
               "seq": sequence}
     if not _send_raw(packet):
@@ -1404,7 +1430,7 @@ def _receive_boss_arena(packet: dict) -> bool:
             not _connected or _client_id <= 0 or not _local_save_loaded or
             packet.get("targetTeamId") != _team_id or
             type(packet.get("arena")) is not int or
-            packet["arena"] != CONGO_ARENA or
+            packet["arena"] not in BOSS_ARENA_ROOMS or
             type(packet.get("entered")) is not bool):
         return False
     for key in ("clientId", "session", "seq"):
@@ -1421,11 +1447,21 @@ def _receive_boss_arena(packet: dict) -> bool:
         if peer and (not peer.get("online", False) or
                      (peer.get("teamId") and peer["teamId"] != _team_id)):
             return False
-        if session in _retired_interaction_sessions.get(cid, ()):
+        if (session in _retired_interaction_sessions.get(cid, ()) or
+                session in _arena_retired_sessions.get(cid, ())):
             return False
         key = (cid, session)
         if sequence <= _arena_seen.get(key, 0):
             return False
+        event = _arena_events.get(cid)
+        if event and event["session"] != session and key in _arena_seen:
+            # A previously observed stream cannot displace its replacement
+            # while the latter awaits metadata. If that candidate expires,
+            # a fresh event from the still-current source can be accepted.
+            if (event["confirmed"] or int(time.monotonic() * 1000) -
+                    event["received"] <= ARENA_METADATA_WAIT_MS):
+                return False
+            _arena_events.pop(cid, None)
         _arena_seen[key] = sequence
         if not packet["entered"]:
             event = _arena_events.get(cid)
@@ -1434,7 +1470,7 @@ def _receive_boss_arena(packet: dict) -> bool:
             return True
         _arena_events[cid] = {
             "cid": cid, "session": session, "seq": sequence,
-            "arena": CONGO_ARENA, "team": _team_id,
+            "arena": packet["arena"], "team": _team_id,
             "entered": packet["entered"], "consumed": False,
             "confirmed": False, "received": int(time.monotonic() * 1000),
         }
@@ -1448,17 +1484,24 @@ def _boss_invitation_is_current(event: dict, now: int) -> bool:
     """
     if (not _connected or not _local_save_loaded or event["team"] != _team_id or
             not event["entered"] or event["consumed"] or
-            _arena_local_state[:2] == (_team_id, CONGO_ARENA)):
+            _arena_local_state[:2] == (_team_id, event["arena"])):
         event["consumed"] = True
         return False
     cid, session = event["cid"], event["session"]
     peer = _player_states.get(cid, {})
     known_session = peer.get("interactionSession") or _player_movement_order.get(cid, {}).get("interactionSession", 0)
     eligible = (peer.get("online", False) and peer.get("isSaveLoaded", False) and
-                peer.get("teamId") == _team_id and peer.get("roomId") == CONGO_ROOM and
+                peer.get("teamId") == _team_id and
+                peer.get("roomId") == BOSS_ARENA_ROOMS[event["arena"]] and
                 known_session == session and
                 session not in _retired_interaction_sessions.get(cid, ()))
     if eligible:
+        previous_session = _arena_confirmed_sessions.get(cid, 0)
+        if previous_session and previous_session != session:
+            # Retire only a metadata-confirmed predecessor. A stray candidate
+            # whose metadata never arrives cannot poison the valid stream.
+            _arena_retired_sessions.setdefault(cid, set()).add(previous_session)
+        _arena_confirmed_sessions[cid] = session
         event["confirmed"] = True
         return True
     if event["confirmed"] or now - event["received"] > ARENA_METADATA_WAIT_MS:

@@ -14,12 +14,25 @@ static unsigned char s_task[0xf0], s_object[0x98], s_work[0x80];
 static void *s_backlink;
 unsigned char *D_8015C5C8_15D1C8 = s_system.bytes;
 unsigned short D_800C7AB2;
-short D_8006B780_6C380[(ANCHOR_BOSS_ROOM_CONGO + 1) * 5];
+short D_8006B780_6C380[0x200 * 5];
 void *D_801FC604_5B8514;
 void *D_801FC60C_5B851C;
 static int s_saved, s_health, s_destination_calls, s_step_calls;
 static short s_destination[7];
 static int s_last_field91;
+
+/* Independently read from the USA native room/default-start tables. */
+static const struct {
+    int arena;
+    unsigned short room;
+    const char *name;
+    short start[5];
+} arenas[] = {
+    {1, 0x0016, "Congo's Arena", {60, -70, 171, 512, 16}},
+    {2, 0x0049, "Dharumanyo's Arena", {145, -70, -99, 768, 16}},
+    {3, 0x0071, "Tsurami's Arena", {0, -71, 318, 512, 16}},
+    {4, 0x0155, "Control Machine's Arena", {27, 239, 131, 0, 16}}
+};
 
 void anchor_boss_invite_world_begin_load(void);
 void anchor_boss_invite_world_finish_load(void);
@@ -59,7 +72,6 @@ static void pointer_at(void *base, unsigned int offset, void *value)
 
 static void ready(unsigned short room)
 {
-    static const short congo_start[5] = {60, -70, 171, 512, 16};
     memset(&s_system, 0, sizeof(s_system));
     memset(s_task, 0, sizeof(s_task));
     memset(s_work, 0, sizeof(s_work));
@@ -73,8 +85,9 @@ static void ready(unsigned short room)
     pointer_at(s_task, 4, &s_backlink);
     pointer_at(s_task, 0x18, s_object);
     pointer_at(s_task, 0x5c, s_work);
-    memcpy(&D_8006B780_6C380[ANCHOR_BOSS_ROOM_CONGO * 5], congo_start,
-           sizeof(congo_start));
+    for (unsigned int i = 0; i < sizeof(arenas) / sizeof(arenas[0]); ++i)
+        memcpy(&D_8006B780_6C380[arenas[i].room * 5], arenas[i].start,
+               sizeof(arenas[i].start));
     s_saved = 1;
     s_health = 5;
     s_destination_calls = s_step_calls = 0;
@@ -88,7 +101,8 @@ static void check_gate(unsigned int offset, unsigned char value)
     ready(0x130);
     s_system.bytes[offset] = value;
     assert(!anchor_boss_invite_world_can_prompt());
-    assert(!anchor_boss_invite_world_warp());
+    for (int arena = 1; arena <= 4; ++arena)
+        assert(!anchor_boss_invite_world_warp(arena));
     assert(s_destination_calls == 0 && s_step_calls == 0);
 }
 
@@ -111,7 +125,7 @@ int main(void)
     assert(anchor_boss_invite_world_visit() == visit);
     ready(0x16);
     assert(anchor_boss_invite_world_visit() != visit);
-    assert(!anchor_boss_invite_world_warp());
+    assert(!anchor_boss_invite_world_warp(ANCHOR_BOSS_ARENA_CONGO));
     assert(s_destination_calls == 0);
     ready(0x1a);
     assert(anchor_boss_invite_world_arena() == 0); /* Congo approach. */
@@ -149,19 +163,45 @@ int main(void)
     ready(0x130); D_8015C5C8_15D1C8 = 0;
     assert(!anchor_boss_invite_world_can_prompt());
 
-    ready(0x130);
-    assert(anchor_boss_invite_world_can_prompt());
-    assert(anchor_boss_invite_world_warp());
-    assert(s_destination_calls == 1 && s_step_calls == 1);
-    assert(D_800C7AB2 == 0x130); /* The native loader owns current-room writes. */
-    assert(s_destination[0] == 0x16);
-    assert(s_destination[1] == 60 && s_destination[2] == -70);
-    assert(s_destination[3] == 171 && s_destination[4] == 512);
-    assert(s_destination[5] == 16 && s_destination[6] == 0);
-    assert(s_last_field91 == 0);
-    assert(!anchor_boss_invite_world_can_prompt());
-    assert(!anchor_boss_invite_world_warp());
-    assert(s_destination_calls == 1 && s_step_calls == 1);
+    for (unsigned int i = 0; i < sizeof(arenas) / sizeof(arenas[0]); ++i) {
+        int arena = arenas[i].arena;
+        assert(anchor_boss_arena_room(arena) == arenas[i].room);
+        assert(strcmp(anchor_boss_arena_name(arena), arenas[i].name) == 0);
+        ready(arenas[i].room);
+        assert(anchor_boss_invite_world_arena() == arena);
+        assert(!anchor_boss_invite_world_warp(arena));
+        assert(!s_destination_calls);
+        visit = anchor_boss_invite_world_visit();
+        s_system.bytes[0x3ae20] = 3;
+        assert(anchor_boss_invite_world_arena() == arena);
+        assert(!anchor_boss_invite_world_can_prompt());
+        ready(arenas[i].room);
+        assert(anchor_boss_invite_world_visit() != visit);
+
+        /* Accepting from another boss room uses the chosen destination. */
+        unsigned short source = arenas[(i + 1) % 4].room;
+        ready(source);
+        assert(anchor_boss_invite_world_can_prompt());
+        assert(anchor_boss_invite_world_warp(arena));
+        assert(s_destination_calls == 1 && s_step_calls == 1);
+        assert(D_800C7AB2 == source); /* Native loader owns current-room writes. */
+        assert(s_destination[0] == arenas[i].room);
+        assert(memcmp(&s_destination[1], arenas[i].start, sizeof(arenas[i].start)) == 0);
+        assert(s_destination[6] == 0 && s_last_field91 == 0);
+        assert(!anchor_boss_invite_world_can_prompt());
+        assert(!anchor_boss_invite_world_warp(arena));
+        assert(s_destination_calls == 1 && s_step_calls == 1);
+    }
+
+    ready(0x009d); /* Gourmet Submarine is not the dragon/Control Machine room. */
+    assert(anchor_boss_invite_world_arena() == 0);
+    const int invalid_arenas[] = {-1, 0, 5, 0x155, 0x7fffffff};
+    for (unsigned int i = 0; i < sizeof(invalid_arenas) / sizeof(invalid_arenas[0]); ++i) {
+        assert(anchor_boss_arena_room(invalid_arenas[i]) == -1);
+        assert(!anchor_boss_arena_name(invalid_arenas[i]));
+        assert(!anchor_boss_invite_world_warp(invalid_arenas[i]));
+    }
+    assert(!s_destination_calls && !s_step_calls);
 
     puts("boss invitation world: entry, intro, lifecycle gates and native warp passed");
     return 0;

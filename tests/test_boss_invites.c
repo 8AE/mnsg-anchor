@@ -9,7 +9,7 @@
 static int connected = 1, disabled, loaded = 1, current_arena, prompt_safe = 1;
 static int current_visit = 4, published_arena = -1, published_visit = -1;
 static int current = 1, dialog_available = 1, modal, starts, cancels, dismissals;
-static int warps, warp_ready = 1, peeks, frees;
+static int warps, warp_ready = 1, peeks, frees, destination_arena;
 static const char *packet;
 static char shown_name[257], shown_arena[64];
 static AnchorDialogResult choice = ANCHOR_DIALOG_PENDING;
@@ -27,13 +27,14 @@ int anchor_update_boss_arena(int arena, int visit)
 int anchor_boss_invite_world_arena(void) { return current_arena; }
 unsigned int anchor_boss_invite_world_visit(void) { return (unsigned)current_visit; }
 int anchor_boss_invite_world_can_prompt(void) { return prompt_safe; }
-int anchor_boss_invite_world_warp(void)
+int anchor_boss_invite_world_warp(int arena)
 {
     assert(!modal); /* no transition while native text owns input */
     if (!warp_ready || !prompt_safe)
         return 0;
     ++warps;
-    current_arena = 1;
+    destination_arena = arena;
+    current_arena = arena;
     return 1;
 }
 char *anchor_get_boss_invitation_json(void)
@@ -157,17 +158,59 @@ int main(void)
     assert(!modal && warps == 1 && dismissals == 6);
     loaded = 1;
 
-    /* Native cancellation also dismisses; malformed and other-boss packets
+    /* Native cancellation also dismisses; malformed and unknown-arena packets
      * cannot open UI or reach the native warp adapter. */
     begin();
     choice = ANCHOR_DIALOG_CANCELLED;
     anchor_boss_invites_update();
     int before = starts;
-    packet = "{\"cid\":2,\"session\":123,\"seq\":7,\"arena\":2,\"name\":\"Other\"}";
+    packet = "{\"cid\":2,\"session\":123,\"seq\":7,\"arena\":99,\"name\":\"Other\"}";
     anchor_boss_invites_update();
     packet = "{\"cid\":2,\"session\":123,\"seq\":7}";
     anchor_boss_invites_update();
     assert(starts == before && warps == 1 && !modal);
+
+    /* Destination identity survives asynchronous close and warp retries.
+     * A player in one boss room can join a different boss's invitation. */
+    static const char *arena_names[] = {
+        "Congo's Arena", "Dharumanyo's Arena", "Tsurami's Arena",
+        "Control Machine's Arena"
+    };
+    char arena_packet[160];
+    for (int arena = 1; arena <= 4; ++arena) {
+        snprintf(arena_packet, sizeof(arena_packet),
+            "{\"cid\":2,\"session\":123,\"seq\":7,\"arena\":%d,\"name\":\"Ahmad\"}", arena);
+        current_arena = arena == 1 ? 2 : 1;
+        current = 1;
+        packet = arena_packet;
+        choice = ANCHOR_DIALOG_PENDING;
+        int prior_starts = starts, prior_warps = warps;
+        anchor_boss_invites_update();
+        assert(modal && starts == prior_starts + 1);
+        assert(strcmp(shown_arena, arena_names[arena - 1]) == 0);
+        choice = ANCHOR_DIALOG_NO;
+        anchor_boss_invites_update();
+        assert(!modal && warps == prior_warps && !packet);
+
+        packet = arena_packet;
+        choice = ANCHOR_DIALOG_PENDING;
+        anchor_boss_invites_update();
+        assert(modal);
+        choice = ANCHOR_DIALOG_YES;
+        warp_ready = 0;
+        anchor_boss_invites_update();
+        assert(!modal && warps == prior_warps);
+        /* Peeking a new queue head must not redirect the accepted request. */
+        packet = invite;
+        anchor_boss_invites_update();
+        assert(warps == prior_warps);
+        warp_ready = 1;
+        anchor_boss_invites_update();
+        assert(warps == prior_warps + 1 && destination_arena == arena);
+        assert(!packet);
+        anchor_boss_invites_update();
+        assert(warps == prior_warps + 1);
+    }
     puts("boss invitation coordinator: deferred UI, Yes/No, cancellation and native warp ordering passed");
     return 0;
 }

@@ -116,8 +116,11 @@ static void build_prompt(const char *name, const char *arena)
     *out++ = TEXT_WHITE;
     append_name(&out, name, 24);
     *out++ = TEXT_NEWLINE;
-    append_ascii(&out, "has entered ");
-    append_name(&out, arena, 16);
+    /* Keep the catalog's complete arena labels on this line. The longest,
+     * "entered Control Machine's Arena.", advances 220 pixels in the US
+     * font; style 8 has a 10-pixel inset inside its 256-pixel window. */
+    append_ascii(&out, "entered ");
+    append_name(&out, arena, 24);
     append_ascii(&out, ".");
     *out++ = TEXT_NEWLINE;
     append_ascii(&out, "Would you like to join them?");

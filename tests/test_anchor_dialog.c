@@ -25,8 +25,25 @@ static int fail_alloc, silent_flag, frees, reset_calls, choice, closing;
 static unsigned int visible_glyphs;
 static char rendered[256];
 static unsigned int rendered_length;
+static unsigned int rendered_line, rendered_line_width;
 static int native_scenario_ticks, world_updates, interface_updates;
 static int frame_button, frame_selection;
+
+/* US resident width table at 8005BB10 (ROM 5C710), printable ASCII 20..7E.
+ * Native D060 advances by width + 1. C6A8 sets the text inset to (10, 7)
+ * and line spacing to 16 pixels; style 8 supplies a 256 by 72 window. */
+static const unsigned char native_glyph_widths[95] = {
+    8, 2, 6, 7, 2, 7, 2, 3, 6, 5, 6, 6, 3, 6, 2, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 4, 2, 6, 6, 8, 6,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 6, 2, 5, 7, 2,
+    2, 6, 6, 6, 6, 6, 5, 6, 6, 4, 5, 6, 4, 8, 6, 6,
+    6, 6, 6, 6, 5, 6, 6, 8, 6, 6, 6, 2, 2, 2, 2
+};
+static const char *const arena_labels[] = {
+    "Congo's Arena", "Dharumanyo's Arena", "Tsurami's Arena",
+    "Control Machine's Arena"
+};
 
 int func_800240DC_24CDC(unsigned short flag)
 {
@@ -76,8 +93,13 @@ static void render_text(const unsigned short *text)
             closing = 2;
         } else if (c == 0xffc4) {
             rendered[rendered_length++] = '\n';
+            rendered_line_width = 0;
+            ++rendered_line;
+            assert(rendered_line < 4);
         } else if (c < 0x8000) {
             assert(c < 95);
+            rendered_line_width += native_glyph_widths[c] + 1u;
+            assert(rendered_line_width <= 236); /* Keep both 10-pixel insets. */
             rendered[rendered_length++] = (char)(c + 32);
             ++visible_glyphs;
             assert(visible_glyphs <= 120);
@@ -204,6 +226,7 @@ static void reset_test(void)
     memset(D_800C7DB0_C89B0, 0xab, sizeof(D_800C7DB0_C89B0));
     fail_alloc = frees = reset_calls = silent_flag = choice = closing = 0;
     visible_glyphs = rendered_length = 0;
+    rendered_line = rendered_line_width = 0;
     rendered[0] = 0;
 }
 static void to_choice(void)
@@ -213,12 +236,13 @@ static void to_choice(void)
     assert(choice);
     assert(anchor_dialog_poll() == ANCHOR_DIALOG_PENDING);
 }
-static void check_result(int button, int selection, AnchorDialogResult expected)
+static void check_result(const char *arena, int button, int selection,
+                         AnchorDialogResult expected)
 {
     reset_test();
     silent_flag = 1;
     D_800C7AE0 = 4; /* A separate native flag is never overwritten. */
-    assert(anchor_dialog_begin("Ahmad", "Congo's Arena"));
+    assert(anchor_dialog_begin("Ahmad", arena));
     assert(anchor_dialog_world_paused());
     assert(D_800C7AE0 == 4 && !silent_flag);
     assert(D_800C7AE2 == 0);
@@ -226,7 +250,10 @@ static void check_result(int button, int selection, AnchorDialogResult expected)
         assert(D_800C7DB0_C89B0[i] == (i < 2 || i >= 0x18 ? 0xab : 0));
     assert(D_801C7900_1C8500 == 1);
     to_choice();
-    assert(strstr(rendered, "Ahmad\nhas entered Congo's Arena.\nWould you like to join them?\n"));
+    char expected_prompt[160];
+    snprintf(expected_prompt, sizeof(expected_prompt),
+             "Ahmad\nentered %s.\nWould you like to join them?\n", arena);
+    assert(strstr(rendered, expected_prompt));
     assert(strstr(rendered, "Yes") && strstr(rendered, "No"));
     frame_tick(button, selection);
     assert(anchor_dialog_poll() == ANCHOR_DIALOG_PENDING);
@@ -251,9 +278,25 @@ static void check_result(int button, int selection, AnchorDialogResult expected)
 }
 int main(void)
 {
-    check_result(1, 0, ANCHOR_DIALOG_YES);
-    check_result(1, 1, ANCHOR_DIALOG_NO);
-    check_result(2, 0, ANCHOR_DIALOG_NO);
+    for (unsigned int i = 0; i < sizeof(arena_labels) / sizeof(arena_labels[0]); ++i) {
+        const char *arena = arena_labels[i];
+        check_result(arena, 1, 0, ANCHOR_DIALOG_YES);
+        check_result(arena, 1, 1, ANCHOR_DIALOG_NO);
+        check_result(arena, 2, 0, ANCHOR_DIALOG_NO);
+
+        reset_test();
+        /* A widest-glyph player name stays bounded while every arena label
+         * and the full question/choices remain visible without wrapping. */
+        assert(anchor_dialog_begin("wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww", arena));
+        to_choice();
+        assert(strstr(rendered, "wwwwwwwwwwwwwwwwwwwwwwww\n"));
+        assert(strstr(rendered, arena));
+        assert(strstr(rendered, ".\nWould you like to join them?\n"));
+        assert(rendered_line == 3 && visible_glyphs <= 120);
+        anchor_dialog_cancel();
+        assert(anchor_dialog_poll() == ANCHOR_DIALOG_CANCELLED);
+        assert(!anchor_dialog_world_paused());
+    }
 
     reset_test();
     assert(anchor_dialog_begin("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "Congo's Arena"));

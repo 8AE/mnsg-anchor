@@ -108,9 +108,8 @@ static int room_is_current(void)
 
 int anchor_boss_invite_world_arena(void)
 {
-    return room_is_current() && D_800C7AB2 == ANCHOR_BOSS_ROOM_CONGO &&
-                   player_is_alive()
-               ? ANCHOR_BOSS_ARENA_CONGO : 0;
+    return room_is_current() && player_is_alive()
+               ? anchor_boss_arena_for_room(D_800C7AB2) : 0;
 }
 
 unsigned int anchor_boss_invite_world_visit(void)
@@ -131,17 +130,18 @@ int anchor_boss_invite_world_can_prompt(void)
            system[SYS_SCRIPTED_INPUT] == 0;
 }
 
-int anchor_boss_invite_world_warp(void)
+int anchor_boss_invite_world_warp(int arena)
 {
     const short *start;
-    if (!anchor_boss_invite_world_can_prompt() ||
-        D_800C7AB2 == ANCHOR_BOSS_ROOM_CONGO)
+    int room = anchor_boss_arena_room(arena);
+    if (room < 0 || !anchor_boss_invite_world_can_prompt() ||
+        D_800C7AB2 == (unsigned short)room)
         return 0;
     /* The native table defines x, y, z, camera rotation, player rotation.
-     * US entry 0x16 is (60, -70, 171, 512, 16); read the actual resident entry
-     * instead of duplicating those values or accepting network coordinates. */
-    start = &D_8006B780_6C380[ANCHOR_BOSS_ROOM_CONGO * 5u];
-    func_8000607C_6C7C(ANCHOR_BOSS_ROOM_CONGO,
+     * Select the verified room's resident entry instead of duplicating
+     * transforms or accepting network coordinates. */
+    start = &D_8006B780_6C380[(unsigned int)room * 5u];
+    func_8000607C_6C7C((unsigned short)room,
                       start[0], start[1], start[2], start[3], start[4], 0, 0);
     /* The warp state calls 8000B364, which consumes this destination directly
      * and clears control state before loading the new world. It does not read

@@ -24,6 +24,7 @@ typedef struct
     int cid;
     int session;
     int sequence;
+    int arena;
     int joining;
 } ArenaInvitation;
 
@@ -34,6 +35,7 @@ static void clear_invitation(void)
     s_invitation.cid = 0;
     s_invitation.session = 0;
     s_invitation.sequence = 0;
+    s_invitation.arena = 0;
     s_invitation.joining = 0;
 }
 
@@ -49,6 +51,7 @@ void anchor_boss_invites_update(void)
 {
     char *json;
     char name[257];
+    const char *arena_name;
     int cid, session, sequence, arena;
 
     if (!anchor_is_connected() || anchor_is_disabled() ||
@@ -95,7 +98,7 @@ void anchor_boss_invites_update(void)
         /* The native dialog must finish releasing its world pause before
          * changing engine steps. If a pause intervenes, retain the accepted
          * request and recheck the sender until normal gameplay resumes. */
-        if (anchor_boss_invite_world_warp())
+        if (anchor_boss_invite_world_warp(s_invitation.arena))
             dismiss_invitation();
         return;
     }
@@ -109,13 +112,14 @@ void anchor_boss_invites_update(void)
         mnsg_json_get_s32(json, "session", &session) && session > 0 &&
         mnsg_json_get_s32(json, "seq", &sequence) && sequence > 0 &&
         mnsg_json_get_s32(json, "arena", &arena) &&
-        arena == ANCHOR_BOSS_ARENA_CONGO &&
+        (arena_name = anchor_boss_arena_name(arena)) != 0 &&
         mnsg_json_get_string(json, "name", name, sizeof(name)) &&
-        anchor_dialog_begin(name, "Congo's Arena"))
+        anchor_dialog_begin(name, arena_name))
     {
         s_invitation.cid = cid;
         s_invitation.session = session;
         s_invitation.sequence = sequence;
+        s_invitation.arena = arena;
         s_invitation.joining = 0;
     }
     recomp_free(json);
