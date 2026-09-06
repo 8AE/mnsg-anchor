@@ -13,7 +13,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 * **Player combat and pushing** — players in the same area can hit each other with native melee and player-owned projectile attack volumes, and push each other by moving into contact. Hits use the victim's native armour, hurt reaction and recovery; both interactions pause during cutscenes. Install the updated mod on all clients.
 * **Projectile and recovery visuals** — other clients render thrown weapons, their trails and impact effects, and the player's blinking during hurt recovery. Install the updated mod on all clients; see [projectile synchronization and validation](docs/remote-projectiles.md).
 * **Growing room capacity** — remote rosters, interactions, and native task/model pools expand as needed, with shared expression textures. See [capacity, crash protection, and validation](docs/multiplayer-capacity.md) for the engine's remaining resource constraints.
-* **Congo arena invitations** — entering Congo's arena sends teammates a native Yes/No dialog offering to join. Yes loads the arena at its normal entrance; No dismisses. Invitations wait for an existing conversation or cutscene to finish. Install the updated mod on all clients; see [arena invitation behavior and validation](docs/boss-arena-invitations.md).
+* **Congo arena invitations** — entering Congo's arena sends teammates a native Yes/No dialog offering to join. The recipient's world pauses while the invitation is open. Yes resumes into the arena at its normal entrance; No resumes where you were. Invitations wait for an existing conversation or cutscene to finish. Install the updated mod on all clients; see [arena invitation behavior and validation](docs/boss-arena-invitations.md).
 
 ### What is synced
 

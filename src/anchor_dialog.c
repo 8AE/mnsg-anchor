@@ -21,6 +21,8 @@ extern void *D_80167C54_168854;
 extern unsigned char D_800C7AE0;
 extern unsigned char D_800C7AE2;
 extern unsigned char D_800C7DB0_C89B0[0x60];
+extern unsigned char *D_8015C5C8_15D1C8;
+extern void *D_8016DAB4_16E6B4;
 extern void *D_801FC604_5B8514;
 extern int D_801C7768_1C8368;
 extern int D_801C7900_1C8500;
@@ -28,6 +30,7 @@ extern DialogWord D_801C7774_1C8374;
 extern DialogWord D_801C7800_1C8400;
 extern DialogWord D_801C7808_1C8408[];
 extern int func_8003D468_3E068(void *script, int file_id);
+extern void func_8003CFD0_3DBD0(void *task, void *object);
 extern void func_8000C260_CE60(int slot, int x, int y, int target_x,
                              int target_y, int style, int animation);
 extern void func_8000C878_D478(int slot);
@@ -39,7 +42,9 @@ enum {
     VM_TEXT = 0x8010, VM_CHOICE = 0x8011, VM_CHOICE_END = 0x8012,
     TEXT_OPEN = 0xffba, TEXT_CLOSE = 0xffb9, TEXT_NEWLINE = 0xffc4,
     TEXT_YELLOW = 0xffdf, TEXT_WHITE = 0xffe0, TEXT_END = 0xffff,
-    SCRIPT_WORDS = 40, TEXT_CAPACITY = 128, MODAL_CONTROL_BIT = 2
+    SCRIPT_WORDS = 40, TEXT_CAPACITY = 128, MODAL_CONTROL_BIT = 2,
+    WORLD_TASK_PAUSE = 1, SYS_STEP = 0x3add4,
+    SYS_WORLD_SUBSTATE = 0x3adde, SYS_TASK_MASK = 0x3ae24
 };
 
 static DialogWord s_script[SCRIPT_WORDS];
@@ -60,6 +65,8 @@ static int s_active;
 static int s_pre_control_bit;
 static int s_late_control_bit;
 static int s_saved_silent_flag;
+static unsigned char *s_scheduler_system;
+static int s_scenario_ticked;
 static AnchorDialogResult s_result;
 
 static int owns_script(void)
@@ -246,6 +253,60 @@ void anchor_dialog_cancel(void)
 }
 
 int anchor_dialog_busy(void) { return s_active; }
+
+int anchor_dialog_world_paused(void)
+{
+    return s_active && D_8015C5C8_15D1C8 &&
+           D_8015C5C8_15D1C8[SYS_STEP] == 13 &&
+           D_8015C5C8_15D1C8[SYS_WORLD_SUBSTATE] == 1 &&
+           D_80077860_78460 == s_manager &&
+           (!D_80077858_78458 || owns_script());
+}
+
+/* Start pauses world task subtrees with mask bit 1, including the ordinary
+ * scenario manager. Hold the bit only during task dispatch, then tick only
+ * our private scenario below. The native window/cursor draw runs separately.
+ * Never enter the Start menu or retain a global pause lock across frames. */
+RECOMP_HOOK("func_80034734_35334")
+void anchor_dialog_before_task_dispatch(void)
+{
+    volatile unsigned short *mask;
+    s_scheduler_system = 0;
+    s_scenario_ticked = 0;
+    if (!anchor_dialog_world_paused())
+        return;
+    mask = (volatile unsigned short *)(D_8015C5C8_15D1C8 + SYS_TASK_MASK);
+    if (!(*mask & WORLD_TASK_PAUSE)) {
+        s_scheduler_system = D_8015C5C8_15D1C8;
+        *mask |= WORLD_TASK_PAUSE;
+    }
+}
+
+RECOMP_HOOK_RETURN("func_80034734_35334")
+void anchor_dialog_after_task_dispatch(void)
+{
+    if (s_scheduler_system && s_scheduler_system == D_8015C5C8_15D1C8)
+        *(volatile unsigned short *)(s_scheduler_system + SYS_TASK_MASK) &=
+            (unsigned short)~WORLD_TASK_PAUSE;
+    s_scheduler_system = 0;
+    if (anchor_dialog_world_paused() && !s_scenario_ticked) {
+        void *previous_task = D_8016DAB4_16E6B4;
+        /* The private script only uses text/choice/branch/completion commands.
+         * Supply the manager's native task context, without dispatching any
+         * world task or replacing another scenario's execution. */
+        D_8016DAB4_16E6B4 = s_manager;
+        func_8003CFD0_3DBD0(s_manager, 0);
+        D_8016DAB4_16E6B4 = previous_task;
+    }
+}
+
+RECOMP_HOOK("func_8003CFD0_3DBD0")
+void anchor_dialog_note_scenario_tick(void)
+{
+    /* Normally paused with the world. Avoid a second tick if another mod
+     * changes the manager's task category and it already ran this dispatch. */
+    s_scenario_ticked = 1;
+}
 
 RECOMP_HOOK("func_8003D468_3E068")
 void anchor_dialog_before_native_scenario(void *script, int file_id)

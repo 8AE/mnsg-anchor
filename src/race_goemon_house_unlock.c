@@ -1,5 +1,6 @@
 #include "modding.h"
 #include "item_sync.h"
+#include "anchor_dialog.h"
 
 /* Save-data base used by the race unlock check. SAVE_WARP_GOEMON_HOUSE at
  * +0x2a4 is the randomizer warp/unlock flag for Goemon's house. */
@@ -46,5 +47,6 @@ static void apply_goemon_house_character_unlock(void)
 RECOMP_HOOK_RETURN("func_80002040_2C40")
 void anchor_race_goemon_house_unlock_frame_hook(void)
 {
-    apply_goemon_house_character_unlock();
+    if (!anchor_dialog_world_paused())
+        apply_goemon_house_character_unlock();
 }

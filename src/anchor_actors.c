@@ -13,6 +13,7 @@
 #include "anchor.h"
 #endif
 #include "anchor_nameplates.h"
+#include "anchor_dialog.h"
 #include "anchor_player_models.h"
 #include "anchor_projectile_models.h"
 #include "anchor_remote_animation.h"
@@ -844,6 +845,13 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
         anchor_nameplates_set_context_visible(0);
         return;
     }
+
+    /* Network snapshots and local keepalives still refresh during a modal,
+     * but interpolation and native child creation are simulation work. Keep
+     * the last displayed bodies/nameplates until the owned dialog releases
+     * the world. Owner/disconnect cleanup above must remain available. */
+    if (anchor_dialog_world_paused())
+        return;
 
     begin_remote_smoothing_frame();
 

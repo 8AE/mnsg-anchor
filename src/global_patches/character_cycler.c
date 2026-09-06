@@ -1,5 +1,6 @@
 #include "modding.h"
 #include "recomputils.h"
+#include "anchor_dialog.h"
 
 /* Save-data base. The character unlock fields live at +0x94..+0xa0, and
  * hp_max lives before the base at -0x28. func_8000B640 initializes this block
@@ -104,6 +105,6 @@ RECOMP_PATCH int func_801DD50C_59941C(void *arg0)
 RECOMP_HOOK_RETURN("func_80002040_2C40")
 void anchor_character_frame_hook(void)
 {
-    if (SAVE_READ32(SAVE_HP_MAX_OFFSET) > 0)
+    if (!anchor_dialog_world_paused() && SAVE_READ32(SAVE_HP_MAX_OFFSET) > 0)
         anchor_set_current_character_if_needed();
 }

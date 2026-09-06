@@ -92,7 +92,7 @@ void anchor_boss_invites_update(void)
             s_invitation.joining = 1;
         }
 
-        /* The native dialog must finish releasing its control bits before
+        /* The native dialog must finish releasing its world pause before
          * changing engine steps. If a pause intervenes, retain the accepted
          * request and recheck the sender until normal gameplay resumes. */
         if (anchor_boss_invite_world_warp())

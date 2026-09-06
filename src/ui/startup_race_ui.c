@@ -4,6 +4,7 @@
 #include "anchor.h"
 #include "anchor_runtime.h"
 #include "item_sync.h"
+#include "anchor_dialog.h"
 #include "anchor_flag_catalog.h"
 
 void anchor_set_current_character_if_needed(void);
@@ -2904,6 +2905,8 @@ void anchor_startup_race_frame_hook(void)
             recompui_hide_context(s_ctx);
             s_visible = 0;
         }
+        if (anchor_dialog_world_paused())
+            return;
         apply_pending_race_flags();
         if (s_race_character_enforce_frames > 0 && item_sync_save_is_loaded())
         {

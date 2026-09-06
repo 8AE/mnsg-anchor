@@ -11,6 +11,9 @@ void *D_80167C54_168854 = (void *)2;
 unsigned char D_800C7AE0;
 unsigned char D_800C7AE2;
 unsigned char D_800C7DB0_C89B0[0x60];
+static unsigned short system_storage[0x3ae28 / 2];
+unsigned char *D_8015C5C8_15D1C8 = (unsigned char *)system_storage;
+void *D_8016DAB4_16E6B4;
 void *D_801FC604_5B8514 = (void *)0x1234;
 int D_801C7768_1C8368;
 int D_801C7900_1C8500;
@@ -22,6 +25,8 @@ static int fail_alloc, silent_flag, frees, reset_calls, choice, closing;
 static unsigned int visible_glyphs;
 static char rendered[256];
 static unsigned int rendered_length;
+static int native_scenario_ticks, world_updates, interface_updates;
+static int frame_button, frame_selection;
 
 int func_800240DC_24CDC(unsigned short flag)
 {
@@ -134,6 +139,52 @@ static void vm_tick(int button, int selection)
         }
     }
 }
+
+void func_8003CFD0_3DBD0(void *task, void *object)
+{
+    assert(task == D_80077860_78460 && !object);
+    assert(D_8016DAB4_16E6B4 == task);
+    anchor_dialog_note_scenario_tick();
+    ++native_scenario_ticks;
+    vm_tick(frame_button, frame_selection);
+}
+
+/* Native 34734 walks a flattened task tree, skips flagged roots AND every
+ * deeper descendant, and still dispatches unrelated eligible roots. The
+ * scenario's observed creation category is 0x81 under the world tree. */
+static void frame_tick(int button, int selection)
+{
+    static const struct { unsigned short depth, flags; int scenario; } tasks[] = {
+        {0, 1, 0}, {1, 1, 0}, {1, 1, 0}, {1, 0x81, 1},
+        {2, 0, 0}, {0, 2, 0}
+    };
+    int skipped_depth = -1;
+    frame_button = button;
+    frame_selection = selection;
+    anchor_dialog_before_task_dispatch();
+    unsigned short mask = *(unsigned short *)(D_8015C5C8_15D1C8 + SYS_TASK_MASK);
+    for (unsigned int i = 0; i < sizeof(tasks) / sizeof(tasks[0]); ++i) {
+        if (skipped_depth >= 0 && tasks[i].depth > skipped_depth)
+            continue;
+        skipped_depth = -1;
+        if (tasks[i].flags & mask & 7u) {
+            skipped_depth = tasks[i].depth;
+            continue;
+        }
+        if (i == 5) {
+            ++interface_updates;
+        } else if (tasks[i].scenario) {
+            D_8016DAB4_16E6B4 = D_80077860_78460;
+            func_8003CFD0_3DBD0(D_80077860_78460, 0);
+        } else {
+            ++world_updates;
+        }
+    }
+    D_8016DAB4_16E6B4 = 0;
+    anchor_dialog_after_task_dispatch();
+    assert(!D_8016DAB4_16E6B4);
+}
+
 static void reset_test(void)
 {
     anchor_dialog_cancel();
@@ -143,6 +194,13 @@ static void reset_test(void)
     D_80167C48_168848[0] = D_80167C48_168848[1] = D_80167C48_168848[2] = 0;
     D_800C7AE0 = 0;
     D_800C7AE2 = 0;
+    D_8015C5C8_15D1C8 = (unsigned char *)system_storage;
+    memset(system_storage, 0, sizeof(system_storage));
+    D_8015C5C8_15D1C8[SYS_STEP] = 13;
+    D_8015C5C8_15D1C8[SYS_WORLD_SUBSTATE] = 1;
+    *(unsigned short *)(D_8015C5C8_15D1C8 + SYS_TASK_MASK) = 0x14;
+    D_8016DAB4_16E6B4 = 0;
+    native_scenario_ticks = world_updates = interface_updates = 0;
     memset(D_800C7DB0_C89B0, 0xab, sizeof(D_800C7DB0_C89B0));
     fail_alloc = frees = reset_calls = silent_flag = choice = closing = 0;
     visible_glyphs = rendered_length = 0;
@@ -151,7 +209,7 @@ static void reset_test(void)
 static void to_choice(void)
 {
     for (int i = 0; i < 10 && !choice; ++i)
-        vm_tick(0, 0);
+        frame_tick(0, 0);
     assert(choice);
     assert(anchor_dialog_poll() == ANCHOR_DIALOG_PENDING);
 }
@@ -161,6 +219,7 @@ static void check_result(int button, int selection, AnchorDialogResult expected)
     silent_flag = 1;
     D_800C7AE0 = 4; /* A separate native flag is never overwritten. */
     assert(anchor_dialog_begin("Ahmad", "Congo's Arena"));
+    assert(anchor_dialog_world_paused());
     assert(D_800C7AE0 == 4 && !silent_flag);
     assert(D_800C7AE2 == 0);
     for (int i = 0; i < 0x60; ++i)
@@ -169,20 +228,26 @@ static void check_result(int button, int selection, AnchorDialogResult expected)
     to_choice();
     assert(strstr(rendered, "Ahmad\nhas entered Congo's Arena.\nWould you like to join them?\n"));
     assert(strstr(rendered, "Yes") && strstr(rendered, "No"));
-    vm_tick(button, selection);
+    frame_tick(button, selection);
     assert(anchor_dialog_poll() == ANCHOR_DIALOG_PENDING);
-    vm_tick(0, 0); /* Choice callback + close command. */
+    frame_tick(0, 0); /* Choice callback + close command. */
     assert(closing == 2);
     assert(anchor_dialog_poll() == ANCHOR_DIALOG_PENDING && D_800C7AE0 == 4);
-    vm_tick(0, 0);
+    frame_tick(0, 0);
     assert(anchor_dialog_poll() == ANCHOR_DIALOG_PENDING);
-    vm_tick(0, 0);
-    vm_tick(0, 0); /* Native END clears VM PC after the close animation. */
+    frame_tick(0, 0);
+    frame_tick(0, 0); /* Native END clears VM PC after the close animation. */
+    assert(anchor_dialog_world_paused()); /* Holds through the closing frame. */
+    assert(world_updates == 0 && interface_updates == native_scenario_ticks);
+    assert(*(unsigned short *)(D_8015C5C8_15D1C8 + SYS_TASK_MASK) == 0x14);
     assert(anchor_dialog_poll() == expected);
     assert(!anchor_dialog_busy() && !D_80167C48_168848[0]);
+    assert(!anchor_dialog_world_paused());
     assert(D_800C7AE0 == 4 && silent_flag == 1 && frees == 1);
     assert(D_800C7AE2 == 0);
     assert(anchor_dialog_poll() == ANCHOR_DIALOG_IDLE);
+    frame_tick(0, 0);
+    assert(world_updates == 4); /* World resumes on either choice, including B. */
 }
 int main(void)
 {
@@ -267,6 +332,53 @@ int main(void)
     assert(D_800C7AE0 == 2 && D_800C7AE2 == 1);
     assert(anchor_dialog_poll() == ANCHOR_DIALOG_CANCELLED);
     assert(D_800C7AE0 == 2 && D_800C7AE2 == 1);
-    puts("native dialog VM contract, safe lifecycle, and glyph bounds passed");
+
+    reset_test();
+    assert(anchor_dialog_begin("A", "Congo's Arena"));
+    unsigned short *task_mask = (unsigned short *)(D_8015C5C8_15D1C8 + SYS_TASK_MASK);
+    *task_mask = 0x115; /* Preserve an already-held pause and high native bits. */
+    frame_tick(0, 0);
+    assert(*task_mask == 0x115 && !world_updates && native_scenario_ticks == 1);
+    *task_mask = 0x14;
+    anchor_dialog_before_task_dispatch();
+    assert(*task_mask == 0x15);
+    *task_mask |= 0x80; /* A separate native mask change is retained. */
+    D_8016DAB4_16E6B4 = (void *)0x9876;
+    anchor_dialog_after_task_dispatch();
+    assert(*task_mask == 0x94 && D_8016DAB4_16E6B4 == (void *)0x9876);
+
+    /* If another mod lets the manager run normally, never advance it twice. */
+    int ticks = native_scenario_ticks;
+    anchor_dialog_before_task_dispatch();
+    D_8016DAB4_16E6B4 = D_80077860_78460;
+    func_8003CFD0_3DBD0(D_80077860_78460, 0);
+    D_8016DAB4_16E6B4 = (void *)0x9876;
+    anchor_dialog_after_task_dispatch();
+    assert(native_scenario_ticks == ticks + 1 && D_8016DAB4_16E6B4 == (void *)0x9876);
+
+    /* Ending a modal mid-dispatch releases only the scoped bit, then does
+     * not manually tick a cancelled/replacement scenario. */
+    ticks = native_scenario_ticks;
+    anchor_dialog_before_task_dispatch();
+    anchor_dialog_cancel();
+    assert(!anchor_dialog_world_paused());
+    anchor_dialog_after_task_dispatch();
+    assert(*task_mask == 0x94 && native_scenario_ticks == ticks);
+
+    reset_test();
+    assert(anchor_dialog_begin("A", "Congo's Arena"));
+    D_8015C5C8_15D1C8[SYS_STEP] = 12; /* A loader takeover must stay runnable. */
+    assert(!anchor_dialog_world_paused());
+    anchor_dialog_before_task_dispatch();
+    anchor_dialog_after_task_dispatch();
+    assert(*task_mask == 0x14 && !native_scenario_ticks);
+    D_8015C5C8_15D1C8[SYS_STEP] = 13;
+    D_80077858_78458 = native_program;
+    assert(!anchor_dialog_world_paused());
+    anchor_dialog_before_task_dispatch();
+    anchor_dialog_after_task_dispatch();
+    assert(*task_mask == 0x14 && !native_scenario_ticks);
+    assert(anchor_dialog_poll() == ANCHOR_DIALOG_CANCELLED);
+    puts("native dialog choices, scoped world pause/resume, ownership, and glyph bounds passed");
     return 0;
 }

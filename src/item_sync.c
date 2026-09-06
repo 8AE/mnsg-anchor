@@ -32,6 +32,7 @@
 #include "recomputils.h"
 #include "recompui.h"
 #include "anchor.h"
+#include "anchor_dialog.h"
 #include "anchor_runtime.h"
 #include "anchor_flag_catalog.h"
 #include "boss_sync.h"
@@ -2190,6 +2191,13 @@ void item_sync_update(void)
             recomp_printf("[ItemSync] Compact team state requested.\n");
         }
     }
+
+    /* The transport and invitation state keep updating independently. Defer
+     * this queue intact: consuming it applies save, health, door and boss
+     * mutations outside the native scheduler. Connection/save cleanup and
+     * the initial state request above must still run while the world waits. */
+    if (anchor_dialog_world_paused())
+        return;
 
     /* ── Process incoming packets ─────────────────────────────────────── */
     process_incoming_packets();

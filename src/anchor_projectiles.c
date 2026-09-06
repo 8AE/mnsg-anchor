@@ -1,4 +1,5 @@
 #include "anchor.h"
+#include "anchor_dialog.h"
 #include "anchor_remote_model_pool.h"
 #include "anchor_player_models.h"
 #include "anchor_projectile_models.h"
@@ -17,6 +18,7 @@ static void *s_owner;
 static int s_session, s_epoch;
 static unsigned short s_room;
 static unsigned int s_tick;
+static int s_world_was_paused;
 
 static int rdram(const void *pointer)
 {
@@ -152,10 +154,10 @@ void anchor_projectiles_frame(void)
     void *owner = D_801FC604_5B8514;
     int session = anchor_get_projectile_session();
     int epoch = anchor_player_models_get_epoch();
+    int world_paused = anchor_dialog_world_paused();
     int count, i;
     char encoded[ANCHOR_PROJECTILE_JSON_SIZE];
     char *json;
-    ++s_tick;
     if (!item_sync_save_is_loaded() || !linked(owner) ||
         !rdram(D_801FC60C_5B851C) ||
         *(void **)((unsigned char *)owner + 0x18) != D_801FC60C_5B851C)
@@ -167,20 +169,35 @@ void anchor_projectiles_frame(void)
     }
     else if (session != s_session || epoch != s_epoch)
     {
-        /* Keep observed native lifetimes, discard only old-session events. */
-        anchor_projectile_source_clear_pending(&s_source);
-        anchor_projectile_models_reset();
+        /* The local interaction epoch also changes at modal entry/exit to
+         * reject stale hits. Those boundaries freeze existing/pending throws;
+         * they do not end their lifetimes. Pending local throws publish with
+         * the current authority when play resumes. A real connection change
+         * still invalidates every projectile, including during the dialog. */
+        if (session != s_session || (!world_paused && !s_world_was_paused))
+        {
+            /* Keep observed native lifetimes, discard old-authority events. */
+            anchor_projectile_source_clear_pending(&s_source);
+            anchor_projectile_models_reset();
+        }
     }
     s_owner = owner;
     s_room = D_800C7AB2;
     s_session = session;
     s_epoch = epoch;
+    s_world_was_paused = world_paused;
     if (!session || !owner)
     {
         anchor_projectile_source_clear_pending(&s_source);
         anchor_projectile_models_reset();
         return;
     }
+    /* These callbacks run after the scheduler, so its native task mask does
+     * not stop remote motion or spawn catch-up. Leave incoming events queued
+     * and the simulation clock fixed while lifecycle cleanup stays live. */
+    if (world_paused)
+        return;
+    ++s_tick;
     for (i = 0; i < ANCHOR_PROJECTILE_BATCH_MAX &&
          (spawn = anchor_projectile_source_peek(&s_source, s_tick)) != 0; ++i)
     {

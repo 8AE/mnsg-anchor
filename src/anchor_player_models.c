@@ -36,6 +36,7 @@
  */
 
 #include "anchor_player_models.h"
+#include "anchor_dialog.h"
 #include "anchor_remote_model_pool.h"
 #include "anchor_remote_animation.h"
 #include "anchor_remote_appearance.h"
@@ -1709,6 +1710,13 @@ static void remote_model_task_update(void *task, void *object)
         slot->bound_sudden_impact = 0;
         return;
     }
+
+    /* Plain render children need not carry the native gameplay pause flag.
+     * Preserve their last pose while the owned modal pauses the world, after
+     * allowing stale owner/room handles to be hidden above. Rendering still
+     * walks the existing kind-2 object normally. */
+    if (anchor_dialog_world_paused())
+        return;
 
     remote = &slot->pending_remote;
     ch = remote->ch;

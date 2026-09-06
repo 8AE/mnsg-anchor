@@ -13,9 +13,12 @@ typedef enum AnchorDialogResult {
  * while another native scenario/window owns the UI or resources are absent. */
 int anchor_dialog_begin(const char *player_name, const char *arena_name);
 /* A completed result is returned once, after the native window has closed and
- * this dialog's input filtering has ended. */
+ * this dialog's world pause and input filtering have ended. */
 AnchorDialogResult anchor_dialog_poll(void);
 void anchor_dialog_cancel(void);
 int anchor_dialog_busy(void);
+/* True only while our modal still owns the scenario in the active world.
+ * Frame hooks that mutate gameplay must defer work; networking/UI may tick. */
+int anchor_dialog_world_paused(void);
 
 #endif
