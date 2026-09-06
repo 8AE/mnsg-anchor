@@ -18,6 +18,7 @@
 #include "modding.h"
 #include "recomputils.h"
 #include "anchor.h"
+#include "anchor_congo_damage.h"
 #include "boss_sync.h"
 #include "item_sync.h"
 #include "utils/json_utils.h"
@@ -306,6 +307,12 @@ int boss_sync_has_active_encounter(const char *flag_name)
 {
     TrackedBoss *boss = boss_for_flag(flag_name);
 
+    /* Shared Congo checkpoints own HP zero and the native victory handoff.
+     * Hold progression through the frame between those two native states,
+     * including a late join that is still waiting for its first checkpoint. */
+    if (boss == &s_congo && anchor_congo_damage_is_shared() &&
+        !s_congo_victory_complete)
+        return 1;
     if ((mnsg_string_equal(flag_name, "fl_congo_killed") || mnsg_string_equal(flag_name, "fl_congo")) &&
         congo_remote_defeat_is_current())
         return 1;
@@ -339,6 +346,9 @@ int boss_sync_has_local_encounter(const char *flag_name)
 {
     TrackedBoss *boss = boss_for_flag(flag_name);
 
+    if (boss == &s_congo && anchor_congo_damage_is_shared() &&
+        !s_congo_victory_complete)
+        return 1;
     if (mnsg_string_equal(flag_name, "fl_tsurami"))
         return !s_tsurami_state.victory_complete &&
                tracked_boss_is_local(&s_tsurami);
@@ -366,6 +376,9 @@ int boss_sync_send_defeat(const char *flag_name)
     int sent;
 
     if (!boss_sync_is_completion_flag(flag_name))
+        return 0;
+    if (mnsg_string_equal(flag_name, "fl_congo_killed") &&
+        anchor_congo_damage_is_shared() && !anchor_congo_damage_is_owner())
         return 0;
 
     mnsg_json_writer_begin(&writer, payload, (unsigned int)sizeof(payload));
@@ -537,6 +550,11 @@ int boss_sync_apply_remote_defeat(const char *flag_name)
 
     if (!mnsg_string_equal(flag_name, "fl_congo_killed"))
         return 0;
+    /* The encounter-qualified checkpoint carries shared Congo's terminal
+     * state. A legacy room-only event must not independently kill an owner
+     * or a follower, or overtake that checkpoint on a joining client. */
+    if (anchor_congo_damage_is_shared())
+        return 1;
     if (congo_remote_defeat_is_current())
         return 1;
     if (s_congo_victory_complete)
@@ -599,6 +617,23 @@ void boss_sync_track_congo_health_actor(void *actor)
                       (ACTOR_STATUS(actor) & ACTOR_STATUS_REMOVE_PENDING) != 0);
     }
 
+    if (anchor_congo_damage_is_shared())
+    {
+        /* Stop the terminal-only repair path before it can arm synthetic
+         * damage. Followers enter victory only from an owner checkpoint;
+         * the owner still announces its own native HP-zero transition. */
+        s_congo_lethal_hit_pending = 0;
+        s_congo_lethal_hit_armed = 0;
+        s_congo_remote_defeat_needs_rearm = 0;
+        if (health == 0 && !s_congo_local_defeat_started &&
+            anchor_congo_damage_is_owner())
+        {
+            s_congo_local_defeat_started = 1;
+            boss_sync_send_defeat("fl_congo_killed");
+        }
+        return;
+    }
+
     /* A remote defeat that survived leaving the room belongs to the newly
      * tracked Congo instance.  Restore the pending native hit, not 0x12D. */
     if ((actor_changed || s_congo_remote_defeat_needs_rearm) &&
@@ -653,6 +688,11 @@ void boss_sync_apply_common_lethal_hit(void *actor)
 {
     unsigned int old_health;
 
+    if (anchor_congo_damage_is_shared())
+    {
+        s_congo_lethal_hit_pending = 0;
+        s_congo_lethal_hit_armed = 0;
+    }
     if (s_congo_lethal_hit_pending)
     {
         if (s_congo_lethal_hit_room != D_800C7AB2)

@@ -167,6 +167,12 @@ extern "C"
    int anchor_boss_invitation_is_current(int cid, int session, int sequence);
    void anchor_dismiss_boss_invitation(int cid, int session, int sequence);
 
+   /* One batched bridge exchange per frame. Python owns election, checkpoint
+    * caching, deduplication and the shared packet budget. Free the result. */
+   char *anchor_congo_update(int ready, unsigned int visit, int paused,
+                             const char *state_json);
+   int anchor_send_congo_hit(int sequence, int amount);
+
    /**
     * @brief Broadcast the local player's world-space position to teammates.
     *

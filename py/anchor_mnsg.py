@@ -80,6 +80,7 @@ import logging
 import math
 import secrets
 from collections import deque
+import anchor_congo
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -148,6 +149,7 @@ _arena_events: dict = {}
 _arena_seen: dict = {}
 _arena_retired_sessions: "dict[int, set[int]]" = {}
 _arena_confirmed_sessions: "dict[int, int]" = {}
+_congo = anchor_congo.CongoTransport()
 
 ###############################################################################
 # Constants
@@ -376,6 +378,11 @@ def _merge_client_state(
     # A confirmed visit ends at the metadata edge, even if the sender returns
     # before the game's next invitation poll. Unconfirmed entries retain their
     # grace period because room/session metadata may follow the arena event.
+    if "mnsgCongo" in payload:
+        value = anchor_congo.merge_metadata(state.get("mnsgCongo"), payload["mnsgCongo"], state.get("interactionSession"))
+        if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
+            state["mnsgCongo"] = value
+    _congo.observe(_congo_context())
     _invalidate_confirmed_boss_invitation(cid)
     _prune_projectile_spawns(int(time.monotonic() * 1000))
     return True
@@ -438,6 +445,9 @@ def _replace_all_client_states(states: list) -> None:
                 merged["appearanceFlags"] = _appearance_flags_from_payload(
                     client_state, int(merged.get("appearanceFlags", 0))
                 )
+            congo = anchor_congo.merge_metadata(previous.get("mnsgCongo"), client_state.get("mnsgCongo"), merged.get("interactionSession"))
+            if congo and congo[5] not in _retired_interaction_sessions.get(cid, ()):
+                merged["mnsgCongo"] = congo
             new_players[cid] = merged
         for cid, previous in previous_players.items():
             replacement = new_players.get(cid, {})
@@ -448,6 +458,7 @@ def _replace_all_client_states(states: list) -> None:
                 _retire_interaction_session(cid, int(order.get("interactionSession", 0)))
         _player_states.clear()
         _player_states.update(new_players)
+        _congo.observe(_congo_context())
         for cid in list(_arena_events):
             _invalidate_confirmed_boss_invitation(cid)
         _prune_projectile_spawns(int(time.monotonic() * 1000))
@@ -676,6 +687,11 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_boss_arena(packet)
                     continue
 
+                if ptype == anchor_congo.PACKET_TYPE:
+                    with _player_states_lock:
+                        _congo.receive(_congo_context(), packet, time.monotonic())
+                    continue
+
                 if ptype == "MNSG_PROJECTILES":
                     # Retired continuous-visual protocol: never replay these
                     # old packets through the durable item/event queue.
@@ -759,6 +775,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _player_movement_order.clear()
         _reset_projectile_spawns()
         _reset_boss_invitations()
+        _congo.reset()
 
 
 ###############################################################################
@@ -835,6 +852,7 @@ def connect(
         _player_movement_order.clear()
         _reset_projectile_spawns()
         _reset_boss_invitations()
+        _congo.reset()
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -874,6 +892,7 @@ def connect(
             "online": True,
             "isSaveLoaded": False,
             "interactionSession": _interaction_session,
+            "mnsgCongo": _congo.advertisement(_congo_context()),
         },
         "roomState": {},
     }
@@ -1340,6 +1359,7 @@ def update_client_state(state_json: str) -> bool:
         if state["teamId"] != _team_id:
             with _player_states_lock:
                 _arena_events.clear()
+                _congo.reset()
         _team_id = state["teamId"]
 
     # Server requires these fields.
@@ -1357,6 +1377,9 @@ def update_client_state(state_json: str) -> bool:
     state["clientId"] = _client_id
     state["name"] = _player_name
     state["online"] = True
+    state["interactionSession"] = _interaction_session
+    with _player_states_lock:
+        state["mnsgCongo"] = _congo.advertisement(_congo_context())
 
     sent = _send_raw({"type": "UPDATE_CLIENT_STATE", "state": state})
     if sent and _client_id:
@@ -1365,6 +1388,46 @@ def update_client_state(state_json: str) -> bool:
             local.update(state)
             local["self"] = True
     return sent
+
+
+def _congo_context() -> dict:
+    """Read under _player_states_lock; the helper never performs socket I/O."""
+    return {"cid": _client_id, "session": _interaction_session, "team": _team_id,
+            "connected": _connected, "loaded": _local_save_loaded,
+            "room": _player_states.get(_client_id, {}).get("roomId", _local_room_id),
+            "players": _player_states}
+
+
+def update_congo(ready: int, visit: int, paused: int, state_json: str = "") -> str:
+    """Publish previous-frame native state and return role/checkpoint/hit work.
+
+    Hit arrays are [cid, session, playerEpoch, attackSequence, damage]. Native
+    code must apply or reject every returned hit before its next valid state.
+    Paused owners still renew their lease, while followers freeze the boss only.
+    """
+    supplied = None
+    if isinstance(state_json, str) and len(state_json.encode("utf-8")) <= anchor_congo.MAX_STATE_BYTES:
+        try:
+            supplied = json.loads(state_json) if state_json else None
+        except (ValueError, RecursionError):
+            pass
+    with _player_states_lock:
+        status, packets = _congo.update(_congo_context(), ready, visit, paused, supplied, time.monotonic())
+        dirty = _congo.advertisement_dirty
+        _congo.advertisement_dirty = False
+    if dirty and _connected:
+        if not update_client_state("{}"):
+            with _player_states_lock:
+                _congo.advertisement_dirty = True
+    for packet in packets:
+        _send_raw(packet)
+    return json.dumps(status, separators=(",", ":"), allow_nan=False)
+
+
+def send_congo_hit(sequence: int, amount: int) -> bool:
+    """Queue one physical attack; retries keep the same identity until acked."""
+    with _player_states_lock:
+        return _congo.send_hit(_congo_context(), sequence, amount, time.monotonic())
 
 
 def _reset_boss_invitations() -> None:
@@ -1555,6 +1618,8 @@ def set_save_loaded(is_loaded: bool) -> bool:
         set_boss_arena(0)
         with _player_states_lock:
             _arena_events.clear()
+            if _congo.local[0] or _congo.e:
+                _congo.update(_congo_context(), False, 0, False, None, time.monotonic())
     return update_client_state(json.dumps({"isSaveLoaded": _local_save_loaded}))
 
 
@@ -1936,6 +2001,8 @@ def set_local_room(room_id: int) -> bool:
         if _client_id in _player_states:
             _player_states[_client_id]["location"] = area_name
             _player_states[_client_id]["roomId"] = room_id
+        if room_id != anchor_congo.ROOM and (_congo.local[0] or _congo.e):
+            _congo.update(_congo_context(), False, 0, False, None, time.monotonic())
     return update_client_state(json.dumps({"currentRoom": area_name, "currentRoomId": room_id}))
 
 

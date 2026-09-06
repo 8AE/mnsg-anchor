@@ -44,6 +44,14 @@ typedef struct AnchorPlayerHitTarget
     AnchorCollisionBody body;
 } AnchorPlayerHitTarget;
 
+typedef struct AnchorBossTarget
+{
+    int cid;
+    float x;
+    float y;
+    float z;
+} AnchorBossTarget;
+
 void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int count,
                                  void *render_parent_task);
 void anchor_player_models_load_resources(void);
@@ -57,5 +65,9 @@ int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacit
 void anchor_player_models_get_drive(int *x, int *z);
 int anchor_player_models_get_epoch(void);
 int anchor_player_models_peer_is_current(int cid, int session, int epoch);
+/* Retain an eligible target, or rotate through every current same-team player
+ * in client-ID order. This scans the dynamic roster without a player limit. */
+int anchor_player_models_get_boss_target(int current_cid, int rotate,
+                                         AnchorBossTarget *out);
 
 #endif

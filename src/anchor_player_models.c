@@ -1334,6 +1334,64 @@ int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacit
     return count;
 }
 
+static void consider_boss_target(const AnchorBossTarget *candidate,
+                                 int current_cid, AnchorBossTarget *current,
+                                 AnchorBossTarget *next, AnchorBossTarget *first)
+{
+    if (candidate->cid <= 0)
+        return;
+    if (candidate->cid == current_cid)
+        *current = *candidate;
+    if (!first->cid || candidate->cid < first->cid)
+        *first = *candidate;
+    if (candidate->cid > current_cid &&
+        (!next->cid || candidate->cid < next->cid))
+        *next = *candidate;
+}
+
+int anchor_player_models_get_boss_target(int current_cid, int rotate,
+                                         AnchorBossTarget *out)
+{
+    AnchorBossTarget current = {0}, next = {0}, first = {0};
+    AnchorBossTarget candidate;
+    AnchorCollisionBody body;
+    float scale;
+    int i;
+    (void)anchor_player_models_get_epoch();
+    if (!out || !anchor_is_connected() || !item_sync_save_is_loaded() ||
+        s_owner_task != D_801FC604_5B8514 || !is_linked_task(s_owner_task))
+        return 0;
+    if (s_interaction_alive && !s_interaction_scripted &&
+        local_collision_body(&body, &scale))
+    {
+        candidate.cid = (int)anchor_get_client_id();
+        candidate.x = body.position.x;
+        candidate.y = body.position.y;
+        candidate.z = body.position.z;
+        consider_boss_target(&candidate, current_cid, &current, &next, &first);
+    }
+    for (i = 0; i < s_slot_capacity; ++i)
+    {
+        const RemoteModelSlot *slot = &s_slots[i];
+        if (!slot->active || !slot->pending_valid || !slot->collision_ready ||
+            slot->pending_room != D_800C7AB2 ||
+            !slot->pending_remote.same_team ||
+            slot->pending_remote.collision_disabled ||
+            slot->pending_remote.player_epoch <= 0 ||
+            slot->pending_remote.interaction_session <= 0 ||
+            s_interaction_tick - slot->drive_sample_tick > 60u ||
+            !is_linked_remote_task(slot->task))
+            continue;
+        candidate.cid = slot->cid;
+        candidate.x = slot->collision_body.position.x;
+        candidate.y = slot->collision_body.position.y;
+        candidate.z = slot->collision_body.position.z;
+        consider_boss_target(&candidate, current_cid, &current, &next, &first);
+    }
+    *out = !rotate && current.cid ? current : next.cid ? next : first;
+    return out->cid != 0;
+}
+
 static void receive_player_hits(void)
 {
     int sender;

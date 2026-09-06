@@ -3,12 +3,14 @@
 import importlib.util
 import json
 import re
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "py" / "anchor_mnsg.py"
+sys.path.insert(0, str(MODULE_PATH.parent))
 
 
 class RecordingSocket:
