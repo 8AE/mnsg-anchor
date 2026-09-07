@@ -1,7 +1,7 @@
 # Congo native evidence
 
 This maintenance note records the native evidence used for the shared Congo
-damage and target boundaries. It is not runtime certification. No raw ROM
+fight, reward and exit boundaries. It is not runtime certification. No raw ROM
 data is included.
 
 - ROM: US decompressed image, SHA-256
@@ -11,6 +11,29 @@ data is included.
   ROM-suffixed symbols in `Goemon64RecompSyms`. Runtime addresses in Congo's
   actor overlay must retain their ROM suffix to disambiguate overlays.
 - Verification date: 2026-09-06. No game launch.
+
+## Miracle Moon and the Congo exit
+
+The room `0x0016` placement records and native callbacks identify the reward
+and exit independently of the boss root. The item-grant script and reward
+completion are different stages; an inventory write alone cannot stand in
+for the completion flag. These paths were reviewed on 2026-09-07 without a
+game launch.
+
+| Native boundary | Evidence and consequence |
+| --- | --- |
+| Moon reward `func_08005018_6C4768` | Placed entity `0x35F`, file `30`, rewrites its native identity to `0x350`. The initializer tests saved flag `0xA4` and skips reward setup when already complete. `08005090_6C47E0` waits for Congo victory flag `0x12B`; `08005154_6C48A4` brings the reward in, followed by idle callbacks `080051F4_6C4944` and `080052A0_6C49F0`. |
+| Pickup `func_0800532C_6C4A7C` | Starts scenario `0x71` and acquires native pickup control through `80221F70`. Once this starts, preserve the local scenario and its completion path rather than treating the actor as an idle collectible. |
+| Scenario `0x71` | File `93`, segmented address `0x08002C48`, ROM `0x742178`. Commands at ROM `0x7421F0/0x7421F8` write `1` to `0x8015C85C`, the signed 32-bit Miracle Moon field at save base `+0x254`. This write precedes the actor's final completion flag. |
+| Completion `func_080053A4_6C4AF4` | Waits for scenario PC zero, calls `80221FB0` to release native pickup control, sets saved flag `0xA4` through `80024038`, then marks task status `+0x68` with remove bit `0x2`. Packed flag `0xA4` is save byte `+0x14`, mask `0x10`; it is unrelated to the Goemon weapon-tier word at numeric byte offset `+0xA4`. |
+| Exit `func_080060A0_6F9580` through `func_08006228_6F9708` | The actual room exit is placed entity `0x34B`, file `43`, initialized as `0x23C`. `08006174_6F9654` waits for saved flag `0xA4`; `080061C8_6F96A8` starts its 120-update timer, opening sound `0x224` and capability `+0x60` bit `1` before `08006228_6F9708` continues the native opening. This is not the generic key-padlock actor. The placement at `(90,-70,-124)` pairs with a type-`0x8C` portal to room `0x28`; the return portal to room `0x1A` is separate. |
+| Congo root and camera | Root initializer `08005EDC_6B917C` removes the root when saved flag `0xA4` is already set; camera initializer `080083BC_6BB65C` skips the intro. Live camera `08008A38_6BBCD8` tests `0xA4` with `0x132` and selects `080094D4_6BC774` with timer `150`. That callback clears `0x132` and views the exit; `080095B0_6BC850` adds a 20-update wait before returning to the ordinary camera. Preserve this native reaction instead of forcing camera or player movement. |
+
+The file-29 rotating-object callbacks beginning at `08005D98_6B9038` are not
+the exit identified by this room's placements. They must not be used as a
+substitute for the verified file-43 door.
+
+## Fight and victory
 
 | Native boundary | Evidence and consequence |
 | --- | --- |

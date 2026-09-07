@@ -37,6 +37,8 @@
 #include "anchor_flag_catalog.h"
 #include "boss_sync.h"
 #include "item_sync.h"
+#include "anchor_miracle_moon.h"
+#include "utils/anchor_item_reconcile.h"
 #include "utils/json_utils.h"
 #include "utils/string_utils.h"
 
@@ -262,6 +264,10 @@ static SyncFlagBit s_flag_bits[] = {
     {0x01A, 0, "fl_gold_wpn"},
 
     /* ── Miracle-item acquisition flags ────────────────────────────── */
+    /* Congo's reward script sets this only after the Miracle Moon scene
+       finishes.  The native reward, arena root, camera, and exit door all
+       use this packed bit rather than the inventory field at save +0x254. */
+    {0x0A4, 0, "fl_mi_moon"},
     /* FLAG_OBTAINED_MIRACLE_SNOW 0x035 Byte 0x06 Bit 5                 */
     {0x035, 0, "fl_mi_snow"},
 
@@ -979,6 +985,17 @@ static unsigned char s_remote_boss_completion_notified[NUM_FLAGS];
 /* Use -1 as the empty sentinel because zero is a valid profile value and
  * therefore must remain representable while a remote update is pending. */
 static signed int s_pending_benkei_sasuke_profile = -1;
+/* A remote Moon completion received after the local pickup callback has been
+ * selected must wait for scenario 0x71 to release its camera/input ownership.
+ * Preserve whether Anchor already stored the incoming state: a live-only
+ * completion must not acknowledge the local native pickup's durable send. */
+#define MOON_COMPLETION_NONE 0u
+#define MOON_COMPLETION_LIVE 1u
+#define MOON_COMPLETION_DURABLE 2u
+static unsigned char s_pending_miracle_moon_completion;
+/* MNSG_TEAM_STATE is a live merge and cannot acknowledge an already-dirty
+ * local value; queued SET_FLAG and stored UPDATE_TEAM_STATE packets can. */
+static unsigned char s_applying_live_team_state;
 
 /* =========================================================================
    Damage sync state
@@ -1338,8 +1355,9 @@ void item_sync_apply_benkei_postfight_state(void)
  * @brief Apply an incoming item flag to the local save.
  *
  * Looks up `flag_name` in both sync tables, then writes the value if the
- * local rule allows it (take-max or apply-if-zero).  Also updates the
- * cached copy so the outgoing monitor does not re-broadcast the change.
+ * local rule allows it (take-max or apply-if-zero).  Durable input can
+ * acknowledge a matching value. Live-only snapshots retain any unsent local
+ * gain so the outgoing monitor still publishes it through the queued path.
  *
  * @param flag_name  The `flag` key from the incoming SET_FLAG packet.
  * @param val        The `value` field from the packet.
@@ -1351,6 +1369,7 @@ void item_sync_apply_benkei_postfight_state(void)
 static const char *apply_flag(const char *flag_name, signed int val)
 {
     int i;
+    const char *implied_display = 0;
 
     /* Check 32-bit save-data fields. */
     for (i = 0; i < NUM_FIELDS; ++i)
@@ -1359,11 +1378,9 @@ static const char *apply_flag(const char *flag_name, signed int val)
             continue;
 
         signed int cur = SAVE_READ32(s_fields[i].off);
-        int should_apply;
-        if (s_fields[i].use_max)
-            should_apply = (val > cur);
-        else
-            should_apply = (cur == 0 && val != 0);
+        AnchorItemReconcile reconcile = anchor_item_reconcile_field(
+            cur, s_fields[i].cached, val, s_fields[i].use_max,
+            !s_applying_live_team_state);
 
         /* Positive incoming snapshots/deltas are authoritative even if this
            save already contains the value.  Arming on a no-op also repairs an
@@ -1371,21 +1388,25 @@ static const char *apply_flag(const char *flag_name, signed int val)
         if (val > 0)
             arm_visual_collectible_field(i);
 
-        if (should_apply)
+        if (reconcile.changed)
         {
-            SAVE_WRITE32(s_fields[i].off, val);
+            SAVE_WRITE32(s_fields[i].off, reconcile.value);
             /* When HP max increases, refill current HP to the new max.
              * This matches vanilla behaviour where trading a fortune doll
              * with Benkei both raises max HP and fully restores HP.        */
             if (s_fields[i].off == -0x028)
             {
-                SAVE_WRITE32(-0x024, val);         /* SAVE_CURRENT_HEALTH = new max */
-                s_ds_prev_hp = (unsigned char)val; /* keep damage-sync baseline in sync */
+                SAVE_WRITE32(-0x024, reconcile.value); /* SAVE_CURRENT_HEALTH = new max */
+                s_ds_prev_hp = (unsigned char)reconcile.value; /* keep damage-sync baseline in sync */
             }
-            s_fields[i].cached = val;
+            s_fields[i].cached = reconcile.cached;
             recomp_printf("[ItemSync] Applied field '%s' = %d\n", flag_name, val);
             return get_flag_display_name(flag_name);
         }
+        /* Only durable equal input acknowledges this exact local value. A
+           live, stale or partial snapshot must leave a newer unsent local
+           gain dirty so the bounded outgoing monitor publishes it later. */
+        s_fields[i].cached = reconcile.cached;
         return 0;
     }
 
@@ -1404,27 +1425,78 @@ static const char *apply_flag(const char *flag_name, signed int val)
             item_sync_apply_benkei_postfight_state();
 
         if (val)
-            arm_visual_collectible_flag(i);
-
-        if (val && !FLAG_IS_SET(s_flag_bits[i].id))
         {
-            FLAG_SET_BIT(s_flag_bits[i].id);
-            s_flag_bits[i].cached = 1;
-            /* A queued delta or compact snapshot can arrive after this room
-             * already instantiated the locked door.  Arm only the real 0->1
-             * write: the initializer hook safely consumes pre-init arrivals,
-             * while a positive no-op may have no lock child to animate. */
-            arm_door_unlock_flag(i);
-            if (boss_sync_is_completion_flag(flag_name))
-                s_boss_defeat_announced[i] = 1;
-            recomp_printf("[ItemSync] Applied flag '%s' (id=0x%X)\n",
-                          flag_name, s_flag_bits[i].id);
-            return get_flag_display_name(flag_name);
+            arm_visual_collectible_flag(i);
+            if (mnsg_string_equal(flag_name, "fl_mi_moon"))
+            {
+                /* Completion implies ownership, while the earlier inventory
+                   grant alone does not imply that the pickup scene finished. */
+                implied_display = apply_flag("mi_moon", 1);
+                anchor_miracle_moon_remote_completed(D_800C7AB2);
+                if (!FLAG_IS_SET(s_flag_bits[i].id) &&
+                    anchor_miracle_moon_local_pickup_active())
+                {
+                    unsigned char source = s_applying_live_team_state
+                                               ? MOON_COMPLETION_LIVE
+                                               : MOON_COMPLETION_DURABLE;
+                    if (source > s_pending_miracle_moon_completion)
+                        s_pending_miracle_moon_completion = source;
+                    recomp_printf("[ItemSync] Deferred Miracle Moon completion until the local pickup finishes.\n");
+                    return implied_display;
+                }
+                s_pending_miracle_moon_completion = MOON_COMPLETION_NONE;
+            }
         }
-        return 0;
+
+        {
+            AnchorItemReconcile reconcile = anchor_item_reconcile_flag(
+                FLAG_IS_SET(s_flag_bits[i].id), s_flag_bits[i].cached, val,
+                !s_applying_live_team_state);
+
+            if (reconcile.changed)
+            {
+                FLAG_SET_BIT(s_flag_bits[i].id);
+                s_flag_bits[i].cached = (unsigned char)reconcile.cached;
+                /* A queued delta or compact snapshot can arrive after this room
+                 * already instantiated the locked door.  Arm only the real 0->1
+                 * write: the initializer hook safely consumes pre-init arrivals,
+                 * while a positive no-op may have no lock child to animate. */
+                arm_door_unlock_flag(i);
+                if (boss_sync_is_completion_flag(flag_name))
+                    s_boss_defeat_announced[i] = 1;
+                recomp_printf("[ItemSync] Applied flag '%s' (id=0x%X)\n",
+                              flag_name, s_flag_bits[i].id);
+                {
+                    const char *display = get_flag_display_name(flag_name);
+                    return display ? display : implied_display;
+                }
+            }
+            /* As with fields, only durable input acknowledges an equal value.
+               In particular, incoming zero cannot hide a local 0->1 transition. */
+            s_flag_bits[i].cached = (unsigned char)reconcile.cached;
+        }
+        return implied_display;
     }
     /* Unknown flag name – ignore (could be from a later version). */
     return 0;
+}
+
+static void apply_pending_miracle_moon_completion(void)
+{
+    unsigned char source;
+    unsigned char previous_live_state;
+
+    if (!s_pending_miracle_moon_completion ||
+        anchor_miracle_moon_local_pickup_active())
+        return;
+
+    source = s_pending_miracle_moon_completion;
+    s_pending_miracle_moon_completion = MOON_COMPLETION_NONE;
+    previous_live_state = s_applying_live_team_state;
+    s_applying_live_team_state = source == MOON_COMPLETION_LIVE;
+    (void)apply_flag("fl_mi_moon", 1);
+    s_applying_live_team_state = previous_live_state;
+    recomp_printf("[ItemSync] Applied deferred Miracle Moon completion.\n");
 }
 
 /* Apply ordinary incoming values immediately, except for the save counter
@@ -1596,12 +1668,13 @@ static void apply_pending_boss_flags(void)
 
 /* Apply one compact UPDATE_TEAM_STATE snapshot. Queued SET_FLAG deltas are
  * expanded by Python and arrive immediately after this packet. */
-static void apply_team_state(const char *json)
+static void apply_team_state(const char *json, int is_live)
 {
     int i;
     int applied = 0;
     signed int value;
 
+    s_applying_live_team_state = is_live != 0;
     for (i = 0; i < NUM_FIELDS; ++i)
     {
         if (mnsg_json_get_s32(json, s_fields[i].name, &value))
@@ -1621,15 +1694,19 @@ static void apply_team_state(const char *json)
             {
                 applied++;
                 /* Compact snapshots are remote progression too.  A direct
-                 * boss application must be acknowledged before the baseline
-                 * capture below marks its now-set bit as already seen. */
+                 * boss application must be acknowledged after its native
+                 * progression write completes. */
                 if (value &&
                     boss_sync_is_completion_flag(s_flag_bits[i].name))
                     notify_remote_boss_completion(i);
             }
         }
     }
-    capture_caches();
+    /* apply_flag reconciles each key independently.  Do not capture the whole
+       save here: a partial or stale snapshot may arrive after a local pickup
+       but before its rate-limited SET_FLAG send, and a blanket capture would
+       silently mark that local gain as already published. */
+    s_applying_live_team_state = 0;
     recomp_printf("[ItemSync] Applied compact team state (%d changes).\n", applied);
 }
 
@@ -1762,11 +1839,11 @@ static void process_incoming_packets(void)
         }
         else if (mnsg_json_string_equals(pkt, "type", "UPDATE_TEAM_STATE"))
         {
-            apply_team_state(pkt);
+            apply_team_state(pkt, 0);
         }
         else if (mnsg_json_string_equals(pkt, "type", "MNSG_TEAM_STATE"))
         {
-            apply_team_state(pkt);
+            apply_team_state(pkt, 1);
         }
         else if (mnsg_json_string_equals(pkt, "type", "REQUEST_TEAM_STATE"))
         {
@@ -1901,8 +1978,9 @@ static int broadcast_team_state_snapshot(void)
                                          team_id, 0, 0);
     if (team_id)
         recomp_free(team_id);
-    if (sent)
-        capture_caches();
+    /* This is a live, nonqueued merge broadcast.  Keep any gains made during
+       the post-load delay dirty so monitor_and_send_changes still publishes
+       their durable SET_FLAG packets for teammates who are offline. */
     return sent;
 }
 
@@ -2087,6 +2165,8 @@ void item_sync_update(void)
 {
     int is_connected = anchor_is_connected() && !anchor_is_disabled();
 
+    anchor_miracle_moon_update_room(D_800C7AB2);
+
     /* A pending visual check is meaningful only in the room where its remote
        save update arrived.  Dropping it on transition prevents a later visit
        to the same numeric room from consuming a stale one-shot marker. */
@@ -2135,6 +2215,7 @@ void item_sync_update(void)
         s_set_flag_send_timer = 0;
         s_team_state_request_pending = 0;
         s_team_snapshot_broadcast_timer = -1;
+        s_pending_miracle_moon_completion = MOON_COMPLETION_NONE;
         clear_visual_collectible_pending();
         clear_door_unlock_pending();
         boss_sync_reset();
@@ -2150,7 +2231,11 @@ void item_sync_update(void)
          * must be force-cleared before another file can be loaded. */
         int offline_valid = save_is_loaded();
         if (!offline_valid)
+        {
             boss_sync_reset();
+            anchor_miracle_moon_reset();
+            s_pending_miracle_moon_completion = MOON_COMPLETION_NONE;
+        }
         s_save_was_valid = offline_valid;
         return;
     }
@@ -2170,6 +2255,8 @@ void item_sync_update(void)
         else
         {
             reset_caches();
+            anchor_miracle_moon_reset();
+            s_pending_miracle_moon_completion = MOON_COMPLETION_NONE;
             clear_visual_collectible_pending();
             clear_door_unlock_pending();
             s_push_cursor = PUSH_IDLE;
@@ -2201,6 +2288,7 @@ void item_sync_update(void)
 
     /* ── Process incoming packets ─────────────────────────────────────── */
     process_incoming_packets();
+    apply_pending_miracle_moon_completion();
     apply_pending_boss_flags();
 
     if (s_team_snapshot_broadcast_timer == 0 &&

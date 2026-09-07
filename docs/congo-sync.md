@@ -22,6 +22,28 @@ to another participant between attacks. Dead, scripted, stale, out-of-room and
 disconnected remote players are excluded. It does not pass a remote rendering
 task to functions that require a native playable character.
 
+## Miracle Moon and the exit
+
+Miracle Moon ownership (`mi_moon`, save word `+0x254`) and completion of its
+pickup scene (`fl_mi_moon`, packed save flag `0xA4`) are shared separately.
+The native script grants the item before the reward actor finishes the scene
+and sets its completion flag. Sharing only the inventory word leaves the
+other client's reward and exit waiting for that final native state.
+
+Receiving completion removes the bound Moon reward while it is still
+uncollected. It does not interrupt a local pickup whose scenario has already
+started; that scene keeps its native control-release and cleanup sequence,
+then reaches the same completion flag. Congo's existing exit door observes
+the flag and runs its normal opening animation. The native camera can then
+show the exit through its own reaction. This does not move another player's
+character through the doorway or replay the pickup scene for them.
+
+Both values use the existing durable `SET_FLAG` queue and compact team
+snapshots, including late joins and reconnects. The shared send budget remains
+one `SET_FLAG` every four item-sync updates; there is no new Moon, door or
+camera packet stream. All clients should use the updated mod so they recognize
+the completion flag and its live reward behavior.
+
 ## Network contract
 
 `py/anchor_congo.py` owns the transient `MNSG_CONGO` protocol. Encounter identity
@@ -143,7 +165,7 @@ coordinator and Python transport tests cover checkpoint adoption, pause,
 authority changes, hit retry/deduplication and stale session/visit/epoch work.
 UndefinedBehaviorSanitizer and MIPS compilation are used alongside source
 review of the native instruction paths. The final run passed 119 Python tests
-and 10 C/UndefinedBehaviorSanitizer suites. Both release and debug archives
+and 12 C/UndefinedBehaviorSanitizer programs. Both release and debug archives
 passed integrity checks and contain both Python modules exactly as built from
 source; their compiled mod binaries differ as required.
 
@@ -159,6 +181,11 @@ at full white, then verifies one-time overlay release for first checkpoints
 at every terminal phase, stale combat checkpoints, missing packets/parts,
 network waiting and a local pause/resume. This is an offline lifecycle test,
 not a rendered two-client result.
+
+Moon regressions cover local pickup ownership, scheduler-selected pickup
+callbacks, room and actor identity, valid task-list relinking, remote reward
+removal, deferred live versus durable completion, and stale/partial snapshot
+merges that must preserve an unsent local gain.
 
 No in-game or fresh two-client certification was performed for this change;
 the user requested to do that verification. The native simulation and effect
