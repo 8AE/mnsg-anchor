@@ -67,7 +67,7 @@ work instead of relabeling an old attack with the new identity.
 
 Start and the invitation dialog pause local application and hit delivery.
 If the elected simulator pauses, its checkpoint pauses the shared boss
-timeline. Networking remains active. A paused recipient retains the latest
+combat timeline. Networking remains active. A paused recipient retains the latest
 checkpoint and applies it after the local world resumes.
 
 ## Native ownership and damage
@@ -86,6 +86,23 @@ adoption is pending, preventing hit acknowledgments or publication of an old
 local state during a handoff. Overlay callback tables are populated at runtime
 on each root initialization so room reloads use the current overlay addresses.
 
+Early invitation joins preserve the intro's one-time boss-music cue before
+skipping to combat. Later checkpoints do not restart it. The root status wire
+word uses bit `1` for native recovery and bit `2` for the authority's camera
+quake event. Only bit `1` is copied into native actor status; bit `2` controls
+transient camera event `0xB`. Sending the actual event also respects Hyper
+Congo's suppression of a previously consumed threshold. The native camera
+uses the encounter tick for its shake cadence during its own callback.
+
+All twelve spin rays reconcile against the shared phase and timer. The native
+stop flag is consumed by ray callbacks and is insufficient as a checkpoint.
+Winddown's last 30 ticks put every owned ray into native fade; a later attack
+phase removes any remaining rays. Late constructors adopt the same fade age,
+including during an authority handoff. Repeated checkpoints cannot brighten
+fading rays, and queued duplicate direction/material pairs are retired.
+These effects use the existing checkpoint fields and 10 Hz publisher, with
+no new event packets. All clients should update together for the camera bit.
+
 `anchor_congo_damage.c` observes local native attack episodes and intercepts
 only the exact bound Congo root at the common damage intake. It consumes the
 contact before that routine can change health or invoke a hit/death callback.
@@ -101,12 +118,21 @@ call, keeping the resulting recovery or death state. It does not simulate a
 normal attack through the native one-point synthetic-damage bypass.
 
 `boss_sync.c` still handles terminal synchronization for the other bosses.
-For a shared Congo encounter, checkpoint state controls victory; a legacy
+For a shared Congo encounter, checkpoint state triggers victory; a legacy
 room-only defeat packet cannot independently kill an owner or follower.
 Congo's durable kill/reward flags stay deferred until the native victory
 callback has begun, including the frame between health reaching zero and that
 callback running. Outside shared mode, the prior native defeat path remains
 available.
+
+The first received victory checkpoint starts the complete native death
+sequence once, even if that checkpoint is already near its end. Subsequent
+checkpoints cannot replace its root/part callbacks, timers or camera events.
+This lets each client's white fade run to zero and release its native render
+object before the camera returns control. A network wait, an owner leaving,
+or a missing final checkpoint cannot suspend this cleanup. Native local
+Start/flute/dialog pauses still apply. The inherited combat shake flag is
+released at victory entry so it cannot trap the camera in its spin callback.
 
 ## Verification
 
@@ -116,10 +142,23 @@ queue backpressure, allocation failure and native context restoration. The
 coordinator and Python transport tests cover checkpoint adoption, pause,
 authority changes, hit retry/deduplication and stale session/visit/epoch work.
 UndefinedBehaviorSanitizer and MIPS compilation are used alongside source
-review of the native instruction paths. The final run passed 118 Python tests
+review of the native instruction paths. The final run passed 119 Python tests
 and 10 C/UndefinedBehaviorSanitizer suites. Both release and debug archives
 passed integrity checks and contain both Python modules exactly as built from
 source; their compiled mod binaries differ as required.
+
+Effect regressions exercise the intro music boundary, actual quake-bit
+round trips and scoped clock restoration, twelve scheduled ray constructors,
+missed stop/ending updates, fade-age catch-up, pause, duplicate checkpoints,
+allocation retry and owner handoff. The transport regression retains exactly
+20 snapshots over two seconds while toggling the quake flag.
+
+The victory regression models the native terminal callbacks and owned white
+overlay. It reproduces the old failure by delivering a completed checkpoint
+at full white, then verifies one-time overlay release for first checkpoints
+at every terminal phase, stale combat checkpoints, missing packets/parts,
+network waiting and a local pause/resume. This is an offline lifecycle test,
+not a rendered two-client result.
 
 No in-game or fresh two-client certification was performed for this change;
 the user requested to do that verification. The native simulation and effect

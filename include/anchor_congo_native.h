@@ -16,6 +16,12 @@ enum AnchorCongoRootField {
     CONGO_VX, CONGO_VY, CONGO_VZ, CONGO_SOUND_COOLDOWN,
     CONGO_RADIUS, CONGO_HEIGHT, CONGO_COLLIDER_Y
 };
+/* CONGO_STATUS is a wire field: only RECOVERY maps to task+0x68.
+ * CAMERA_QUAKE carries native transient event0xB, never the task removal bit. */
+enum AnchorCongoStatusBits {
+    CONGO_STATUS_RECOVERY=1u,
+    CONGO_STATUS_CAMERA_QUAKE=2u
+};
 enum AnchorCongoPartField { CONGO_CLIP, CONGO_FRAME, CONGO_PART_FLAGS, CONGO_PART_HIDDEN };
 enum AnchorCongoFlameField { CONGO_FLAME_ID, CONGO_FLAME_BORN, CONGO_FLAME_VARIANT,
     CONGO_FLAME_X, CONGO_FLAME_Y, CONGO_FLAME_Z, CONGO_FLAME_YAW };
@@ -35,7 +41,9 @@ unsigned int anchor_congo_native_visit(void);
 int anchor_congo_native_capture(AnchorCongoNativeSnapshot *snapshot);
 /* Accepts the latest checkpoint into one bounded native-pre queue. Capture
  * returns zero until it is applied, preventing publication/damage before
- * adoption. Zero rejects invalid/unready input. */
+ * adoption. Once native victory starts, valid checkpoints are acknowledged
+ * without replacing the local death/camera/fade sequence. Zero rejects
+ * invalid/unready input. */
 int anchor_congo_native_apply(const AnchorCongoNativeSnapshot *snapshot);
 /* Call once after the scheduler, before bridge capture/apply. */
 void anchor_congo_native_tick(void);

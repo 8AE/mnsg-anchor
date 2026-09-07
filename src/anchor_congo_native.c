@@ -29,12 +29,14 @@ extern void *func_8021DDE8_5D92B8(void *, CongoCallback, unsigned char,
                                 float, float, float, int);
 extern void func_8021664C_5D1B1C(void *, unsigned int, float, unsigned int);
 extern float func_8001B5AC_1C1AC(void *);
-extern unsigned char D_8015C562_15D162;
 extern unsigned char D_8015CC30_15D830[];
 extern void func_80023DF0_249F0(unsigned int);
 extern void func_80024038_24C38(unsigned int);
 extern void func_80023E40_24A40(unsigned int);
+extern int func_80023E94_24A94(int);
+extern void func_80038B98_39798(unsigned short);
 extern void func_08000DCC_6B406C(void *, void *);
+extern void func_080009C4_6B3C64(void *, void *);
 extern void func_08000F44_6B41E4(void *, void *);
 extern void func_0800110C_6B43AC(void *, void *);
 extern void func_080066F4_6B9994(void *, void *);
@@ -141,8 +143,8 @@ typedef struct CongoFlame {
 static CongoActor s_root, s_parts[6], s_camera, s_rays[12];
 static CongoFlame s_flames[32];
 static unsigned int s_part_clip[6], s_visit, s_tick, s_spin_serial, s_flame_serial;
-static unsigned int s_ray_age;
-static unsigned int s_terminal_phase;
+static unsigned int s_ray_age,s_ray_phase,s_ray_timer,s_ray_tick,s_ray_spawn_tick;
+static int s_ray_checkpoint,s_ray_replay;
 static unsigned int s_seen_flames[64], s_seen_next;
 static int s_active, s_owner, s_paused, s_adopted, s_reconstructing;
 static int s_root_post_seen;
@@ -157,6 +159,9 @@ static unsigned int s_health_saved;
 static void *s_health_root;
 static unsigned short s_emitter_clock;
 static int s_emitter_scoped;
+static unsigned int s_follower_quake,s_quake_depth;
+static unsigned short s_quake_clock;
+static unsigned char *s_quake_system;
 
 /* The freestanding mod has no libc memset/memcpy imports. Volatile byte
  * stores retain these bounded operations when Clang optimizes large structs. */
@@ -271,8 +276,10 @@ void anchor_congo_native_reset(void)
     for(i=0;i<32;i++) zero_bytes(&s_flames[i],sizeof(s_flames[i]));
     for(i=0;i<64;i++) s_seen_flames[i]=0;
     s_tick=s_spin_serial=s_flame_serial=s_seen_next=0;
-    s_terminal_phase=0;
+    s_ray_age=s_ray_phase=s_ray_timer=s_ray_tick=s_ray_spawn_tick=0;
+    s_ray_checkpoint=s_ray_replay=0;
     s_adopted=s_terminal_started=s_target_valid=0;
+    s_follower_quake=0;
     s_root_post_seen=0;s_pending_valid=0;
 }
 void anchor_congo_native_set_role(int active,int owner,int paused)
@@ -308,7 +315,7 @@ void anchor_congo_native_target_end(void)
 RECOMP_HOOK("func_0800A228_6BD4C8")
 void anchor_congo_native_health_begin(void *task)
 {
-    if(s_active && !s_owner && !s_reconstructing && !s_health_root &&
+    if(s_active && !s_owner && !s_terminal_started && !s_reconstructing && !s_health_root &&
        anchor_congo_native_is_root(task)) {
         s_health_root=task;s_health_saved=U32(task,0xE8)&0x04000000u;
         U32(task,0xE8)&=~0x04000000u;
@@ -337,6 +344,28 @@ void anchor_congo_native_emitter_end(void)
     if(s_emitter_scoped && D_8015C5C8_15D1C8)
         U16(D_8015C5C8_15D1C8,0x3ADCE)=s_emitter_clock;
     s_emitter_scoped=0;
+}
+/*8E54 samples framecounter%4 to oscillate its camera target. Share that
+ * cadence only during this owned callback; the rest of the local world
+ * keeps its framecounter. A nested callback must not restore the outer
+ * scope before the outer native call returns. */
+RECOMP_HOOK("func_08008E54_6BC0F4")
+void anchor_congo_native_quake_begin(void *task)
+{
+    if(s_quake_depth){s_quake_depth++;return;}
+    if(!s_active || !D_8015C5C8_15D1C8 || task!=s_camera.task ||
+       !live(&s_camera) || !anchor_congo_native_ready())return;
+    s_quake_system=D_8015C5C8_15D1C8;
+    s_quake_clock=U16(s_quake_system,0x3ADCE);
+    U16(s_quake_system,0x3ADCE)=(unsigned short)((s_quake_clock&~3u)|(s_tick&3u));
+    s_quake_depth=1;
+}
+RECOMP_HOOK_RETURN("func_08008E54_6BC0F4")
+void anchor_congo_native_quake_end(void)
+{
+    if(!s_quake_depth || --s_quake_depth)return;
+    U16(s_quake_system,0x3ADCE)=(unsigned short)((U16(s_quake_system,0x3ADCE)&~3u)|(s_quake_clock&3u));
+    s_quake_system=0;
 }
 RECOMP_HOOK_RETURN("func_08005EDC_6B917C")
 void anchor_congo_native_bind_root(void)
@@ -391,23 +420,77 @@ void anchor_congo_native_animation(void *task,unsigned int clip)
 RECOMP_HOOK("func_08009C04_6BCEA4")
 void anchor_congo_native_spin(void *task)
 {
-    if(anchor_congo_native_is_root(task) && !s_reconstructing) s_spin_serial++;
+    if(anchor_congo_native_is_root(task) && !s_reconstructing) {
+        s_spin_serial++;s_ray_replay=0;
+    }
 }
 RECOMP_HOOK("func_08007D24_6BAFC4")
 void anchor_congo_native_victory(void *task)
 {
     if(anchor_congo_native_is_root(task))s_terminal_started=1;
 }
+/*7C18 reasserts E8:80 on every winddown tick <=30.09C4 consumes that
+ * shared bit, so a settled checkpoint can legitimately contain zero while
+ * some or all twelve rays still need to fade. Reconcile each owned child
+ * from the durable phase/timer, never from that consumed pulse. */
+static unsigned int ray_stage(unsigned int *opacity)
+{
+    unsigned int elapsed=s_tick-s_ray_tick,timer=s_ray_timer;
+    *opacity=64u;
+    if(s_ray_phase<14u || s_ray_phase>16u)return 0;
+    if(s_ray_phase!=16u)return 1;
+    timer=elapsed>=timer?0u:timer-elapsed;
+    if(timer>30u)return 1;
+    if(!timer)return 0;
+    *opacity=4u+2u*timer;
+    return 2;
+}
+static void reconcile_ray(CongoActor *ray)
+{
+    unsigned int opacity,stage;
+    if(!live(ray) || CONGO_PTR(ray->task,0xD0)!=s_root.task)return;
+    stage=ray_stage(&opacity);
+    if(!stage) {unhold(ray);U32(ray->task,0x68)|=2u;return;}
+    if(stage==2u) {
+        /*077C's transition only selects09C4; it has no fade initializer.
+         * Keep local hit flags and let the scheduled native callback own
+         * color, yaw and deletion. Corrections may advance but never rewind
+         * an already fading child within the same spin. */
+        if(ray->held)ray->held_ai=func_080009C4_6B3C64;
+        else CONGO_AI(ray->task)=(CongoCallback)((unsigned long)func_080009C4_6B3C64|
+                                ((unsigned long)CONGO_AI(ray->task)&CALLBACK_DISABLED));
+        if(U8(ray->task,0xEC)>opacity)U8(ray->task,0xEC)=(unsigned char)opacity;
+    }
+}
+static void reconcile_rays(void)
+{
+    unsigned int i;
+    for(i=0;i<12;i++)reconcile_ray(&s_rays[i]);
+}
 RECOMP_HOOK_RETURN("func_080005F4_6B3894")
 void anchor_congo_native_ray(void)
 {
     void *task=D_8016DAB4_16E6B4;
     unsigned int i;
+    int managed=s_active && s_ray_checkpoint && (!s_owner || s_ray_replay);
     if(!pointer_valid(task) || !anchor_congo_native_is_root(CONGO_PTR(task,0xD0))) return;
+    /* Two checkpoints can enqueue children before a paused constructor
+     * runs. Keep one native ray per direction/material; a late duplicate
+     * must never become an untracked beam outside the twelve owned slots. */
+    if(managed)for(i=0;i<12;i++)if(live(&s_rays[i]) &&
+        (U32(s_rays[i].task,0xE8)&0x410Fu)==(U32(task,0xE8)&0x410Fu)) {
+        U32(task,0x68)|=2u;return;
+    }
     for(i=0;i<12;i++) if(!live(&s_rays[i])) {
         bind(&s_rays[i],task);
-        if(s_active && !s_owner && s_adopted)
-            F32(s_rays[i].object,0x24)=(float)(s_ray_age>=29u?30u:1u+s_ray_age);
+        if(managed) {
+            float scale=(U32(task,0xE8)&0x4000u)?1.1f:1.f;
+            scale+=(float)s_ray_age;
+            F32(s_rays[i].object,0x24)=scale>30.f?30.f:scale;
+            /* Constructors are scheduled after their parent. A checkpoint
+             * may already be in fade/end by the time a child initializes. */
+            reconcile_ray(&s_rays[i]);
+        }
         return;
     }
 }
@@ -443,6 +526,11 @@ RECOMP_HOOK("func_80034734_35334")
 void anchor_congo_native_scheduler_begin(void)
 {
     unsigned int i;
+    /* Victory owns a local camera and render-object fade, whose cleanup
+     * must run even when the network is waiting or a final checkpoint is
+     * lost. Native Start/flute/dialog gates still control native execution;
+     * release_all preserves their callback-disable tags. */
+    if(s_terminal_started && anchor_congo_native_root_task()) {release_all();return;}
     if(!s_active || !anchor_congo_native_ready() || !phase_of(root_ai()))return;
     prepare_follower();
     if((!s_owner && phase_of(root_ai())<PHASE_VICTORY) || s_paused || s_pending_valid)
@@ -469,7 +557,7 @@ void anchor_congo_native_tick(void)
     /* The native pre can skip AI/post on the same frame Start/flute begins,
      * before the bridge learns that pause. Count actual post passes instead
      * of yesterday's role/pause value or the wall clock. */
-    if(advanced && s_active && !s_paused && anchor_congo_native_ready() &&
+    if(advanced && s_active && (!s_paused || s_terminal_started) && anchor_congo_native_ready() &&
        phase_of(root_ai()) && (s_owner||s_adopted))s_tick++;
     for(i=0;i<32;i++) if(!live(&s_flames[i].actor))zero_bytes(&s_flames[i].actor,sizeof(s_flames[i].actor));
 }
@@ -482,7 +570,7 @@ static int snapshot_valid(const AnchorCongoNativeSnapshot *s)
        s->root[CONGO_HURT]>60u || s->flame_count>32u) return 0;
     if((s->root[CONGO_FLAGS]&~ROOT_FLAGS_MASK) ||
        (s->root[CONGO_FLAGS2]&~ROOT_FLAGS2_MASK) ||
-       (s->root[CONGO_STATUS]&~1u) ||
+       (s->root[CONGO_STATUS]&~(CONGO_STATUS_RECOVERY|CONGO_STATUS_CAMERA_QUAKE)) ||
        (s->root[CONGO_SPECIAL]&~ROOT_SPECIAL_MASK))return 0;
     for(i=CONGO_X;i<=CONGO_Z;i++)if(!sane_float(s->root[i],-32768.f,32768.f))return 0;
     for(i=CONGO_RX;i<=CONGO_RZ;i++)if(s->root[i]>1023u)return 0;
@@ -510,7 +598,9 @@ static void capture_root(unsigned int *r)
     r[CONGO_PHASE]=phase_of(root_ai());r[CONGO_TIMER]=U16(t,0x8A);
     r[CONGO_HP]=U8(t,0x8D);r[CONGO_HURT]=U8(t,0x8C);
     r[CONGO_FLAGS]=U32(t,0x60)&ROOT_FLAGS_MASK;r[CONGO_FLAGS2]=U32(t,0x64)&ROOT_FLAGS2_MASK;
-    r[CONGO_STATUS]=U32(t,0x68)&1u;r[CONGO_SPECIAL]=U32(t,0xE8)&ROOT_SPECIAL_MASK;
+    r[CONGO_STATUS]=(U32(t,0x68)&CONGO_STATUS_RECOVERY)|
+        (func_80023E94_24A94(0xB)!=0?CONGO_STATUS_CAMERA_QUAKE:0u);
+    r[CONGO_SPECIAL]=U32(t,0xE8)&ROOT_SPECIAL_MASK;
     for(i=0;i<3;i++) {
         r[CONGO_X+i]=float_bits(F32(o,8+i*4));
         r[CONGO_RX+i]=U16(o,0x14+i*2);
@@ -588,7 +678,7 @@ static int congo_camera_is_intro(CongoCallback ai)
 }
 static void prepare_follower(void);
 
-static int finish_intro(void)
+static int finish_intro(unsigned int target_phase)
 {
     CongoCallback ai;
     if(phase_of(root_ai()))return 1;
@@ -598,6 +688,13 @@ static int finish_intro(void)
     /* The exact callback list is declared below rather than accepting an
      * arbitrary pointer range from this overlay. */
     if(!congo_camera_is_intro(ai))return 0;
+    /*8560 queues Congo's music cue when its countdown reaches25 (it starts
+     * at30). Early adoption skips that callback, so preserve its one-time
+     * audio request. Later intro callbacks/countdowns have already played
+     * it; terminal adoption must not start combat music before victory. */
+    if(target_phase<PHASE_VICTORY && !s_terminal_started &&
+       ai==func_08008560_6BB800 && U16(s_camera.task,0x8A)>=25u)
+        func_80038B98_39798(0x003D);
     func_80024038_24C38(0x128);func_80024038_24C38(0x12F);
     func_80024038_24C38(0x133);
     U8(s_camera.task,0xDD)=2;
@@ -640,9 +737,18 @@ static void spawn_flame(const unsigned int *seed,unsigned int now)
     if(seed[0]>s_flame_serial)s_flame_serial=seed[0];remember(seed[0]);
 }
 static unsigned int s_follower_flags,s_follower_yaw,s_follower_phase,s_snapshot_tick;
+static void restore_camera_quake(unsigned int status)
+{
+    if(status&CONGO_STATUS_CAMERA_QUAKE)func_80023DF0_249F0(0xB);
+    else func_80023E40_24A40(0xB);
+}
 static void prepare_follower(void)
 {
+    if(s_terminal_started)return;
+    if(!s_owner && s_adopted && anchor_congo_native_root_task())
+        restore_camera_quake(s_follower_quake);
     if(!s_owner && s_adopted && s_follower_phase<PHASE_VICTORY && anchor_congo_native_root_task()) {
+        if(s_ray_checkpoint)reconcile_rays();
         U32(s_root.task,0xE8)=(U32(s_root.task,0xE8)&~ROOT_SPECIAL_MASK)|s_follower_flags;
         if(s_follower_phase==15u)U16(s_root.object,0x16)=
             (unsigned short)((s_follower_yaw+(s_tick-s_snapshot_tick)*4u)&1023u);
@@ -650,39 +756,37 @@ static void prepare_follower(void)
 }
 static int apply_now(const AnchorCongoNativeSnapshot *s)
 {
-    unsigned int i,j,current_phase,root_fields[24];void *resource;
+    unsigned int i,j;void *resource;
     if(!snapshot_valid(s) || !anchor_congo_native_root_task())return 0;
+    /* Terminal phases are not freely seekable:820C allocates a white
+     * render object,8280 raises its opacity, and only82F8 fades and frees
+     * it. A newer25/26 checkpoint must not skip that local resource owner.
+     * Once native victory starts, even a stale combat takeover is only an
+     * acknowledgment; root, parts, events and timers remain native-owned. */
+    if(s_terminal_started) {release_all();return 1;}
     for(i=0;i<6;i++)if(!live(&s_parts[i]))return 0;
     resource=func_800141C4_14DC4(0x1D);
     if(!resource || (unsigned long)resource==0xFFFFFFFFul)return 0;
     release_all();
-    if(!finish_intro())return 0;
-    current_phase=phase_of(root_ai());
-    if(s_terminal_started && s->root[CONGO_PHASE]>=PHASE_VICTORY &&
-       current_phase>s->root[CONGO_PHASE]) {
-        /* A remote correction cannot replay a local victory entry already
-         * consumed. This also makes repeated phase19 checkpoints harmless. */
-        s_tick=s->tick;
-        return 1;
-    }
-    for(i=0;i<24;i++)root_fields[i]=s->root[i];
-    if(s_terminal_started && current_phase>=PHASE_VICTORY &&
-       current_phase==root_fields[CONGO_PHASE] &&
-       U16(s_root.task,0x8A)<root_fields[CONGO_TIMER])
-        root_fields[CONGO_TIMER]=U16(s_root.task,0x8A);
+    if(!finish_intro(s->root[CONGO_PHASE]))return 0;
     s_reconstructing=1;
-    if(s->root[CONGO_PHASE]>=PHASE_VICTORY && !s_terminal_started) {
+    apply_root(s->root);
+    if(s->root[CONGO_PHASE]>=PHASE_VICTORY) {
+        /* A first checkpoint from any terminal phase triggers the complete
+         * native death once, including its camera and white fade lifecycle.
+         * Leave7D24's own7DEC/timer120 continuation intact. */
         U8(s_root.task,0x8D)=0;U32(s_root.task,0xE8)|=0x04000000u;
         call_as(&s_root,func_0800A228_6BD4C8);
         call_as(&s_root,func_08007D24_6BAFC4);
-        s_terminal_started=1;
+        s_terminal_started=s_adopted=1;s_reconstructing=0;
+        s_tick=s->tick;s_spin_serial=s->spin_serial;
+        s_follower_quake=0;restore_camera_quake(0);
+        s_ray_phase=PHASE_VICTORY;s_ray_timer=0;s_ray_tick=s_tick;
+        s_ray_checkpoint=s_ray_replay=1;reconcile_rays();
+        return 1;
     }
-    if(root_fields[CONGO_PHASE]==PHASE_VICTORY) {
-        /*7D24's one-time entry just ran above (or ran natively). Its pending
-         * continuation is7DEC; never put7D24 back into the task. */
-        root_fields[CONGO_PHASE]=20u;root_fields[CONGO_TIMER]=120u;
-    }
-    apply_root(root_fields);
+    s_follower_quake=s->root[CONGO_STATUS]&CONGO_STATUS_CAMERA_QUAKE;
+    restore_camera_quake(s_follower_quake);
     /* Settled part state replaces global one-frame animation pulses; this
      * also restores missing late-join parts without restarting every frame. */
     for(i=0;i<9;i++)func_80023E40_24A40(i);
@@ -705,13 +809,26 @@ static int apply_now(const AnchorCongoNativeSnapshot *s)
         CONGO_AI(task)=s->part[i][3]?func_080073D0_6BA670:s_part_updates[i];
         U16(o,0x16)=(unsigned short)s->root[CONGO_YAW];
     }
-    if(s->spin_serial!=s_spin_serial && s->root[CONGO_PHASE]>=14u &&
-       s->root[CONGO_PHASE]<=16u) {
-        for(i=0;i<12;i++)if(live(&s_rays[i]))U32(s_rays[i].task,0x68)|=2u;
-        call_as(&s_root,func_08009C04_6BCEA4);
-    }
     s_ray_age=s->root[CONGO_PHASE]==14u && s->root[CONGO_TIMER]<=90u
                   ?90u-s->root[CONGO_TIMER]:90u;
+    {
+        unsigned int count=0,opacity,stage;
+        int new_spin=s->spin_serial!=s_spin_serial,first=!s_ray_checkpoint;
+        if(new_spin)for(i=0;i<12;i++)if(live(&s_rays[i]))U32(s_rays[i].task,0x68)|=2u;
+        for(i=0;i<12;i++)if(live(&s_rays[i]))count++;
+        s_ray_phase=s->root[CONGO_PHASE];s_ray_timer=s->root[CONGO_TIMER];
+        s_ray_tick=s->tick;s_tick=s->tick;s_ray_checkpoint=1;
+        stage=ray_stage(&opacity);
+        /* At most one native twelve-child allocation per checkpoint. Retry
+         * a completely failed allocation on a later active checkpoint;
+         * never respawn an expired fade on duplicates or later phases. */
+        if(stage && (new_spin || (first && !count) ||
+           (stage==1u && !count && s->tick-s_ray_spawn_tick>=6u))) {
+            s_ray_spawn_tick=s->tick;s_ray_replay=1;
+            call_as(&s_root,func_08009C04_6BCEA4);
+        }
+        reconcile_rays();
+    }
     s_spin_serial=s->spin_serial;s_tick=s->tick;
     /* Remove authority-expired flames; a complete active set accompanies
      * checkpoints, so entering late or losing a birth packet is recoverable. */
@@ -720,20 +837,8 @@ static int apply_now(const AnchorCongoNativeSnapshot *s)
         if(j==s->flame_count)U32(s_flames[i].actor.task,0x68)|=2u;
     }
     for(i=0;i<s->flame_count;i++)spawn_flame(s->flame[i],s->tick);
-    /* A late checkpoint may skip a one-tick victory callback. Apply only
-     * its monotonic milestones, while the owned local native death/camera
-     * chain continues to render its own cosmetic explosions between them. */
-    if(s->root[CONGO_PHASE]>=PHASE_VICTORY) {
-        if(s_terminal_phase<20u)for(i=1;i<=5;i++)func_80023DF0_249F0(i);
-        if(s->root[CONGO_PHASE]>=22u && s_terminal_phase<22u)func_80023DF0_249F0(0);
-        if(s->root[CONGO_PHASE]>=23u && s_terminal_phase<23u)D_8015C562_15D162=1;
-        if(s->root[CONGO_PHASE]>=26u && s_terminal_phase<26u) {
-            func_80024038_24C38(0x12B);func_80024038_24C38(0x12E);
-            D_8015C562_15D162=0;
-        }
-        if(s->root[CONGO_PHASE]>s_terminal_phase)s_terminal_phase=s->root[CONGO_PHASE];
-    }
     s_reconstructing=0;s_adopted=1;
+    restore_camera_quake(s_follower_quake);
     s_follower_flags=s->root[CONGO_SPECIAL];s_follower_yaw=s->root[CONGO_YAW];
     s_follower_phase=s->root[CONGO_PHASE];s_snapshot_tick=s->tick;
     return 1;
@@ -741,7 +846,9 @@ static int apply_now(const AnchorCongoNativeSnapshot *s)
 
 int anchor_congo_native_apply(const AnchorCongoNativeSnapshot *s)
 {
-    if(!snapshot_valid(s) || !anchor_congo_native_ready())return 0;
+    if(!snapshot_valid(s) || !anchor_congo_native_root_task())return 0;
+    if(s_terminal_started)return 1;
+    if(!anchor_congo_native_ready())return 0;
     copy_bytes(&s_pending_snapshot,s,sizeof(s_pending_snapshot));s_pending_valid=1;
     /* Acceptance is distinct from publication: capture is unavailable until
      * native pre applies this queue. This avoids chasing a10Hz stream forever

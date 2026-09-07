@@ -159,6 +159,33 @@ class CongoTransportTests(unittest.TestCase):
         self.assertTrue(all(b[0] - a[0] >= 0.1 - 1e-8 for a, b in zip(packets, packets[1:])))
         self.assertEqual({cid for _, cid, _ in self.net.packets()}, {2})
 
+    def test_transient_flag_checkpoint_survives_stream_without_extra_packets(self):
+        self.net.start()
+        self.net.history.clear()
+        for frame in range(120):
+            checkpoint = state(hp=17, tick=frame + 1)
+            # Native status packs observed event B into bit 1, independently
+            # of the recovery bit and HP thresholds. Preserve both 2 and 3.
+            checkpoint["r"][6] = 2 | ((frame // 12) & 1)
+            self.net.states[2] = checkpoint
+            self.net.tick(1 / 60)
+        packets = self.net.packets()
+        self.assertEqual(len(packets), 20)
+        self.assertEqual({(cid, p["op"]) for _, cid, p in packets}, {(2, "s")})
+        self.assertEqual({p["d"]["r"][6] for _, _, p in packets}, {2, 3})
+        latest = packets[-1][2]["d"]
+        self.assertEqual(latest["r"][6], 3)
+        self.assertEqual(self.b._congo.state, latest)
+        revision = self.b._congo.revision
+        self.net.deliver(self.b, packets[0][2])
+        self.assertEqual(self.b._congo.state, latest)
+        self.assertEqual(self.b._congo.revision, revision)
+        # The bridge returns the same persistent flag; it is not a separately
+        # replayed event or inferred from the deliberately non-threshold HP.
+        status = json.loads(self.b.update_congo(1, 1, 0, "null"))
+        self.assertEqual(status["state"]["r"][6], 3)
+        self.assertEqual(status["state"]["r"][2], 17)
+
     def test_unchanged_state_keepalive_and_owner_pause(self):
         self.net.start()
         self.net.history.clear()
