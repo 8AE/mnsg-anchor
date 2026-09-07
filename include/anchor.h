@@ -348,7 +348,8 @@ extern "C"
     * @param payload_json     JSON object with additional fields, or "{}"/NULL.
     * @param target_team_id   Restrict delivery to this team (or "" for entire room).
     * @param target_client_id Restrict delivery to this client ID (0 = no filter).
-    * @param add_to_queue     If non-zero, queue for offline recipients.
+    * @param add_to_queue     If non-zero with a team target, queue for offline
+    *                         teammates. Ignored by Anchor for room/direct routes.
     *
     * @return 1 on success, 0 on failure.
     */
@@ -357,9 +358,11 @@ extern "C"
                                  int add_to_queue);
 
    /**
-    * @brief Send a raw JSON packet string directly to the server.
+    * @brief Send a validated raw JSON packet string to the server.
     *
     * Use this for any Anchor packet type not covered by the helpers above.
+    * The transport replaces root clientId with the assigned connection ID,
+    * rejects HANDSHAKE/HEARTBEAT, and validates target/queue combinations.
     *
     * @param packet_json  A complete JSON object string.
     * @return 1 on success, 0 on failure.

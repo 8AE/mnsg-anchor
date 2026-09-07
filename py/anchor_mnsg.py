@@ -25,7 +25,7 @@ Key packet types received from the server:
   ALL_CLIENT_STATE   - Full snapshot of every client state in the room.
   UPDATE_TEAM_STATE  - A teammate's save state (response to REQUEST_TEAM_STATE).
   UPDATE_ROOM_STATE  - Room settings changed.
-  HEARTBEAT          - Keep-alive ping; we echo it back.
+  HEARTBEAT          - Server-to-client liveness probe; consume without reply.
   SERVER_MESSAGE     - Text message from the server operator.
   DISABLE_ANCHOR     - Server is kicking this client; disconnect.
   SET_FLAG           - An item/flag acquired by a teammate (queued by the server).
@@ -160,6 +160,12 @@ DEFAULT_PORT: int = 43383
 ROOM_ID_PREFIX: str = "mnsg-"
 ROOM_ID_TRIM_CHARS: str = " \t\n\r\v\f"
 MOVEMENT_MIN_INTERVAL_MS: int = 50
+ANCHOR_MAX_PACKET_BYTES: int = 8 * 1024 * 1024
+HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
+    "MNSG_PLAYER_POS": 640,
+    "MNSG_PLAYER_HIT": 512,
+    "MNSG_PROJECTILE_SPAWN": 512,
+}
 PLAYER_HIT_MAX_AGE_MS: int = 500
 PROJECTILE_MAX_AGE_MS: int = 750
 PROJECTILE_BATCH_COUNT: int = 16
@@ -579,8 +585,36 @@ def _send_raw(packet: dict) -> bool:
     sock = _sock
     if not _connected or sock is None:
         return False
+    if not isinstance(packet, dict):
+        return False
+    packet_type = packet.get("type")
+    if packet_type != "STATS":
+        sender = packet.get("clientId")
+        if type(sender) is not int or sender <= 0 or sender != _client_id:
+            logger.warning(
+                "anchor_mnsg: refusing %r packet without the assigned root clientId",
+                packet_type,
+            )
+            return False
     try:
-        data = (json.dumps(packet, separators=(",", ":")) + "\x00").encode("utf-8")
+        data = (json.dumps(packet, separators=(",", ":"), allow_nan=False) + "\x00").encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        logger.warning("anchor_mnsg: refusing invalid JSON packet: %s", exc)
+        return False
+    if len(data) > ANCHOR_MAX_PACKET_BYTES:
+        logger.warning(
+            "anchor_mnsg: refusing %d-byte packet over Anchor's %d-byte limit",
+            len(data), ANCHOR_MAX_PACKET_BYTES,
+        )
+        return False
+    packet_budget = HOT_PACKET_MAX_BYTES.get(str(packet_type or ""))
+    if packet_budget is not None and len(data) > packet_budget:
+        logger.warning(
+            "anchor_mnsg: refusing %d-byte %s packet over its %d-byte budget",
+            len(data), packet_type, packet_budget,
+        )
+        return False
+    try:
         with _send_lock:
             if not _connected or _sock is not sock:
                 return False
@@ -645,8 +679,10 @@ def _recv_loop(sock: socket.socket) -> None:
                     return
 
                 if ptype == "HEARTBEAT":
-                    # Echo heartbeat back so the server knows we are alive.
-                    _send_raw({"type": "HEARTBEAT", "quiet": True})
+                    # Anchor uses this as a server-to-client write probe and
+                    # refreshes activity after the write succeeds. Echoing it
+                    # would take the generic room-broadcast route and can
+                    # multiply into a heartbeat storm across idle clients.
                     continue  # Don't forward heartbeats to game code.
 
                 if ptype == "SERVER_MESSAGE":
@@ -1381,7 +1417,11 @@ def update_client_state(state_json: str) -> bool:
     with _player_states_lock:
         state["mnsgCongo"] = _congo.advertisement(_congo_context())
 
-    sent = _send_raw({"type": "UPDATE_CLIENT_STATE", "state": state})
+    sent = _send_raw({
+        "type": "UPDATE_CLIENT_STATE",
+        "clientId": _client_id,
+        "state": state,
+    })
     if sent and _client_id:
         with _player_states_lock:
             local = _player_states.setdefault(_client_id, {})
@@ -1697,15 +1737,29 @@ def send_custom_packet(
         payload_json:     Optional JSON object with additional fields.
         target_team_id:   If non-empty, send only to that team.
         target_client_id: If non-zero, send only to that specific client.
-        add_to_queue:     If True, the server queues the packet for offline recipients.
+        add_to_queue:     If True with a team target, queue for offline teammates.
+                          Invalid for room or direct routes.
     """
     try:
         payload: dict = json.loads(payload_json) if payload_json else {}
     except json.JSONDecodeError:
         payload = {}
+    if not isinstance(payload, dict):
+        return False
+    if add_to_queue and (not target_team_id or target_client_id):
+        logger.warning(
+            "anchor_mnsg: addToQueue requires a team target and no direct target"
+        )
+        return False
 
-    packet: dict = {"type": packet_type, "clientId": _client_id}
-    packet.update(payload)
+    # Payloads are feature data, never routing envelopes. Anchor trusts the
+    # root clientId and routes by target fields, so write all reserved fields
+    # after the merge to prevent accidental spoofing or scope changes.
+    packet: dict = dict(payload)
+    for reserved in ("type", "clientId", "targetClientId", "targetTeamId", "addToQueue"):
+        packet.pop(reserved, None)
+    packet["type"] = packet_type or "CUSTOM"
+    packet["clientId"] = _client_id
 
     if target_client_id:
         packet["targetClientId"] = int(target_client_id)
@@ -1714,6 +1768,37 @@ def send_custom_packet(
     if add_to_queue:
         packet["addToQueue"] = True
 
+    return _send_raw(packet)
+
+
+def send_packet(packet_json: str) -> bool:
+    """Send a validated raw Anchor envelope for uncommon packet types.
+
+    The connection owns the root clientId. Queueing is accepted only on the
+    generic team route because Anchor ignores it on room and direct routes.
+    """
+    try:
+        packet = json.loads(packet_json) if packet_json else {}
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(packet, dict):
+        return False
+    packet_type = packet.get("type")
+    if not isinstance(packet_type, str) or not packet_type or packet_type in {"HANDSHAKE", "HEARTBEAT"}:
+        return False
+    if packet_type != "STATS":
+        packet["clientId"] = _client_id
+    target_client = packet.get("targetClientId")
+    if target_client is not None and (type(target_client) is not int or target_client <= 0):
+        return False
+    target_team = packet.get("targetTeamId")
+    if target_team is not None and (not isinstance(target_team, str) or not target_team):
+        return False
+    queued = packet.get("addToQueue", False)
+    if type(queued) is not bool:
+        return False
+    if queued and (target_team is None or target_client is not None):
+        return False
     return _send_raw(packet)
 
 

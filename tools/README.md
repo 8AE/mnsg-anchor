@@ -11,6 +11,10 @@ Run it with UV:
 uv run tools/anchor_stress.py --clients 25 --host localhost --port 43383 --room stress-test
 ```
 
+Run stress tests only against localhost or a self-hosted Anchor server whose
+operator authorized the load. Do not point synthetic clients at the shared
+public Anchor service.
+
 Useful startup options:
 
 - `--clients N`: number of synthetic clients to spawn.

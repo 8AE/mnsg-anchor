@@ -1063,6 +1063,23 @@ static int s_ryo_initialized = 0; /* 0 until baseline captured   */
 
 static char s_team_state_json[TEAM_STATE_JSON_MAX];
 
+/* Route transient team events explicitly. Without targetTeamId Anchor takes
+ * the room-broadcast branch, including players on competing race teams. */
+static int send_team_custom_packet(const char *packet_type,
+                                   const char *payload_json,
+                                   int add_to_queue)
+{
+    char *team_id = anchor_get_team_id();
+    int sent = 0;
+
+    if (team_id && team_id[0])
+        sent = anchor_send_custom_packet(packet_type, payload_json,
+                                         team_id, 0, add_to_queue);
+    if (team_id)
+        recomp_free(team_id);
+    return sent;
+}
+
 /* Schedule one compact response to a team-state request. */
 static void schedule_team_state_response(void)
 {
@@ -1967,21 +1984,12 @@ static int build_team_state_json(void)
  * pre-existing local progress without the old hundreds-of-SET_FLAG flood. */
 static int broadcast_team_state_snapshot(void)
 {
-    char *team_id;
-    int sent = 0;
-
     if (!build_team_state_json())
         return 0;
-    team_id = anchor_get_team_id();
-    if (team_id && team_id[0])
-        sent = anchor_send_custom_packet("MNSG_TEAM_STATE", s_team_state_json,
-                                         team_id, 0, 0);
-    if (team_id)
-        recomp_free(team_id);
     /* This is a live, nonqueued merge broadcast.  Keep any gains made during
        the post-load delay dirty so monitor_and_send_changes still publishes
        their durable SET_FLAG packets for teammates who are offline. */
-    return sent;
+    return send_team_custom_packet("MNSG_TEAM_STATE", s_team_state_json, 0);
 }
 
 static void send_scheduled_team_state_response(void)
@@ -2361,7 +2369,7 @@ void item_sync_update(void)
                 if (mnsg_json_writer_add_s32(&writer, "damage", (signed int)damage) &&
                     mnsg_json_writer_finish(&writer))
                 {
-                    anchor_send_custom_packet("DAMAGE_SYNC", ds_payload, "", 0, 0);
+                    send_team_custom_packet("DAMAGE_SYNC", ds_payload, 0);
                     recomp_printf("[DamageSync] Sent damage=%d to team (HP: %d -> %d)\n",
                                   (int)damage, (int)s_ds_prev_hp, (int)ds_cur_hp);
                 }
@@ -2383,7 +2391,7 @@ void item_sync_update(void)
                 if (mnsg_json_writer_add_s32(&writer, "heal", (signed int)healed) &&
                     mnsg_json_writer_finish(&writer))
                 {
-                    anchor_send_custom_packet("HEAL_SYNC", hs_payload, "", 0, 0);
+                    send_team_custom_packet("HEAL_SYNC", hs_payload, 0);
                     recomp_printf("[HealSync] Sent heal=%d to team (HP: %d -> %d)\n",
                                   (int)healed, (int)s_ds_prev_hp, (int)ds_cur_hp);
                 }
@@ -2423,7 +2431,7 @@ void item_sync_update(void)
             if (mnsg_json_writer_add_s32(&writer, "ryo", delta) &&
                 mnsg_json_writer_finish(&writer))
             {
-                anchor_send_custom_packet("RYO_SYNC", ryo_payload, "", 0, 0);
+                send_team_custom_packet("RYO_SYNC", ryo_payload, 0);
                 recomp_printf("[RyoSync] Sent delta=%d ryo (%d -> %d)\n",
                               (int)delta, (int)s_ryo_prev, (int)ryo_cur);
             }

@@ -39,6 +39,7 @@ try:
     ROOM_ID_PREFIX = anchor_mnsg.ROOM_ID_PREFIX
     ROOM_ID_TRIM_CHARS = anchor_mnsg.ROOM_ID_TRIM_CHARS
     APPEARANCE_MASK = anchor_mnsg.APPEARANCE_MASK
+    HOT_PACKET_MAX_BYTES = dict(anchor_mnsg.HOT_PACKET_MAX_BYTES)
     ROOM_NAMES = dict(getattr(anchor_mnsg, "_ROOM_NAMES", {}))
 except Exception:
     anchor_mnsg = None
@@ -47,7 +48,13 @@ except Exception:
     ROOM_ID_PREFIX = "mnsg-"
     ROOM_ID_TRIM_CHARS = " \t\n\r\v\f"
     APPEARANCE_MASK = 7
+    HOT_PACKET_MAX_BYTES = {
+        "MNSG_PLAYER_POS": 640,
+        "MNSG_PROJECTILE_SPAWN": 512,
+    }
     ROOM_NAMES: dict[int, str] = {}
+
+ANCHOR_MAX_PACKET_BYTES = 8 * 1024 * 1024
 
 
 CHARACTERS = ("Goemon", "Ebisumaru", "Sasuke", "Yae")
@@ -314,6 +321,7 @@ class AnchorBot:
         room_name = ROOM_NAMES.get(self.room_id, "")
         await self._send({
             "type": "UPDATE_CLIENT_STATE",
+            "clientId": self.client_id,
             "state": {
                 "clientId": self.client_id,
                 "teamId": self.config.team_id,
@@ -399,7 +407,6 @@ class AnchorBot:
     async def _handle_packet(self, packet: dict[str, Any]) -> None:
         ptype = packet.get("type", "")
         if ptype == "HEARTBEAT":
-            await self._send({"type": "HEARTBEAT", "quiet": True})
             return
         if ptype == "DISABLE_ANCHOR":
             self.connected = False
@@ -425,7 +432,18 @@ class AnchorBot:
     async def _send(self, packet: dict[str, Any]) -> None:
         if not self.connected or not self._writer:
             return
-        data = (json.dumps(packet, separators=(",", ":")) + "\x00").encode("utf-8")
+        data = (json.dumps(packet, separators=(",", ":"), allow_nan=False) + "\x00").encode("utf-8")
+        if len(data) > ANCHOR_MAX_PACKET_BYTES:
+            raise ValueError(
+                f"refusing {len(data)}-byte packet over Anchor's "
+                f"{ANCHOR_MAX_PACKET_BYTES}-byte limit"
+            )
+        packet_budget = HOT_PACKET_MAX_BYTES.get(str(packet.get("type", "")))
+        if packet_budget is not None and len(data) > packet_budget:
+            raise ValueError(
+                f"refusing {len(data)}-byte {packet.get('type')} packet over "
+                f"its {packet_budget}-byte budget"
+            )
         async with self._send_lock:
             self._writer.write(data)
             await self._writer.drain()

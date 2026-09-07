@@ -2755,7 +2755,9 @@ static void finish_race_with_payload(const char *payload_json, int local_finish)
 
     if (local_finish)
     {
-        anchor_send_custom_packet("MNSG_RACE_FINISH", payload_json ? payload_json : "{}", "", 0, 1);
+        /* This announces the winner to the active room. It is not durable
+         * progress, and Anchor ignores addToQueue without a team target. */
+        anchor_send_custom_packet("MNSG_RACE_FINISH", payload_json ? payload_json : "{}", "", 0, 0);
         anchor_send_game_complete();
     }
     anchor_set_race_lobby_state("finished", anchor_race_get_config_json());
