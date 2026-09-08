@@ -37,6 +37,7 @@ around those native callbacks, then restores the original local target.
 | --- | --- |
 | `func_08002410_6CA620` | Allocates a file-31 projectile task, links it back to the visible root through `+0xDC`, and optionally selects a variant at `+0xD3`. |
 | `func_08002620_6CA830` | Initializes entity `0xCC`, attack type 6, destination/motion fields and one of the two travelling callbacks. Only actors that retain the verified root link and native post callback enter the shared set. |
+| `08002754-08002764` in `func_08002620_6CA830` | Calls `func_8021A310_5D57E0` after the destination is computed. The helper writes the special rotation value `0x8000` to object `+0x14/+0x16/+0x18`; it is present on both travelling variants. The transmitted yaw must retain this exact native value. |
 | `func_0800284C_6CAA5C` / `func_08002A40_6CAC50` | The two accepted travelling callbacks. Their later path continues through `08002B30`, `08002C00` or `08002C74` and `08002E08`. Trail and impact children are derived local effects and are excluded from the wire. |
 
 The native reconstruction uses the room's already loaded file-31 resource and
@@ -45,6 +46,19 @@ destination, velocity and timer without replaying historical collision.
 Ordinary local post/collision processing continues afterward. Complete
 checkpoints remove authority-expired projectiles and deduplicate IDs across
 retries and handoffs.
+
+The projectile visibility regression was reproduced from the native constructor
+writes in `Goemon64Recomp/RecompiledFuncs/funcs_111.c` and `funcs_41.c`, reviewed
+against checkout `30775d247e912178d28fe46bf04d5d610ebc43da`. The old checkpoint
+validator rejected yaw above `1023`, so the first native projectile's `0x8000`
+yaw caused capture of the entire boss checkpoint to fail. Tests that constructed
+only ordinary-angle projectiles did not reproduce this native state. The
+corrected constructor fixture fails at authority capture before the fix and
+passes after permitting the exact marker alongside ordinary `0..1023` values.
+The regression covers both variants, follower reconstruction through native
+pre, and marker preservation on recapture. Values `1024` and `0x8001` remain
+invalid. This is host regression evidence; it does not certify two-client
+rendering or a universal camera-facing meaning for the marker.
 
 ## Death and Miracle Flower
 

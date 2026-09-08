@@ -29,6 +29,8 @@ int main(void)
     for (i = 0; i < ANCHOR_DHARUMANYO_MAX_PROJECTILES; ++i)
         for (j = 0; j < ANCHOR_DHARUMANYO_PROJECTILE_WORDS; ++j)
             native.projectile[i][j] = 0xffffffffu - i - j;
+    /* Preserve the native special orientation through the C/Python bridge. */
+    native.projectile[0][DHAR_PROJECTILE_YAW] = 0x8000u;
     assert(anchor_dharumanyo_state_encode(&native, encoded, sizeof(encoded)));
     assert(strlen(encoded) < ANCHOR_DHARUMANYO_STATE_JSON_SIZE);
     wrap(encoded, "[[1,2,3,4,1],[5,6,7,8,1]]");

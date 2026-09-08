@@ -227,6 +227,11 @@ void func_08002620_6CA830(void *task, void *object)
                                 ? func_08002A40_6CAC50
                                 : func_0800284C_6CAA5C;
     fixture_for(task)->post = func_80218F30_5D4400;
+    /* Native 08002754-08002764 calls 8021A310: the three rotation
+     * halfwords become the special 0x8000 marker, not an ordinary angle. */
+    U16(object, 0x14) = 0x8000;
+    U16(object, 0x16) = 0x8000;
+    U16(object, 0x18) = 0x8000;
     target = DHARUMANYO_PTR(s_root.task, 0x84);
     observed_target_x = target ? F32(target, 8) : -9999.0f;
     observed_target_z = target ? F32(target, 16) : -9999.0f;
@@ -405,6 +410,59 @@ static void projectile_checkpoint_test(void)
     assert(apply_now(&state));
     assert(U32(projectile->actor.task, 0x68) & REMOVE_PENDING);
     (void)root;
+}
+
+static void native_projectile_orientation_round_trip_test(void)
+{
+    AnchorDharumanyoNativeSnapshot sent;
+    AnchorDharumanyoNativeSnapshot received;
+    AnchorDharumanyoNativeSnapshot invalid;
+    DharumanyoProjectile *replica;
+    Fixture *root;
+    void *task;
+    unsigned int variant;
+
+    for (variant = 0; variant < 2; ++variant)
+    {
+        root = setup();
+        anchor_dharumanyo_native_set_role(1, 1, 0);
+        DHARUMANYO_PTR(root->task_store.bytes, 0x84) =
+            root->object_store.bytes;
+        task = func_8021DDE8_5D92B8(root->task_store.bytes,
+            func_08002620_6CA830, 10, -19.0f, 33.5f, 50.0f, 0);
+        U8(task, 0xd3) = (unsigned char)variant;
+        D_8016DAB4_16E6B4 = task;
+        func_08002620_6CA830(task, DHARUMANYO_PTR(task, 0x18));
+        assert(anchor_dharumanyo_native_capture(&sent));
+        assert(sent.projectile_count == 1);
+        assert(sent.projectile[0][DHAR_PROJECTILE_VARIANT] == variant);
+        assert(sent.projectile[0][DHAR_PROJECTILE_YAW] == 0x8000);
+
+        /* A second room instance must reconstruct the native orientation
+         * through its own constructor and publish the same state. */
+        root = setup();
+        anchor_dharumanyo_native_set_role(1, 0, 0);
+        invalid = sent;
+        invalid.projectile[0][DHAR_PROJECTILE_YAW] = 1024;
+        assert(!anchor_dharumanyo_native_apply(&invalid));
+        invalid.projectile[0][DHAR_PROJECTILE_YAW] = 0x8001;
+        assert(!anchor_dharumanyo_native_apply(&invalid));
+        assert(anchor_dharumanyo_native_apply(&sent));
+        anchor_dharumanyo_native_scheduler_begin();
+        D_8016DAB4_16E6B4 = root->task_store.bytes;
+        anchor_dharumanyo_native_adopt_before_pre(root->task_store.bytes);
+        assert(!s_pending_valid);
+        anchor_dharumanyo_native_scheduler_end();
+        replica = find_projectile(sent.projectile[0][DHAR_PROJECTILE_ID]);
+        assert(replica && projectile_live(replica));
+        assert(U16(replica->actor.object, 0x14) == 0x8000);
+        assert(U16(replica->actor.object, 0x16) == 0x8000);
+        assert(U16(replica->actor.object, 0x18) == 0x8000);
+        assert(anchor_dharumanyo_native_capture(&received));
+        assert(received.projectile_count == sent.projectile_count);
+        assert(!memcmp(received.projectile, sent.projectile,
+                       sizeof(sent.projectile[0])));
+    }
 }
 
 static void projectile_capacity_cleanup_test(void)
@@ -597,6 +655,7 @@ int main(void)
     checkpoint_scheduler_order_test();
     scripted_pause_release_test();
     projectile_checkpoint_test();
+    native_projectile_orientation_round_trip_test();
     projectile_capacity_cleanup_test();
     pause_tick_and_terminal_test();
     puts("Dharumanyo native snapshot, authority, projectile and terminal contracts passed");

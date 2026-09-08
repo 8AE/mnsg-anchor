@@ -779,7 +779,11 @@ static int snapshot_valid(const AnchorDharumanyoNativeSnapshot *snapshot)
         if (!projectile[DHAR_PROJECTILE_ID] ||
             projectile[DHAR_PROJECTILE_ID] > snapshot->projectile_serial ||
             projectile[DHAR_PROJECTILE_VARIANT] > 1u ||
-            projectile[DHAR_PROJECTILE_YAW] > 1023u ||
+            /* 02620 calls 8021A310, which sets the native special
+             * orientation marker. Rejecting it drops the entire boss
+             * checkpoint as soon as its first projectile exists. */
+            (projectile[DHAR_PROJECTILE_YAW] > 1023u &&
+             projectile[DHAR_PROJECTILE_YAW] != 0x8000u) ||
             projectile[DHAR_PROJECTILE_BORN] > snapshot->tick ||
             snapshot->tick - projectile[DHAR_PROJECTILE_BORN] >
                 PROJECTILE_MAX_AGE)

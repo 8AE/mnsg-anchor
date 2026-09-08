@@ -48,6 +48,12 @@ motion state, corrects it at later checkpoints and removes it when its ID leaves
 the authority's active set. Trail and impact children remain local native
 effects.
 
+The native projectile constructor sets the special orientation value `0x8000`.
+Checkpoints preserve that value as well as ordinary yaw angles `0..1023`.
+Rejecting the special value previously prevented the authority from publishing
+any checkpoint while a travelling projectile was active, leaving that
+projectile absent from followers' screens.
+
 The set holds at most 16 travelling projectiles, matching the verified native
 and Hyper Dharumanyo working bound. A malformed count, duplicate ID, impossible
 age, invalid callback phase or non-finite coordinate is rejected before game

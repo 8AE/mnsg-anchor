@@ -214,6 +214,27 @@ class DharumanyoTransportTests(unittest.TestCase):
                 anchor_dharumanyo.PACKET_TYPE,
             )
 
+    def test_native_projectile_orientation_reaches_peer_and_despawns(self):
+        self.net.start()
+        checkpoint = state(tick=20, projectiles=1)
+        # func_08002620 calls func_8021A310, which sets object yaw to
+        # 0x8000. This native marker must survive the framed state path.
+        checkpoint["p"][6] = 0x8000
+        self.net.states[2] = checkpoint
+        self.net.tick(0.11)
+        self.net.tick()
+        self.assertEqual(self.net.status[3]["state"], checkpoint)
+        self.assertEqual(self.net.packets("s")[-1][2]["d"], checkpoint)
+
+        cleared = copy.deepcopy(checkpoint)
+        cleared["r"][1] += 1
+        cleared["t"] += 1
+        cleared["p"] = []
+        self.net.states[2] = cleared
+        self.net.tick(0.11)
+        self.net.tick()
+        self.assertEqual(self.net.status[3]["state"], cleared)
+
     def test_boss_metadata_coexists_and_transport_state_is_independent(self):
         self.net.start()
         congo_before = self.a._congo.advertisement(self.a._boss_context())

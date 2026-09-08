@@ -32,8 +32,12 @@ static int commit_calls;
 static int flag_send_calls;
 static int terminal_finish_calls;
 
+int anchor_miracle_star_local_scene_active(void) { return 0; }
+void anchor_tsurami_native_finish_terminal(void) {}
 int anchor_congo_damage_is_shared(void) { return 0; }
 int anchor_congo_damage_is_owner(void) { return 0; }
+int anchor_tsurami_damage_is_shared(void) { return 0; }
+int anchor_tsurami_damage_is_owner(void) { return 0; }
 int anchor_dharumanyo_damage_is_shared(void) { return dharumanyo_shared; }
 int anchor_dharumanyo_damage_is_owner(void) { return dharumanyo_owner; }
 int item_sync_save_is_loaded(void) { return save_loaded; }

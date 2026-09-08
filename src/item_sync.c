@@ -38,6 +38,7 @@
 #include "boss_sync.h"
 #include "item_sync.h"
 #include "anchor_miracle_moon.h"
+#include "anchor_miracle_star.h"
 #include "utils/anchor_item_reconcile.h"
 #include "utils/json_utils.h"
 #include "utils/string_utils.h"
@@ -989,10 +990,14 @@ static signed int s_pending_benkei_sasuke_profile = -1;
  * selected must wait for scenario 0x71 to release its camera/input ownership.
  * Preserve whether Anchor already stored the incoming state: a live-only
  * completion must not acknowledge the local native pickup's durable send. */
-#define MOON_COMPLETION_NONE 0u
-#define MOON_COMPLETION_LIVE 1u
-#define MOON_COMPLETION_DURABLE 2u
+#define MIRACLE_COMPLETION_NONE 0u
+#define MIRACLE_COMPLETION_LIVE 1u
+#define MIRACLE_COMPLETION_DURABLE 2u
 static unsigned char s_pending_miracle_moon_completion;
+/* Tsurami's Star is awarded by file 73's full post-boss controller. Its
+ * cs_tsurami flag advances the following story scene, so remote progress
+ * waits while that local controller still owns its actors and player input. */
+static unsigned char s_pending_miracle_star_completion;
 /* MNSG_TEAM_STATE is a live merge and cannot acknowledge an already-dirty
  * local value; queued SET_FLAG and stored UPDATE_TEAM_STATE packets can. */
 static unsigned char s_applying_live_team_state;
@@ -1454,14 +1459,32 @@ static const char *apply_flag(const char *flag_name, signed int val)
                     anchor_miracle_moon_local_pickup_active())
                 {
                     unsigned char source = s_applying_live_team_state
-                                               ? MOON_COMPLETION_LIVE
-                                               : MOON_COMPLETION_DURABLE;
+                                               ? MIRACLE_COMPLETION_LIVE
+                                               : MIRACLE_COMPLETION_DURABLE;
                     if (source > s_pending_miracle_moon_completion)
                         s_pending_miracle_moon_completion = source;
                     recomp_printf("[ItemSync] Deferred Miracle Moon completion until the local pickup finishes.\n");
                     return implied_display;
                 }
-                s_pending_miracle_moon_completion = MOON_COMPLETION_NONE;
+                s_pending_miracle_moon_completion = MIRACLE_COMPLETION_NONE;
+            }
+            if (mnsg_string_equal(flag_name, "cs_tsurami"))
+            {
+                /* Scenario 0x73 grants the Star at save +0x250 before the
+                 * later story flag 0x74. It is not the Flower at +0x258. */
+                implied_display = apply_flag("mi_star", 1);
+                if (!FLAG_IS_SET(s_flag_bits[i].id) &&
+                    anchor_miracle_star_local_scene_active())
+                {
+                    unsigned char source = s_applying_live_team_state
+                                               ? MIRACLE_COMPLETION_LIVE
+                                               : MIRACLE_COMPLETION_DURABLE;
+                    if (source > s_pending_miracle_star_completion)
+                        s_pending_miracle_star_completion = source;
+                    recomp_printf("[ItemSync] Deferred Tsurami story progress until the local Star scene finishes.\n");
+                    return implied_display;
+                }
+                s_pending_miracle_star_completion = MIRACLE_COMPLETION_NONE;
             }
         }
 
@@ -1498,22 +1521,23 @@ static const char *apply_flag(const char *flag_name, signed int val)
     return 0;
 }
 
-static void apply_pending_miracle_moon_completion(void)
+static void apply_pending_miracle_completion(unsigned char *pending,
+                                             const char *flag_name,
+                                             int local_scene_active)
 {
     unsigned char source;
     unsigned char previous_live_state;
 
-    if (!s_pending_miracle_moon_completion ||
-        anchor_miracle_moon_local_pickup_active())
+    if (!*pending || local_scene_active)
         return;
 
-    source = s_pending_miracle_moon_completion;
-    s_pending_miracle_moon_completion = MOON_COMPLETION_NONE;
+    source = *pending;
+    *pending = MIRACLE_COMPLETION_NONE;
     previous_live_state = s_applying_live_team_state;
-    s_applying_live_team_state = source == MOON_COMPLETION_LIVE;
-    (void)apply_flag("fl_mi_moon", 1);
+    s_applying_live_team_state = source == MIRACLE_COMPLETION_LIVE;
+    (void)apply_flag(flag_name, 1);
     s_applying_live_team_state = previous_live_state;
-    recomp_printf("[ItemSync] Applied deferred Miracle Moon completion.\n");
+    recomp_printf("[ItemSync] Applied deferred Miracle progress '%s'.\n", flag_name);
 }
 
 /* Apply ordinary incoming values immediately, except for the save counter
@@ -1564,6 +1588,26 @@ static void cache_darumanyo_native_reward(void)
     }
 }
 
+static void cache_tsurami_native_reward(void)
+{
+    int i;
+
+    /* The remote replica runs scenario 0x73 and its following story locally.
+     * A terminal callback aligns all resulting values before releasing the
+     * replica gate, even when bounded monitoring has not reached them yet. */
+    for (i = 0; i < NUM_FIELDS; ++i)
+    {
+        if (boss_sync_is_tsurami_reward_progress(s_fields[i].name))
+            s_fields[i].cached = SAVE_READ32(s_fields[i].off);
+    }
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        if (boss_sync_is_tsurami_reward_progress(s_flag_bits[i].name))
+            s_flag_bits[i].cached =
+                (unsigned char)FLAG_IS_SET(s_flag_bits[i].id);
+    }
+}
+
 /* Native boss hooks can announce the live defeat before the durable save bit
  * changes.  Remember that send so the ordinary flag monitor does not emit the
  * same transient event again when the later progression bit rises. */
@@ -1604,6 +1648,8 @@ void item_sync_commit_boss_completion(const char *flag_name)
     apply_flag(flag_name, 1);
     if (mnsg_string_equal(flag_name, "fl_dharmanyo"))
         cache_darumanyo_native_reward();
+    if (mnsg_string_equal(flag_name, "fl_tsurami"))
+        cache_tsurami_native_reward();
     if (mnsg_string_equal(flag_name, "fl_benkei") && s_pending_benkei_sasuke_profile >= 0)
     {
         profile_display = apply_flag("sasuke_body",
@@ -2073,7 +2119,7 @@ static void monitor_and_send_changes(void)
                 s_fields[i].name, (int)cur, 1);
             if (send_result == BOSS_SYNC_PROGRESS_SUPPRESSED)
             {
-                recomp_printf("[BossSync] Kept remote Dharumanyo reward field '%s' local.\n",
+                recomp_printf("[BossSync] Kept remote boss reward field '%s' local.\n",
                               s_fields[i].name);
                 s_fields[i].cached = cur;
                 continue;
@@ -2162,7 +2208,7 @@ static void monitor_and_send_changes(void)
                 s_flag_bits[i].name, 1, 1);
             if (send_result == BOSS_SYNC_PROGRESS_SUPPRESSED)
             {
-                recomp_printf("[BossSync] Kept remote Dharumanyo reward flag '%s' local.\n",
+                recomp_printf("[BossSync] Kept remote boss reward flag '%s' local.\n",
                               s_flag_bits[i].name);
                 s_flag_bits[i].cached = cur;
                 continue;
@@ -2218,6 +2264,7 @@ void item_sync_update(void)
     int is_connected = anchor_is_connected() && !anchor_is_disabled();
 
     anchor_miracle_moon_update_room(D_800C7AB2);
+    anchor_miracle_star_update_room(D_800C7AB2);
 
     /* A pending visual check is meaningful only in the room where its remote
        save update arrived.  Dropping it on transition prevents a later visit
@@ -2267,7 +2314,8 @@ void item_sync_update(void)
         s_set_flag_send_timer = 0;
         s_team_state_request_pending = 0;
         s_team_snapshot_broadcast_timer = -1;
-        s_pending_miracle_moon_completion = MOON_COMPLETION_NONE;
+        s_pending_miracle_moon_completion = MIRACLE_COMPLETION_NONE;
+        s_pending_miracle_star_completion = MIRACLE_COMPLETION_NONE;
         clear_visual_collectible_pending();
         clear_door_unlock_pending();
         boss_sync_reset();
@@ -2286,7 +2334,9 @@ void item_sync_update(void)
         {
             boss_sync_reset();
             anchor_miracle_moon_reset();
-            s_pending_miracle_moon_completion = MOON_COMPLETION_NONE;
+            anchor_miracle_star_reset();
+            s_pending_miracle_moon_completion = MIRACLE_COMPLETION_NONE;
+            s_pending_miracle_star_completion = MIRACLE_COMPLETION_NONE;
         }
         s_save_was_valid = offline_valid;
         return;
@@ -2308,7 +2358,9 @@ void item_sync_update(void)
         {
             reset_caches();
             anchor_miracle_moon_reset();
-            s_pending_miracle_moon_completion = MOON_COMPLETION_NONE;
+            anchor_miracle_star_reset();
+            s_pending_miracle_moon_completion = MIRACLE_COMPLETION_NONE;
+            s_pending_miracle_star_completion = MIRACLE_COMPLETION_NONE;
             clear_visual_collectible_pending();
             clear_door_unlock_pending();
             s_push_cursor = PUSH_IDLE;
@@ -2340,7 +2392,12 @@ void item_sync_update(void)
 
     /* ── Process incoming packets ─────────────────────────────────────── */
     process_incoming_packets();
-    apply_pending_miracle_moon_completion();
+    apply_pending_miracle_completion(&s_pending_miracle_moon_completion,
+                                     "fl_mi_moon",
+                                     anchor_miracle_moon_local_pickup_active());
+    apply_pending_miracle_completion(&s_pending_miracle_star_completion,
+                                     "cs_tsurami",
+                                     anchor_miracle_star_local_scene_active());
     apply_pending_boss_flags();
 
     if (s_team_snapshot_broadcast_timer == 0 &&

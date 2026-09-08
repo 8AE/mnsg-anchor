@@ -82,6 +82,7 @@ import secrets
 from collections import deque
 import anchor_congo
 import anchor_dharumanyo
+import anchor_tsurami
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -153,6 +154,7 @@ _arena_retired_sessions: "dict[int, set[int]]" = {}
 _arena_confirmed_sessions: "dict[int, int]" = {}
 _congo = anchor_congo.CongoTransport()
 _dharumanyo = anchor_dharumanyo.DharumanyoTransport()
+_tsurami = anchor_tsurami.TsuramiTransport()
 
 ###############################################################################
 # Constants
@@ -170,6 +172,7 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     "MNSG_PROJECTILE_SPAWN": 512,
     anchor_congo.PACKET_TYPE: 8 * 1024,
     anchor_dharumanyo.PACKET_TYPE: 8 * 1024,
+    anchor_tsurami.PACKET_TYPE: 8 * 1024,
 }
 PLAYER_HIT_MAX_AGE_MS: int = 500
 PROJECTILE_MAX_AGE_MS: int = 750
@@ -405,9 +408,18 @@ def _merge_client_state(
         )
         if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
             state[anchor_dharumanyo.METADATA_KEY] = value
+    if anchor_tsurami.METADATA_KEY in payload:
+        value = anchor_tsurami.merge_metadata(
+            state.get(anchor_tsurami.METADATA_KEY),
+            payload[anchor_tsurami.METADATA_KEY],
+            state.get("interactionSession"),
+        )
+        if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
+            state[anchor_tsurami.METADATA_KEY] = value
     context = _boss_context()
     _congo.observe(context)
     _dharumanyo.observe(context)
+    _tsurami.observe(context)
     _invalidate_confirmed_boss_invitation(cid)
     _prune_projectile_spawns(int(time.monotonic() * 1000))
     return True
@@ -485,6 +497,14 @@ def _replace_all_client_states(states: list) -> None:
             if (dharumanyo and
                     dharumanyo[5] not in _retired_interaction_sessions.get(cid, ())):
                 merged[anchor_dharumanyo.METADATA_KEY] = dharumanyo
+            tsurami = anchor_tsurami.merge_metadata(
+                previous.get(anchor_tsurami.METADATA_KEY),
+                client_state.get(anchor_tsurami.METADATA_KEY),
+                merged.get("interactionSession"),
+            )
+            if (tsurami and
+                    tsurami[5] not in _retired_interaction_sessions.get(cid, ())):
+                merged[anchor_tsurami.METADATA_KEY] = tsurami
             new_players[cid] = merged
         for cid, previous in previous_players.items():
             replacement = new_players.get(cid, {})
@@ -498,6 +518,7 @@ def _replace_all_client_states(states: list) -> None:
         context = _boss_context()
         _congo.observe(context)
         _dharumanyo.observe(context)
+        _tsurami.observe(context)
         for cid in list(_arena_events):
             _invalidate_confirmed_boss_invitation(cid)
         _prune_projectile_spawns(int(time.monotonic() * 1000))
@@ -775,6 +796,13 @@ def _recv_loop(sock: socket.socket) -> None:
                         )
                     continue
 
+                if ptype == anchor_tsurami.PACKET_TYPE:
+                    with _player_states_lock:
+                        _tsurami.receive(
+                            _boss_context(), packet, time.monotonic()
+                        )
+                    continue
+
                 if ptype == "MNSG_PROJECTILES":
                     # Retired continuous-visual protocol: never replay these
                     # old packets through the durable item/event queue.
@@ -860,6 +888,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _reset_boss_invitations()
         _congo.reset()
         _dharumanyo.reset()
+        _tsurami.reset()
 
 
 ###############################################################################
@@ -938,6 +967,7 @@ def connect(
         _reset_boss_invitations()
         _congo.reset()
         _dharumanyo.reset()
+        _tsurami.reset()
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -979,6 +1009,9 @@ def connect(
             "interactionSession": _interaction_session,
             anchor_congo.METADATA_KEY: _congo.advertisement(_boss_context()),
             anchor_dharumanyo.METADATA_KEY: _dharumanyo.advertisement(
+                _boss_context()
+            ),
+            anchor_tsurami.METADATA_KEY: _tsurami.advertisement(
                 _boss_context()
             ),
         },
@@ -1464,6 +1497,7 @@ def update_client_state(state_json: str) -> bool:
         state[anchor_dharumanyo.METADATA_KEY] = (
             _dharumanyo.advertisement(context)
         )
+        state[anchor_tsurami.METADATA_KEY] = _tsurami.advertisement(context)
 
     sent = _send_raw({
         "type": "UPDATE_CLIENT_STATE",
@@ -1493,6 +1527,11 @@ def _congo_context() -> dict:
 
 def _dharumanyo_context() -> dict:
     """Compatibility helper for callers inspecting Dharumanyo state."""
+    return _boss_context()
+
+
+def _tsurami_context() -> dict:
+    """Compatibility helper for callers inspecting Tsurami state."""
     return _boss_context()
 
 
@@ -1543,6 +1582,14 @@ def update_dharumanyo(ready: int, visit: int, paused: int,
     )
 
 
+def update_tsurami(ready: int, visit: int, paused: int,
+                   state_json: str = "") -> str:
+    """Publish previous-frame Tsurami state and return checkpoint/hit work."""
+    return _update_boss(
+        _tsurami, anchor_tsurami, ready, visit, paused, state_json
+    )
+
+
 def send_congo_hit(sequence: int, amount: int) -> bool:
     """Queue one physical attack; retries keep the same identity until acked."""
     with _player_states_lock:
@@ -1556,6 +1603,14 @@ def send_dharumanyo_hit(sequence: int) -> bool:
     with _player_states_lock:
         return _dharumanyo.send_hit(
             _boss_context(), sequence, 1, time.monotonic()
+        )
+
+
+def send_tsurami_hit(sequence: int, amount: int, target: int = 0) -> bool:
+    """Queue a boss hit (target zero) or a projectile reflection by stable ID."""
+    with _player_states_lock:
+        return _tsurami.send_hit(
+            _boss_context(), sequence, amount, time.monotonic(), target
         )
 
 
@@ -1753,6 +1808,10 @@ def set_save_loaded(is_loaded: bool) -> bool:
                 )
             if _dharumanyo.local[0] or _dharumanyo.e:
                 _dharumanyo.update(
+                    _boss_context(), False, 0, False, None, time.monotonic()
+                )
+            if _tsurami.local[0] or _tsurami.e:
+                _tsurami.update(
                     _boss_context(), False, 0, False, None, time.monotonic()
                 )
     return update_client_state(json.dumps({"isSaveLoaded": _local_save_loaded}))
@@ -2188,6 +2247,11 @@ def set_local_room(room_id: int) -> bool:
         if (room_id != anchor_dharumanyo.ROOM and
                 (_dharumanyo.local[0] or _dharumanyo.e)):
             _dharumanyo.update(
+                _boss_context(), False, 0, False, None, time.monotonic()
+            )
+        if (room_id != anchor_tsurami.ROOM and
+                (_tsurami.local[0] or _tsurami.e)):
+            _tsurami.update(
                 _boss_context(), False, 0, False, None, time.monotonic()
             )
     return update_client_state(json.dumps({"currentRoom": area_name, "currentRoomId": room_id}))

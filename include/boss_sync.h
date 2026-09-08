@@ -28,11 +28,16 @@ enum BossSyncProgressSendResult
  * their reward-owned save changes through this gate so only the original
  * simulator publishes duplicate durable deltas. Other progress is unchanged. */
 int boss_sync_is_darumanyo_reward_progress(const char *flag_name);
+int boss_sync_is_tsurami_reward_progress(const char *flag_name);
 int boss_sync_send_local_progress(const char *flag_name, int value,
                                   int add_to_queue);
 /* A shared Dharumanyo terminal checkpoint enters the same verified native
  * last-life path used by the terminal compatibility packet. */
 int boss_sync_queue_darumanyo_shared_terminal(void);
+/* Tsurami's HP-one reaction starts the native destruction sequence. */
+int boss_sync_queue_tsurami_shared_terminal(void);
+/* File73 has released pickup controls and requested the native room exit. */
+void boss_sync_finish_tsurami_reward_scene(void);
 void boss_sync_reset(void);
 
 #endif

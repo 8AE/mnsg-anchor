@@ -71,6 +71,7 @@ class BossTransport:
 
     def __init__(self, *, packet_type, room, metadata_key, validate_state,
                  damage_amounts, version=1, include_wire_version=False,
+                 hit_target=False,
                  interval=INTERVAL, keepalive=KEEPALIVE, lease=LEASE,
                  discovery=DISCOVERY, retry=RETRY, hit_queue=HIT_QUEUE,
                  hits_per_frame=HITS_PER_FRAME, ack_rows=ACK_ROWS):
@@ -81,6 +82,7 @@ class BossTransport:
         self.damage_amounts = tuple(damage_amounts)
         self.version = version
         self.include_wire_version = include_wire_version
+        self.hit_target = hit_target
         self.interval = interval
         self.keepalive = keepalive
         self.lease = lease
@@ -314,7 +316,9 @@ class BossTransport:
         self._scope(ctx)
         cid = packet.get("clientId")
         if (packet.get("type") != self.packet_type or
-                (self.include_wire_version and packet.get("v") != self.version) or
+                (self.include_wire_version and
+                 (type(packet.get("v")) is not int or
+                  packet["v"] != self.version)) or
                 not positive(cid) or cid == ctx["cid"] or
                 packet.get("targetTeamId") != ctx["team"] or
                 not positive(packet.get("session")) or
@@ -349,9 +353,12 @@ class BossTransport:
                     not self._peer(ctx, cid, True)):
                 return False
             h = packet.get("h")
-            if (not isinstance(h, list) or len(h) != 3 or
-                    not all(positive(x) for x in h) or
-                    h[2] not in self.damage_amounts):
+            if (not isinstance(h, list) or
+                    len(h) != (4 if self.hit_target else 3) or
+                    not all(positive(x) for x in h[:3]) or
+                    h[2] not in self.damage_amounts or
+                    (self.hit_target and
+                     (type(h[3]) is not int or not 0 <= h[3] <= MAX_INT))):
                 return False
             if ctx["players"][cid].get("playerEpoch") != h[0]:
                 return False
@@ -423,16 +430,20 @@ class BossTransport:
         self.last_peer_hit[hit[0]] = now
         return True
 
-    def send_hit(self, ctx, sequence, amount, now):
+    def send_hit(self, ctx, sequence, amount, now, target=0):
         if (self.role not in (1, 2) or self.state is None or
                 not self.local[0] or self.local[2] or not self.e or
                 not positive(sequence) or type(amount) is not int or
-                amount not in self.damage_amounts):
+                amount not in self.damage_amounts or
+                type(target) is not int or
+                not 0 <= target <= (MAX_INT if self.hit_target else 0)):
             return False
         epoch = ctx["players"].get(ctx["cid"], {}).get("playerEpoch", 0)
         if not positive(epoch):
             return False
         hit = [ctx["cid"], ctx["session"], epoch, sequence, amount]
+        if self.hit_target:
+            hit.append(target)
         if any(h[:4] == hit[:4] for h in self.outgoing):
             return True
         if self.acks.get(tuple(hit[:3]), 0) >= sequence:
@@ -557,6 +568,15 @@ class BossTransport:
             self.started = now
             self.capture_started = None
             self.last_request = -1e9
+            if ready:
+                # A participant may return after the owner spent time alone
+                # and stopped streaming. An old replica is not evidence that
+                # this live owner lost its lease: request a fresh checkpoint
+                # from its current advertisement before adopting/electing.
+                self.cache = {
+                    e: checkpoint for e, checkpoint in self.cache.items()
+                    if now - checkpoint["received"] < self.lease
+                }
         self.local = (ready, int(visit) if ready else 0,
                       bool(paused) if ready else False)
         valid_state = self.validate_state(supplied)

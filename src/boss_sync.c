@@ -21,6 +21,9 @@
 #include "anchor_congo_damage.h"
 #include "anchor_dharumanyo_damage.h"
 #include "anchor_dharumanyo_native.h"
+#include "anchor_tsurami_damage.h"
+#include "anchor_tsurami_native.h"
+#include "anchor_miracle_star.h"
 #include "boss_sync.h"
 #include "item_sync.h"
 #include "utils/json_utils.h"
@@ -78,6 +81,7 @@ extern void func_80034EF8_35AF8(void *actor);
 #define CONGO_KILL_FLAG 0x1A1u
 #define CONGO_REWARD_FLAG 0x12Du
 #define DARUMANYO_ROOM 0x049u
+#define TSURAMI_ROOM 0x071u
 #define BENKEI_ROOM 0x171u
 #define DARUMANYO_NATIVE_DEATH_FLAG 0x16Bu
 #define DARUMANYO_NATIVE_COMPLETE_FLAG 0x16Du
@@ -326,6 +330,10 @@ int boss_sync_has_active_encounter(const char *flag_name)
         return tracked_boss_can_take_damage(&s_congo);
     if (mnsg_string_equal(flag_name, "fl_tsurami"))
     {
+        if ((anchor_tsurami_damage_is_shared() ||
+             anchor_miracle_star_local_scene_active()) &&
+            !s_tsurami_state.victory_complete)
+            return 1;
         if (native_remote_defeat_is_current(&s_tsurami_state))
             return 1;
         return !s_tsurami_state.victory_complete &&
@@ -358,8 +366,14 @@ int boss_sync_has_local_encounter(const char *flag_name)
         !s_congo_victory_complete)
         return 1;
     if (mnsg_string_equal(flag_name, "fl_tsurami"))
+    {
+        if ((anchor_tsurami_damage_is_shared() ||
+             anchor_miracle_star_local_scene_active()) &&
+            !s_tsurami_state.victory_complete)
+            return 1;
         return !s_tsurami_state.victory_complete &&
                tracked_boss_is_local(&s_tsurami);
+    }
     if (mnsg_string_equal(flag_name, "fl_dharmanyo"))
     {
         if (anchor_dharumanyo_damage_is_shared() &&
@@ -394,10 +408,20 @@ int boss_sync_send_local_progress(const char *flag_name, int value,
     if (s_darumanyo_state.remote_defeat_in_progress &&
         boss_sync_is_darumanyo_reward_progress(flag_name))
         return BOSS_SYNC_PROGRESS_SUPPRESSED;
+    if (s_tsurami_state.remote_defeat_in_progress &&
+        boss_sync_is_tsurami_reward_progress(flag_name))
+        return BOSS_SYNC_PROGRESS_SUPPRESSED;
 
     return anchor_send_flag(flag_name, value, add_to_queue)
                ? BOSS_SYNC_PROGRESS_SENT
                : BOSS_SYNC_PROGRESS_SEND_FAILED;
+}
+
+int boss_sync_is_tsurami_reward_progress(const char *flag_name)
+{
+    return mnsg_string_equal(flag_name, "mi_star") ||
+           mnsg_string_equal(flag_name, "cs_tsurami") ||
+           mnsg_string_equal(flag_name, "fl_tsurami");
 }
 
 int boss_sync_send_defeat(const char *flag_name)
@@ -415,6 +439,10 @@ int boss_sync_send_defeat(const char *flag_name)
     if (mnsg_string_equal(flag_name, "fl_dharmanyo") &&
         anchor_dharumanyo_damage_is_shared() &&
         !anchor_dharumanyo_damage_is_owner())
+        return 0;
+    if (mnsg_string_equal(flag_name, "fl_tsurami") &&
+        anchor_tsurami_damage_is_shared() &&
+        !anchor_tsurami_damage_is_owner())
         return 0;
 
     mnsg_json_writer_begin(&writer, payload, (unsigned int)sizeof(payload));
@@ -464,6 +492,30 @@ int boss_sync_queue_darumanyo_shared_terminal(void)
     state->remote_defeat_room = D_800C7AB2;
     state->remote_defeat_needs_rearm = 0;
     recomp_printf("[BossSync] Shared Dharmanyo terminal queued through native last-life path.\n");
+    return 1;
+}
+
+int boss_sync_queue_tsurami_shared_terminal(void)
+{
+    NativeBossState *state = &s_tsurami_state;
+
+    if (!anchor_tsurami_damage_is_shared() || D_800C7AB2 != TSURAMI_ROOM)
+        return 0;
+    if (state->victory_complete || state->local_defeat_started ||
+        native_remote_defeat_is_current(state))
+        return 1;
+    if (!tracked_boss_can_take_damage(&s_tsurami))
+        return 0;
+
+    /* HP two enters the native one-point path, reaching the HP-one custom
+     * reaction. Keep progression held until the full destruction teardown. */
+    func_80024088_24C88(TSURAMI_KILL_FLAG);
+    state->lethal_hit_pending = 1;
+    state->lethal_hit_armed = 0;
+    state->lethal_hit_room = D_800C7AB2;
+    state->remote_defeat_in_progress = 1;
+    state->remote_defeat_room = D_800C7AB2;
+    state->remote_defeat_needs_rearm = 0;
     return 1;
 }
 
@@ -537,6 +589,8 @@ int boss_sync_apply_remote_defeat(const char *flag_name)
         state = &s_tsurami_state;
         boss = &s_tsurami;
         flag_id = TSURAMI_KILL_FLAG;
+        if (anchor_tsurami_damage_is_shared())
+            return 1;
         if (native_remote_defeat_is_current(state))
             return 1;
         if (state->victory_complete)
@@ -941,7 +995,8 @@ void boss_sync_track_tsurami_root(void *actor)
     }
 
     /* Repair a durable flag received before this root existed. */
-    if (!native_remote_defeat_is_current(&s_tsurami_state) &&
+    if (!anchor_tsurami_damage_is_shared() &&
+        !native_remote_defeat_is_current(&s_tsurami_state) &&
         !s_tsurami_state.local_defeat_started &&
         !s_tsurami_state.victory_complete &&
         tracked_boss_can_take_damage(&s_tsurami) &&
@@ -989,6 +1044,12 @@ void boss_sync_finish_tsurami_native_death(void *actor)
         s_tsurami.room != D_800C7AB2)
         return;
 
+    /* The shared fight continues through file73's Star/story controller.
+     * Its child pointers, control release and exit must complete locally. */
+    if (anchor_tsurami_damage_is_shared() ||
+        anchor_miracle_star_local_scene_active())
+        return;
+
     s_tsurami_state.victory_complete = 1;
     s_tsurami_state.lethal_hit_pending = 0;
     s_tsurami_state.lethal_hit_armed = 0;
@@ -1002,6 +1063,23 @@ void boss_sync_finish_tsurami_native_death(void *actor)
         s_tsurami_state.remote_defeat_needs_rearm = 0;
         recomp_printf("[BossSync] Tsurami native teardown reached; progression sync released.\n");
     }
+}
+
+void boss_sync_finish_tsurami_reward_scene(void)
+{
+    if (!s_tsurami_state.local_defeat_started &&
+        !s_tsurami_state.remote_defeat_in_progress)
+        return;
+    s_tsurami_state.victory_complete = 1;
+    s_tsurami_state.lethal_hit_pending = 0;
+    s_tsurami_state.lethal_hit_armed = 0;
+    if (s_tsurami_state.remote_defeat_in_progress)
+    {
+        item_sync_commit_boss_completion("fl_tsurami");
+        s_tsurami_state.remote_defeat_in_progress = 0;
+        s_tsurami_state.remote_defeat_needs_rearm = 0;
+    }
+    anchor_tsurami_native_finish_terminal();
 }
 
 /* ENTITY_DARUMANYO used to point at ordinary entity 0x132.  The actual boss
