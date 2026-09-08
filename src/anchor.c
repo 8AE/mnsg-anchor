@@ -245,6 +245,23 @@ int anchor_set_local_room(unsigned int room_id)
     return result;
 }
 
+int anchor_set_world_map_location(unsigned int room_id,
+                                  float world_x, float world_z)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_U32("room_id", room_id);
+    REPY_FN_SET_F32("world_x", world_x);
+    REPY_FN_SET_F32("world_z", world_z);
+    REPY_FN_EXEC_CACHE(anchor_set_world_map_location_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.set_world_map_location(\n"
+                       "    room_id, world_x, world_z\n"
+                       ")\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_update_boss_arena(int arena, int visit)
 {
     REPY_FN_SETUP;

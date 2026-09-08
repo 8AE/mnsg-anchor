@@ -157,6 +157,18 @@ extern "C"
     */
    int anchor_set_local_room(unsigned int room_id);
 
+   /**
+    * @brief Publish the exact gameplay location used by the native Japan map.
+    *
+    * The map overlay changes the live room to 0x226. This separate snapshot
+    * retains the source room and X/Z accepted by the stock room-to-map mapper,
+    * allowing peers to keep showing this player while both maps are open.
+    *
+    * @return 1 if the replacement client-state packet was sent, 0 otherwise.
+    */
+   int anchor_set_world_map_location(unsigned int room_id,
+                                     float world_x, float world_z);
+
    /* Live, team-scoped boss-arena notifications. Arena 0 means outside;
     * arena 1 is Congo. Entry/exit edges are sent once, independently of room
     * metadata refreshes. The peeked JSON contains cid/session/seq/arena/name;
@@ -454,12 +466,16 @@ extern "C"
     * by team or room – it returns every online player so the phantom actor system
     * can allocate one actor per lobby member at room-load time.
     *
-    * Each element: ``{"cid":<int>,"n":"<name>","room":<int>,"x":<int>,"y":<int>,"z":<int>,"hp":<int>}``
+    * Each element contains the normal remote-render fields plus:
+    * ``{"mr":<int>,"mx":<int>,"my":<int>,"mz":<int>,"mhp":<int>}``
     *   cid  – stable client ID for this player.
     *   n    – player display name.
     *   room – raw 16-bit room ID (-1 if not yet known).
     *   x/y/z – last broadcast world-space position (0 if hp==0).
     *   hp   – 1 if the player has sent at least one position update, else 0.
+    *   mr   – gameplay room used by the Japan-map marker (-1 if unavailable).
+    *   mx/my/mz – durable map-source position in signed hundredths.
+    *   mhp  – 1 if the complete durable map-source record is available.
     *
     * Returns ``"[]"`` when not connected or no other players are online.
     * The caller must free the result with recomp_free().

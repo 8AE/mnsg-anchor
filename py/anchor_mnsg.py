@@ -128,6 +128,12 @@ _last_position_appearance_flags: int = -1
 _last_position_collision_disabled: int = -1
 _last_position_drive: "tuple[int, int]" = (0, 0)
 _last_position_epoch: int = 0
+# Durable last-gameplay transform used only while the local client is in the
+# World Map room.  currentRoomId must remain 0x226 for gameplay isolation, so
+# this separate snapshot lets late joiners place the player on Japan's map.
+# Coordinates use signed fixed-point hundredths of a world unit.
+_local_map_snapshot: "tuple[int, int, int, int] | None" = None
+_local_map_snapshot_explicit: bool = False
 _interaction_session: int = 0
 _player_hit_seq: int = 0
 _player_hits = deque(maxlen=32)
@@ -167,6 +173,21 @@ DEFAULT_HOST: str = "anchor.hm64.org"
 DEFAULT_PORT: int = 43383
 ROOM_ID_PREFIX: str = "mnsg-"
 ROOM_ID_TRIM_CHARS: str = " \t\n\r\v\f"
+WORLD_MAP_ROOM_ID: int = 0x226
+MAP_ROOM_METADATA_KEY: str = "mnsgMapRoomId"
+MAP_X_METADATA_KEY: str = "mnsgMapX"
+MAP_Y_METADATA_KEY: str = "mnsgMapY"
+MAP_Z_METADATA_KEY: str = "mnsgMapZ"
+MAP_METADATA_KEYS: "tuple[str, ...]" = (
+    MAP_ROOM_METADATA_KEY,
+    MAP_X_METADATA_KEY,
+    MAP_Y_METADATA_KEY,
+    MAP_Z_METADATA_KEY,
+)
+MAP_ROOM_MAX: int = 0xffff
+MAP_COORD_SCALE: int = 100
+MAP_COORD_MIN: int = -0x80000000
+MAP_COORD_MAX: int = 0x7fffffff
 MOVEMENT_MIN_INTERVAL_MS: int = 50
 ANCHOR_MAX_PACKET_BYTES: int = 8 * 1024 * 1024
 HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
@@ -254,6 +275,81 @@ def _appearance_flags_from_payload(payload: dict, current: int = 0) -> int:
         else:
             flags &= ~APPEARANCE_MINI_EBISUMARU
     return flags
+
+
+def _valid_map_room_id(value: object) -> bool:
+    """Return whether value is a gameplay room suitable for a map snapshot."""
+    return (
+        type(value) is int
+        and 0 <= value <= MAP_ROOM_MAX
+        and value != WORLD_MAP_ROOM_ID
+    )
+
+
+def _valid_map_coordinate(value: object) -> bool:
+    """Validate a signed fixed-point map coordinate stored in metadata."""
+    return type(value) is int and MAP_COORD_MIN <= value <= MAP_COORD_MAX
+
+
+def _scale_map_coordinate(value: object) -> "int | None":
+    """Convert a finite world coordinate to signed fixed-point hundredths."""
+    if type(value) is int:
+        scaled = value * MAP_COORD_SCALE
+    elif type(value) is float and math.isfinite(value):
+        scaled_float = value * MAP_COORD_SCALE
+        if not math.isfinite(scaled_float):
+            return None
+        scaled = int(round(scaled_float))
+    else:
+        return None
+    return scaled if _valid_map_coordinate(scaled) else None
+
+
+def _map_snapshot_from_payload(payload: dict) -> "tuple[int, int, int, int] | None":
+    """Validate a complete durable map snapshot without accepting partial data."""
+    if not all(key in payload for key in MAP_METADATA_KEYS):
+        return None
+    room = payload[MAP_ROOM_METADATA_KEY]
+    x = payload[MAP_X_METADATA_KEY]
+    y = payload[MAP_Y_METADATA_KEY]
+    z = payload[MAP_Z_METADATA_KEY]
+    if not _valid_map_room_id(room):
+        return None
+    if not all(_valid_map_coordinate(value) for value in (x, y, z)):
+        return None
+    return room, x, y, z
+
+
+def _cache_map_snapshot(state: dict, payload: dict) -> bool:
+    """Merge explicit map metadata, clearing it when an explicit record is invalid."""
+    if not any(key in payload for key in MAP_METADATA_KEYS):
+        return False
+    snapshot = _map_snapshot_from_payload(payload)
+    if snapshot is None:
+        state[MAP_ROOM_METADATA_KEY] = -1
+        state[MAP_X_METADATA_KEY] = 0
+        state[MAP_Y_METADATA_KEY] = 0
+        state[MAP_Z_METADATA_KEY] = 0
+    else:
+        room, x, y, z = snapshot
+        state[MAP_ROOM_METADATA_KEY] = room
+        state[MAP_X_METADATA_KEY] = x
+        state[MAP_Y_METADATA_KEY] = y
+        state[MAP_Z_METADATA_KEY] = z
+    return True
+
+
+def _local_map_metadata() -> dict:
+    """Build the authoritative replacement-safe map record for client metadata."""
+    snapshot = _local_map_snapshot
+    if snapshot is None:
+        snapshot = (-1, 0, 0, 0)
+    return {
+        MAP_ROOM_METADATA_KEY: snapshot[0],
+        MAP_X_METADATA_KEY: snapshot[1],
+        MAP_Y_METADATA_KEY: snapshot[2],
+        MAP_Z_METADATA_KEY: snapshot[3],
+    }
 
 
 def _clear_movement_state(state: dict) -> None:
@@ -364,6 +460,7 @@ def _merge_client_state(
             _drop_player_sounds(cid)
     if "isSaveLoaded" in payload:
         state["isSaveLoaded"] = bool(payload["isSaveLoaded"])
+    _cache_map_snapshot(state, payload)
     for field in _MOVEMENT_STATE_FIELDS:
         if field in payload:
             state[field] = int(payload[field])
@@ -478,6 +575,7 @@ def _replace_all_client_states(states: list) -> None:
                     )
                 ),
             }
+            _cache_map_snapshot(merged, client_state)
             if previous and int(previous.get("roomId", -1)) == room_id:
                 for field in _MOVEMENT_STATE_FIELDS:
                     if field in previous:
@@ -869,7 +967,9 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     global _last_position_sent, _last_position_sent_ms, _last_position_room_id
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
-    global _last_position_drive, _last_position_epoch, _interaction_session
+    global _last_position_drive, _last_position_epoch, _local_map_snapshot
+    global _local_map_snapshot_explicit
+    global _interaction_session
     global _player_hit_seq, _player_sound_seq
 
     # A receiver from an older connection must never close a newer socket.
@@ -892,6 +992,8 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _last_position_collision_disabled = -1
     _last_position_drive = (0, 0)
     _last_position_epoch = 0
+    _local_map_snapshot = None
+    _local_map_snapshot_explicit = False
     _interaction_session = 0
     _player_hit_seq = 0
     _player_sound_seq = 0
@@ -946,7 +1048,9 @@ def connect(
     global _position_seq, _local_character
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
-    global _last_position_drive, _last_position_epoch, _interaction_session
+    global _last_position_drive, _last_position_epoch, _local_map_snapshot
+    global _local_map_snapshot_explicit
+    global _interaction_session
     global _player_hit_seq, _player_sound_seq
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
 
@@ -977,6 +1081,8 @@ def connect(
     _last_position_collision_disabled = -1
     _last_position_drive = (0, 0)
     _last_position_epoch = 0
+    _local_map_snapshot = None
+    _local_map_snapshot_explicit = False
     _interaction_session = secrets.randbelow(_POSITION_SEQUENCE_MASK) + 1
     _player_hit_seq = 0
     _player_sound_seq = 0
@@ -1035,6 +1141,7 @@ def connect(
             "online": True,
             "isSaveLoaded": False,
             "interactionSession": _interaction_session,
+            **_local_map_metadata(),
             anchor_congo.METADATA_KEY: _congo.advertisement(_boss_context()),
             anchor_dharumanyo.METADATA_KEY: _dharumanyo.advertisement(
                 _boss_context()
@@ -1744,6 +1851,10 @@ def update_client_state(state_json: str) -> bool:
         state.setdefault("mnsgRace", _race_status)
     if _race_config_json:
         state.setdefault("mnsgRaceConfig", _race_config_json)
+    # Anchor replaces the stored clientState object rather than patching it.
+    # Repeat the complete bounded record on every metadata update so unrelated
+    # room/character/save edges cannot erase a map location needed by a late join.
+    state.update(_local_map_metadata())
     state["clientId"] = _client_id
     state["name"] = _player_name
     state["online"] = True
@@ -1765,6 +1876,7 @@ def update_client_state(state_json: str) -> bool:
         with _player_states_lock:
             local = _player_states.setdefault(_client_id, {})
             local.update(state)
+            _cache_map_snapshot(local, state)
             local["self"] = True
     return sent
 
@@ -2289,7 +2401,8 @@ def set_position_anim(
     global _position_seq
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
-    global _last_position_drive, _last_position_epoch
+    global _last_position_drive, _last_position_epoch, _local_map_snapshot
+    global _local_map_snapshot_explicit
 
     if not _connected:
         return False
@@ -2409,6 +2522,13 @@ def set_position_anim(
     _last_position_drive = (drive_x, drive_z)
     _last_position_epoch = player_epoch
     _position_seq = next_seq
+    if (_valid_map_room_id(_local_room_id) and
+            not _local_map_snapshot_explicit):
+        map_x = _scale_map_coordinate(x)
+        map_y = _scale_map_coordinate(y)
+        map_z = _scale_map_coordinate(z)
+        if map_x is not None and map_y is not None and map_z is not None:
+            _local_map_snapshot = (_local_room_id, map_x, map_y, map_z)
 
     if _client_id:
         with _player_states_lock:
@@ -2481,11 +2601,35 @@ def set_local_room(room_id: int) -> bool:
 
     Returns True if a packet was sent, False otherwise.
     """
-    global _local_room_id
+    global _local_room_id, _local_map_snapshot, _local_map_snapshot_explicit
     if not _connected:
         return False
     if room_id == _local_room_id:
         return False
+    previous_room = _local_room_id
+    if (room_id == WORLD_MAP_ROOM_ID and
+            _valid_map_room_id(previous_room) and
+            not _local_map_snapshot_explicit):
+        # Usually the successful hot-position sender already maintains this
+        # fallback. Rebuild it here when necessary for older/native callers,
+        # without replacing the more precise explicit world-map setter value.
+        if (_local_map_snapshot is None or
+                _local_map_snapshot[0] != previous_room):
+            if (_last_position_room_id == previous_room and
+                    _last_position_sent is not None):
+                map_x = _scale_map_coordinate(_last_position_sent[0])
+                map_y = _scale_map_coordinate(_last_position_sent[1])
+                map_z = _scale_map_coordinate(_last_position_sent[2])
+                if map_x is not None and map_y is not None and map_z is not None:
+                    _local_map_snapshot = (previous_room, map_x, map_y, map_z)
+                else:
+                    _local_map_snapshot = None
+            else:
+                _local_map_snapshot = None
+    elif previous_room == WORLD_MAP_ROOM_ID and _valid_map_room_id(room_id):
+        # A stock-map tuple is authoritative only for that map visit. Resume
+        # tracking successful hot gameplay positions after leaving the map.
+        _local_map_snapshot_explicit = False
     _local_room_id = room_id
     area_name = _ROOM_NAMES.get(room_id, "")
     # Update our own local entry immediately – the server won't echo us back.
@@ -2513,6 +2657,35 @@ def set_local_room(room_id: int) -> bool:
                 _boss_context(), False, 0, False, None, time.monotonic()
             )
     return update_client_state(json.dumps({"currentRoom": area_name, "currentRoomId": room_id}))
+
+
+def set_world_map_location(room_id: int, x: float, z: float) -> bool:
+    """Publish the stock World Map marker source as durable client metadata.
+
+    ``x`` and ``z`` are the native floating-point world coordinates passed to
+    the stock marker routine. They are encoded as signed fixed-point hundredths
+    in ``mnsgMapX``/``mnsgMapZ``. ``mnsgMapY`` retains a matching gameplay Y
+    sample when available and is otherwise zero; Japan's marker uses X/Z.
+    """
+    global _local_map_snapshot, _local_map_snapshot_explicit
+
+    if not _connected or not _valid_map_room_id(room_id):
+        return False
+    map_x = _scale_map_coordinate(x)
+    map_z = _scale_map_coordinate(z)
+    if map_x is None or map_z is None:
+        return False
+
+    map_y = 0
+    if _local_map_snapshot is not None and _local_map_snapshot[0] == room_id:
+        map_y = _local_map_snapshot[2]
+    elif _last_position_room_id == room_id and _last_position_sent is not None:
+        scaled_y = _scale_map_coordinate(_last_position_sent[1])
+        if scaled_y is not None:
+            map_y = scaled_y
+    _local_map_snapshot = (room_id, map_x, map_y, map_z)
+    _local_map_snapshot_explicit = True
+    return update_client_state("{}")
 
 
 def send_game_complete() -> bool:
@@ -2668,6 +2841,9 @@ def get_lobby_positions_json() -> str:
       "t"    – sender monotonic milliseconds, masked to a positive 31-bit value.
       "ap"   – Sudden Impact bit 0, Mini Ebisumaru bit 1, hurt recovery bit 2.
       "cd"   – 1 while the sender requires cutscene/script collision bypass.
+      "mr"   – gameplay room used by the Japan-map marker, -1 if unavailable.
+      "mx","my","mz" – signed fixed-point map position in hundredths.
+      "mhp"  – 1 when mr/mx/my/mz form a complete usable map snapshot.
 
     Unlike get_teammate_positions_json(), this function:
       - Does NOT filter by team.
@@ -2687,9 +2863,26 @@ def get_lobby_positions_json() -> str:
                 continue
             room_id = int(v.get("roomId", -1))
             has_pos = "posX" in v
+            has_complete_pos = all(
+                field in v for field in ("posX", "posY", "posZ")
+            )
             px = int(v.get("posX", 0)) if has_pos else 0
             py = int(v.get("posY", 0)) if has_pos else 0
             pz = int(v.get("posZ", 0)) if has_pos else 0
+            map_snapshot = None
+            if room_id == WORLD_MAP_ROOM_ID:
+                map_snapshot = _map_snapshot_from_payload(v)
+            elif _valid_map_room_id(room_id) and has_complete_pos:
+                map_x = _scale_map_coordinate(px)
+                map_y = _scale_map_coordinate(py)
+                map_z = _scale_map_coordinate(pz)
+                if map_x is not None and map_y is not None and map_z is not None:
+                    map_snapshot = (room_id, map_x, map_y, map_z)
+            if map_snapshot is None:
+                map_room, map_x, map_y, map_z, has_map_pos = -1, 0, 0, 0, 0
+            else:
+                map_room, map_x, map_y, map_z = map_snapshot
+                has_map_pos = 1
             char_lookup = {"Goemon": 0, "Ebisumaru": 1, "Sasuke": 2, "Yae": 3}
             ch = char_lookup.get(v.get("character", ""), -1)
             result.append({
@@ -2700,6 +2893,11 @@ def get_lobby_positions_json() -> str:
                 "y": py,
                 "z": pz,
                 "hp": 1 if has_pos else 0,
+                "mr": map_room,
+                "mx": map_x,
+                "my": map_y,
+                "mz": map_z,
+                "mhp": has_map_pos,
                 "ch": ch,
                 "vx": int(v.get("velX", 0)),
                 "vy": int(v.get("velY", 0)),
