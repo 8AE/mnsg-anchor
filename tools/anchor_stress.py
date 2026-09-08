@@ -51,6 +51,7 @@ except Exception:
     HOT_PACKET_MAX_BYTES = {
         "MNSG_PLAYER_POS": 640,
         "MNSG_PROJECTILE_SPAWN": 512,
+        "MNSG_PLAYER_SOUND": 320,
     }
     ROOM_NAMES: dict[int, str] = {}
 
@@ -242,8 +243,11 @@ class AnchorBot:
         self._last_pos_ms = 0
         self._pos_seq = 0
         self._projectile_spawn_id = 0
+        self._sound_seq = 0
         self.projectile_sent = 0
         self.projectile_received = 0
+        self.sound_sent = 0
+        self.sound_received = 0
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._recv_task: asyncio.Task[None] | None = None
@@ -253,7 +257,9 @@ class AnchorBot:
         self._reader, self._writer = await asyncio.open_connection(self.config.host, self.config.port)
         self.interaction_session = secrets.randbelow(0x7fffffff) + 1
         self._projectile_spawn_id = 0
+        self._sound_seq = 0
         self.projectile_sent = self.projectile_received = 0
+        self.sound_sent = self.sound_received = 0
         self.connected = True
         await self._send({
             "type": "HANDSHAKE",
@@ -382,6 +388,27 @@ class AnchorBot:
         })
         self.projectile_sent += 1
 
+    async def publish_sound(self, sound_ids: list[int]) -> None:
+        """Inject one cue batch using the native client's transient envelope."""
+        if anchor_mnsg is None:
+            raise RuntimeError("sound stress packets require py/anchor_mnsg.py")
+        validated = anchor_mnsg._validate_player_sound_ids(sound_ids)
+        if validated is None:
+            raise ValueError("invalid or unsafe player sound cue batch")
+        if not self.connected or self.client_id <= 0 or self._pos_seq <= 0:
+            return
+        self._sound_seq = (self._sound_seq % 0x7fffffff) + 1
+        await self._send({
+            "type": "MNSG_PLAYER_SOUND", "clientId": self.client_id,
+            "currentRoomId": self.room_id,
+            "interactionSession": self.interaction_session,
+            "playerEpoch": self.player_epoch, "soundSeq": self._sound_seq,
+            "sourcePosSeq": self._pos_seq,
+            "soundT": int(time.monotonic() * 1000),
+            "soundIds": list(validated), "quiet": True,
+        })
+        self.sound_sent += len(validated)
+
     async def tick(self) -> None:
         if self.connected:
             await self.publish_position()
@@ -423,6 +450,11 @@ class AnchorBot:
             return
         if ptype == "MNSG_PROJECTILE_SPAWN":
             self.projectile_received += 1
+            return
+        if ptype == "MNSG_PLAYER_SOUND":
+            sounds = packet.get("soundIds", [])
+            if isinstance(sounds, list):
+                self.sound_received += len(sounds)
             return
         if ptype == "UPDATE_CLIENT_STATE":
             state = packet.get("state") or packet.get("clientState") or {}
@@ -548,6 +580,9 @@ class StressController:
         if cmd == "throw":
             await self._command_throw(args)
             return
+        if cmd == "sound":
+            await self._command_sound(args)
+            return
         print(f"unknown command: {cmd}")
 
     async def print_status(self) -> None:
@@ -556,6 +591,8 @@ class StressController:
         print(f"bots={len(self.bots)} connected={connected} assigned_ids={len(ids)} rate_hz={self.config.rate_hz}")
         print(f"projectile events sent={sum(b.projectile_sent for b in self.bots)} "
               f"received={sum(b.projectile_received for b in self.bots)}")
+        print(f"sound cues sent={sum(b.sound_sent for b in self.bots)} "
+              f"received={sum(b.sound_received for b in self.bots)}")
         if self.follow_selector:
             target = await self.world.find_target(self.follow_selector)
             if target and target.x is not None:
@@ -680,6 +717,15 @@ class StressController:
             })
         print(f"throw kind={kind} for {len(bots)} bots")
 
+    async def _command_sound(self, args: list[str]) -> None:
+        if not 2 <= len(args) <= 9:
+            raise ValueError("usage: sound <all|N|A-B> <cue> [cue ...] (maximum 8)")
+        bots = self._select_bots(args[0])
+        sound_ids = [int(value, 0) for value in args[1:]]
+        await asyncio.gather(*(bot.publish_sound(sound_ids) for bot in bots))
+        print(f"sound cues={','.join(hex(value) for value in sound_ids)} "
+              f"for {len(bots)} bots")
+
     def _select_bots(self, selector: str) -> list[AnchorBot]:
         if selector.lower() == "all":
             return self.bots
@@ -737,6 +783,9 @@ Commands:
   throw <all|N|A-B> <kind> [vx100 vy100 vz100]
       Spawn one throw at each bot's position. Velocity is hundredths per game
       tick; default is (0,0,300). The game accepts only its known throw kinds.
+  sound <all|N|A-B> <cue> [cue ...]
+      Broadcast up to eight one-shot player SFX IDs, such as 0x212. Music,
+      global stop commands, duplicate cues, and the 0x26D player loop are rejected.
   follow <clientId|name substring>
       Move all synthetic clients in a ring around a server client.
       The bots copy room, character, appearance, and cutscene bypass while following.

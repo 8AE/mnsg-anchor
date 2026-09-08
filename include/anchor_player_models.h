@@ -57,6 +57,14 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
 void anchor_player_models_load_resources(void);
 void anchor_player_models_reset(void);
 int anchor_player_models_get_position(int cid, float *x, float *y, float *z);
+/* Resolve a current peer's audible position without requiring gameplay
+ * collision, which is intentionally absent during scripted movement. */
+int anchor_player_models_get_sound_position(int cid, int session, int epoch,
+                                            float *x, float *y, float *z);
+/* Accept the real playable task and directly owned native effect tasks, but
+ * never Anchor's render-only remote-model task. This performs native-only
+ * linkage/ownership checks and is safe to call from the final audio hook. */
+int anchor_player_models_is_local_sound_task(const void *task);
 int anchor_player_models_capacity(void);
 int anchor_player_models_is_remote_object(const void *object);
 const void *anchor_player_models_resolve_render_address(const void *object,
@@ -64,6 +72,12 @@ const void *anchor_player_models_resolve_render_address(const void *object,
 int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacity);
 void anchor_player_models_get_drive(int *x, int *z);
 int anchor_player_models_get_epoch(void);
+/* Native-only snapshot for hooks that must not enter the Python bridge. The
+ * frame publisher refreshes the authoritative epoch before consumers use it. */
+int anchor_player_models_peek_epoch(void);
+/* Cached scripted-control state paired with peek_epoch(). This does not run
+ * collision/cutscene detection and is therefore safe inside native hooks. */
+int anchor_player_models_peek_scripted(void);
 int anchor_player_models_peer_is_current(int cid, int session, int epoch);
 /* Retain an eligible target, or rotate through every current same-team player
  * in client-ID order. This scans the dynamic roster without a player limit. */

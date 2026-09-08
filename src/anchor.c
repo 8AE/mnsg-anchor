@@ -547,6 +547,69 @@ int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
     return result;
 }
 
+int anchor_send_player_sounds(int interaction_session, int player_epoch,
+                              const unsigned short *sound_ids,
+                              int sound_count)
+{
+    unsigned int sounds[8] = {0};
+    int i;
+    if (interaction_session <= 0 || player_epoch <= 0 || !sound_ids ||
+        sound_count < 1 || sound_count > 8)
+        return 0;
+    for (i = 0; i < sound_count; ++i)
+        sounds[i] = sound_ids[i];
+
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("interaction_session", interaction_session);
+    REPY_FN_SET_S32("player_epoch", player_epoch);
+    REPY_FN_SET_S32("sound_count", sound_count);
+    REPY_FN_SET_U32("sound_0", sounds[0]);
+    REPY_FN_SET_U32("sound_1", sounds[1]);
+    REPY_FN_SET_U32("sound_2", sounds[2]);
+    REPY_FN_SET_U32("sound_3", sounds[3]);
+    REPY_FN_SET_U32("sound_4", sounds[4]);
+    REPY_FN_SET_U32("sound_5", sounds[5]);
+    REPY_FN_SET_U32("sound_6", sounds[6]);
+    REPY_FN_SET_U32("sound_7", sounds[7]);
+    REPY_FN_EXEC_CACHE(anchor_send_player_sounds_code,
+                       "import anchor_mnsg\n"
+                       "sound_ids = [sound_0, sound_1, sound_2, sound_3, "
+                       "sound_4, sound_5, sound_6, sound_7][:sound_count]\n"
+                       "result = anchor_mnsg.send_player_sounds(\n"
+                       "    interaction_session, player_epoch, sound_ids)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_poll_player_sound(int *sender_cid, int *sender_session,
+                             int *sender_epoch, unsigned int *sound_id,
+                             unsigned int *remaining_ms)
+{
+    if (!sender_cid || !sender_session || !sender_epoch || !sound_id ||
+        !remaining_ms)
+        return 0;
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_poll_player_sound_code,
+                       "import anchor_mnsg\n"
+                       "sound = anchor_mnsg.poll_player_sound()\n"
+                       "has_sound = sound is not None\n"
+                       "if has_sound:\n"
+                       "    sender_cid, sender_session, sender_epoch, "
+                       "sound_id, remaining_ms = sound\n");
+    int result = (int)REPY_FN_GET_BOOL("has_sound");
+    if (result)
+    {
+        *sender_cid = (int)REPY_FN_GET_S32("sender_cid");
+        *sender_session = (int)REPY_FN_GET_S32("sender_session");
+        *sender_epoch = (int)REPY_FN_GET_S32("sender_epoch");
+        *sound_id = (unsigned int)REPY_FN_GET_U32("sound_id");
+        *remaining_ms = (unsigned int)REPY_FN_GET_U32("remaining_ms");
+    }
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_set_character(const char *char_name)
 {
     REPY_FN_SETUP;

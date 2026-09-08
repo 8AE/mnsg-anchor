@@ -310,6 +310,37 @@ static int is_linked_remote_task(const void *task)
            (void *)remote_model_task_update;
 }
 
+static void *read_sound_task_pointer(const void *base, unsigned int offset)
+{
+    void *value;
+
+    /* Native pointers are four-byte aligned; host regression builds use
+     * eight-byte pointers against the same N64 byte offsets. A fixed-size
+     * builtin copy keeps both layouts defined and lowers inline for MIPS. */
+    __builtin_memcpy(&value, (const unsigned char *)base + offset,
+                     sizeof(value));
+    return value;
+}
+
+int anchor_player_models_is_local_sound_task(const void *task)
+{
+    void *player = D_801FC604_5B8514;
+    void *object = D_801FC60C_5B851C;
+
+    if (!is_linked_task(player) || !is_rdram_pointer(object) ||
+        read_sound_task_pointer(player, 0x18) != object ||
+        !is_linked_task(task))
+        return 0;
+    if (task == player)
+        return 1;
+
+    /* Remote models are render-only children of the local player. Keep that
+     * synthetic ownership relationship out of local sound attribution even
+     * if a future renderer change happens to enqueue a native cue. */
+    return !is_linked_remote_task(task) &&
+           read_sound_task_pointer(task, 0x5c) == player;
+}
+
 static unsigned char *alloc_aligned(unsigned int size)
 {
     unsigned int addr = (unsigned int)(unsigned long)recomp_alloc(size + BUFFER_ALIGN);
@@ -720,6 +751,36 @@ int anchor_player_models_get_position(int cid, float *x, float *y, float *z)
     *x = slot->collision_body.position.x;
     *y = slot->collision_body.position.y;
     *z = slot->collision_body.position.z;
+    return 1;
+}
+
+int anchor_player_models_get_sound_position(int cid, int session, int epoch,
+                                            float *x, float *y, float *z)
+{
+    RemoteModelSlot *slot = find_slot(cid);
+    if (!x || !y || !z || !slot || !slot->active || !slot->pending_valid ||
+        slot->pending_room != D_800C7AB2 ||
+        slot->pending_remote.interaction_session != session ||
+        slot->pending_remote.player_epoch != epoch ||
+        s_owner_task != D_801FC604_5B8514 ||
+        !is_linked_task(s_owner_task) || !is_linked_remote_task(slot->task))
+        return 0;
+
+    if (slot->collision_ready)
+    {
+        *x = slot->collision_body.position.x;
+        *y = slot->collision_body.position.y;
+        *z = slot->collision_body.position.z;
+    }
+    else
+    {
+        /* Scripted movement deliberately has no collision body. Its pending
+         * smoothed transform is still the authoritative audible position and
+         * also covers the frame before a newly bound child task first runs. */
+        *x = slot->pending_remote.x;
+        *y = slot->pending_remote.y;
+        *z = slot->pending_remote.z;
+    }
     return 1;
 }
 
@@ -1282,6 +1343,16 @@ int anchor_player_models_get_epoch(void)
         s_drive_x = s_drive_z = 0;
     }
     return s_player_epoch;
+}
+
+int anchor_player_models_peek_epoch(void)
+{
+    return s_player_epoch;
+}
+
+int anchor_player_models_peek_scripted(void)
+{
+    return s_interaction_scripted;
 }
 
 void anchor_player_models_get_drive(int *x, int *z)

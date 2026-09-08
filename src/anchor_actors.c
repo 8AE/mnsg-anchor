@@ -16,6 +16,7 @@
 #include "anchor_dialog.h"
 #include "anchor_player_models.h"
 #include "anchor_projectile_models.h"
+#include "anchor_player_sounds.h"
 #include "anchor_remote_animation.h"
 #include "anchor_remote_collision.h"
 #include "anchor_remote_motion.h"
@@ -944,6 +945,7 @@ void anchor_actors_update_cutscene_models(void)
     publish_local_state(local_obj);
     refresh_lobby();
     update_remote_cutscene_models(local_obj);
+    anchor_player_sounds_update();
 }
 
 #endif /* !ANCHOR_ACTORS_HOST_TEST */

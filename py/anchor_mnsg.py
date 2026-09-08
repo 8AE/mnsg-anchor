@@ -132,6 +132,9 @@ _interaction_session: int = 0
 _player_hit_seq: int = 0
 _player_hits = deque(maxlen=32)
 _player_hit_seen: "dict[int, tuple[int, int, int, int]]" = {}
+_player_sound_seq: int = 0
+_player_sounds = deque(maxlen=64)
+_player_sound_seen: "dict[tuple[int, int, int, int], tuple[int, int]]" = {}
 _retired_interaction_sessions: "dict[int, set[int]]" = {}
 _player_movement_order: "dict[int, dict]" = {}
 _projectile_spawns: "dict[tuple[int, int, int, int], tuple[int, dict]]" = {}
@@ -169,12 +172,21 @@ ANCHOR_MAX_PACKET_BYTES: int = 8 * 1024 * 1024
 HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     "MNSG_PLAYER_POS": 640,
     "MNSG_PLAYER_HIT": 512,
+    "MNSG_PLAYER_SOUND": 320,
     "MNSG_PROJECTILE_SPAWN": 512,
     anchor_congo.PACKET_TYPE: 8 * 1024,
     anchor_dharumanyo.PACKET_TYPE: 8 * 1024,
     anchor_tsurami.PACKET_TYPE: 8 * 1024,
 }
 PLAYER_HIT_MAX_AGE_MS: int = 500
+PLAYER_SOUND_MAX_AGE_MS: int = 500
+PLAYER_SOUND_BATCH_COUNT: int = 8
+PLAYER_SOUND_QUEUE_COUNT: int = 64
+PLAYER_SOUND_TIMESTAMP_MAX: int = 0x7fffffffffffffff
+# 0x026D has a matching 0x826D global stop command. The native mixer owns
+# sounds by cue rather than player, so replaying that loop for one peer could
+# stop (or be stopped by) the local player or another peer.
+PLAYER_SOUND_BLOCKED_IDS = frozenset({0x026D})
 PROJECTILE_MAX_AGE_MS: int = 750
 PROJECTILE_BATCH_COUNT: int = 16
 PROJECTILE_QUEUE_COUNT: int = 64
@@ -349,6 +361,7 @@ def _merge_client_state(
         state["online"] = bool(payload["online"])
         if not state["online"]:
             _drop_projectile_spawns(cid)
+            _drop_player_sounds(cid)
     if "isSaveLoaded" in payload:
         state["isSaveLoaded"] = bool(payload["isSaveLoaded"])
     for field in _MOVEMENT_STATE_FIELDS:
@@ -376,6 +389,10 @@ def _merge_client_state(
                 ("posSeq", "posT", "interactionSession", "playerEpoch")
                 if field in state
             }
+            if session > 0 and epoch > 0:
+                _drop_player_sounds(
+                    cid, (cid, session, epoch, int(state.get("roomId", -1)))
+                )
     if enforce_movement_order or "posX" in payload:
         # Legacy movement has no hurt-recovery bit; never retain a newer
         # sender's recovery state after that sender stops reporting it.
@@ -510,6 +527,7 @@ def _replace_all_client_states(states: list) -> None:
             replacement = new_players.get(cid, {})
             if not replacement.get("online", False):
                 _drop_projectile_spawns(cid)
+                _drop_player_sounds(cid)
             if cid not in new_players:
                 order = _player_movement_order.pop(cid, previous)
                 _retire_interaction_session(cid, int(order.get("interactionSession", 0)))
@@ -521,7 +539,9 @@ def _replace_all_client_states(states: list) -> None:
         _tsurami.observe(context)
         for cid in list(_arena_events):
             _invalidate_confirmed_boss_invitation(cid)
-        _prune_projectile_spawns(int(time.monotonic() * 1000))
+        now_ms = int(time.monotonic() * 1000)
+        _prune_projectile_spawns(now_ms)
+        _prune_player_sounds(now_ms)
 
 ###############################################################################
 # Room ID → area name lookup table
@@ -776,6 +796,10 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_player_hit(packet)
                     continue
 
+                if ptype == "MNSG_PLAYER_SOUND":
+                    _receive_player_sound(packet)
+                    continue
+
                 if ptype == "MNSG_PROJECTILE_SPAWN":
                     _receive_projectile_spawn(packet)
                     continue
@@ -846,7 +870,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
     global _last_position_drive, _last_position_epoch, _interaction_session
-    global _player_hit_seq
+    global _player_hit_seq, _player_sound_seq
 
     # A receiver from an older connection must never close a newer socket.
     if expected_sock is not None and _sock is not expected_sock:
@@ -870,6 +894,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _last_position_epoch = 0
     _interaction_session = 0
     _player_hit_seq = 0
+    _player_sound_seq = 0
     _connected = False
     s = _sock
     _sock = None
@@ -882,6 +907,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _player_states.clear()
         _player_hits.clear()
         _player_hit_seen.clear()
+        _reset_player_sounds()
         _retired_interaction_sessions.clear()
         _player_movement_order.clear()
         _reset_projectile_spawns()
@@ -921,7 +947,7 @@ def connect(
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
     global _last_position_drive, _last_position_epoch, _interaction_session
-    global _player_hit_seq
+    global _player_hit_seq, _player_sound_seq
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
 
     normalized_room_id = normalize_room_id(room_id)
@@ -953,6 +979,7 @@ def connect(
     _last_position_epoch = 0
     _interaction_session = secrets.randbelow(_POSITION_SEQUENCE_MASK) + 1
     _player_hit_seq = 0
+    _player_sound_seq = 0
     _position_seq = 0
     _local_character = ""
     _local_save_loaded = False
@@ -961,6 +988,7 @@ def connect(
     with _player_states_lock:
         _player_hits.clear()
         _player_hit_seen.clear()
+        _reset_player_sounds()
         _retired_interaction_sessions.clear()
         _player_movement_order.clear()
         _reset_projectile_spawns()
@@ -1224,6 +1252,235 @@ def poll_player_hit():
                 continue
             return (int(packet["clientId"]), int(packet["targetEpoch"]),
                     float(packet["hitX"]), float(packet["hitY"]), float(packet["hitZ"]))
+    return None
+
+
+def _reset_player_sounds() -> None:
+    """Reset connection-scoped one-shot sound state; caller holds the lock."""
+    _player_sounds.clear()
+    _player_sound_seen.clear()
+
+
+def _player_sound_identity(packet: dict) -> tuple:
+    return (packet.get("clientId"), packet.get("interactionSession"),
+            packet.get("playerEpoch"), packet.get("currentRoomId"))
+
+
+def _drop_player_sounds(cid: int, keep_identity: "tuple | None" = None) -> None:
+    """Drop one sender's stale generations, retaining only an exact match."""
+    retained = [entry for entry in _player_sounds
+                if entry[1].get("clientId") != cid or
+                (keep_identity is not None and
+                 _player_sound_identity(entry[1]) == keep_identity)]
+    _player_sounds.clear()
+    _player_sounds.extend(retained)
+    for identity in list(_player_sound_seen):
+        if identity[0] == cid and identity != keep_identity:
+            del _player_sound_seen[identity]
+
+
+def _validate_player_sound_ids(sound_ids):
+    """Return a canonical one-frame cue batch, or None for unsafe commands."""
+    if type(sound_ids) is not list or not 1 <= len(sound_ids) <= PLAYER_SOUND_BATCH_COUNT:
+        return None
+    validated = []
+    seen = set()
+    for sound_id in sound_ids:
+        # High-bit commands stop a global cue, and IDs below 0x100 are music.
+        if (type(sound_id) is not int or not 0x100 <= sound_id <= 0x7fff or
+                sound_id in PLAYER_SOUND_BLOCKED_IDS or sound_id in seen):
+            return None
+        seen.add(sound_id)
+        validated.append(sound_id)
+    return tuple(validated)
+
+
+def _player_sound_local_room() -> int:
+    """Return the live game room despite a transient membership refresh."""
+    local = _player_states.get(_client_id, {})
+    room = _local_room_id if _local_room_id >= 0 else _last_position_room_id
+    return room if local.get("roomId") == room else -1
+
+
+def _player_sound_source_status(packet: dict) -> int:
+    """Return 0 rejected, 1 awaiting movement, or 2 ready; lock held."""
+    if (type(packet) is not dict or packet.get("type") != "MNSG_PLAYER_SOUND" or
+            not _connected or _client_id <= 0 or
+            _validate_player_sound_ids(packet.get("soundIds")) is None):
+        return 0
+    for key in ("clientId", "interactionSession", "playerEpoch", "soundSeq",
+                "sourcePosSeq"):
+        value = packet.get(key)
+        if type(value) is not int or not 0 < value <= _POSITION_SEQUENCE_MASK:
+            return 0
+    sound_time = packet.get("soundT")
+    if (type(sound_time) is not int or
+            not 0 < sound_time <= PLAYER_SOUND_TIMESTAMP_MAX):
+        return 0
+    room = packet.get("currentRoomId")
+    if type(room) is not int or not 0 <= room <= 0xffff:
+        return 0
+
+    sender = packet["clientId"]
+    source = _player_states.get(sender)
+    local = _player_states.get(_client_id, {})
+    if (sender == _client_id or not source or not source.get("online", False) or
+            room != _player_sound_local_room() or
+            source.get("roomId") != room or
+            _interaction_session <= 0 or
+            local.get("interactionSession") != _interaction_session or
+            local.get("playerEpoch", 0) <= 0 or
+            packet.get("localEpoch", local.get("playerEpoch")) != local.get("playerEpoch")):
+        return 0
+
+    session = packet["interactionSession"]
+    epoch = packet["playerEpoch"]
+    if session in _retired_interaction_sessions.get(sender, ()):
+        return 0
+    order = _player_movement_order.get(sender, source)
+    current_session = order.get("interactionSession", 0)
+    current_epoch = order.get("playerEpoch", 0)
+    # Movement and sound use the same sender TCP stream, and the native sender
+    # publishes an epoch-changing movement sample before its sound batch. Do
+    # not retain arbitrary unconfirmed generations from an unauthenticated
+    # root clientId; they could otherwise grow replay bookkeeping forever.
+    if session != current_session or epoch != current_epoch:
+        return 0
+    if ("posX" not in source or
+            source.get("interactionSession") != session or
+            source.get("playerEpoch") != epoch):
+        return 1
+
+    source_seq = int(source.get("posSeq", 0))
+    event_seq = packet["sourcePosSeq"]
+    sequence_lag = (source_seq - event_seq) & _POSITION_SEQUENCE_MASK
+    if sequence_lag >= _POSITION_SEQUENCE_HALF_RANGE:
+        return 1
+    source_time = int(source.get("posT", 0))
+    if source_time <= 0:
+        return 1
+    if source_time - sound_time > 5000:
+        return 0
+    if sound_time - source_time > 5000:
+        return 1
+    return 2
+
+
+def _prune_player_sounds(now_ms: int) -> None:
+    """Discard locally expired or invalid queued cues; caller holds lock."""
+    retained = [entry for entry in _player_sounds
+                if now_ms - entry[0] < PLAYER_SOUND_MAX_AGE_MS and
+                _player_sound_source_status(entry[1]) != 0]
+    _player_sounds.clear()
+    _player_sounds.extend(retained)
+    for identity in list(_player_sound_seen):
+        cid, session, epoch, room = identity
+        source = _player_states.get(cid)
+        order = _player_movement_order.get(cid, source or {})
+        if (cid == _client_id or not source or
+                not source.get("online", False) or
+                source.get("roomId") != room or
+                room != _player_sound_local_room() or
+                order.get("interactionSession", 0) != session or
+                order.get("playerEpoch", 0) != epoch):
+            del _player_sound_seen[identity]
+
+
+def _receive_player_sound(packet: dict) -> bool:
+    """Accept one bounded frame batch without using the durable event queue."""
+    sound_ids = _validate_player_sound_ids(
+        packet.get("soundIds") if type(packet) is dict else None
+    )
+    if sound_ids is None:
+        return False
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        if _player_sound_source_status(packet) == 0:
+            return False
+        identity = _player_sound_identity(packet)
+        sequence = packet["soundSeq"]
+        previous = _player_sound_seen.get(identity)
+        highest, bits = sequence, 1
+        if previous:
+            delta = (sequence - previous[0]) & _POSITION_SEQUENCE_MASK
+            if 0 < delta < _POSITION_SEQUENCE_HALF_RANGE:
+                bits = ((previous[1] << delta) | 1) & ((1 << 64) - 1) if delta < 64 else 1
+            else:
+                lag = (previous[0] - sequence) & _POSITION_SEQUENCE_MASK
+                if lag >= 64 or previous[1] & (1 << lag):
+                    return False
+                highest, bits = previous[0], previous[1] | (1 << lag)
+        _prune_player_sounds(now_ms)
+        if len(_player_sounds) + len(sound_ids) > PLAYER_SOUND_QUEUE_COUNT:
+            return False
+        pending = {key: packet[key] for key in
+                   ("type", "clientId", "currentRoomId", "interactionSession",
+                    "playerEpoch", "soundSeq", "sourcePosSeq", "soundT")}
+        pending["soundIds"] = list(sound_ids)
+        pending["localEpoch"] = _player_states[_client_id].get("playerEpoch", 0)
+        _player_sound_seen[identity] = (highest, bits)
+        for sound_id in sound_ids:
+            _player_sounds.append((now_ms, pending, sound_id))
+    return True
+
+
+def send_player_sounds(interaction_session: int, player_epoch: int,
+                       sound_ids: list) -> bool:
+    """Broadcast one frame's local-player one-shot cues to the game room."""
+    global _player_sound_seq
+    validated = _validate_player_sound_ids(sound_ids)
+    if (type(interaction_session) is not int or
+            not 0 < interaction_session <= _POSITION_SEQUENCE_MASK or
+            type(player_epoch) is not int or validated is None):
+        return False
+    with _player_states_lock:
+        local = _player_states.get(_client_id, {})
+        sound_time = int(time.monotonic() * 1000)
+        if (not _connected or _client_id <= 0 or
+                not 0 <= _local_room_id <= 0xffff or
+                local.get("roomId") != _local_room_id or "posX" not in local or
+                _interaction_session <= 0 or
+                interaction_session != _interaction_session or
+                local.get("interactionSession") != _interaction_session or
+                not 0 < player_epoch <= _POSITION_SEQUENCE_MASK or
+                local.get("playerEpoch") != player_epoch or
+                not 0 < int(local.get("posSeq", 0)) <= _POSITION_SEQUENCE_MASK or
+                not 0 < sound_time <= PLAYER_SOUND_TIMESTAMP_MAX):
+            return False
+        next_seq = (_player_sound_seq % _POSITION_SEQUENCE_MASK) + 1
+        packet = {
+            "type": "MNSG_PLAYER_SOUND", "clientId": _client_id,
+            "currentRoomId": _local_room_id,
+            "interactionSession": interaction_session,
+            "playerEpoch": player_epoch, "soundSeq": next_seq,
+            "sourcePosSeq": int(local["posSeq"]),
+            "soundT": sound_time,
+            "soundIds": list(validated), "quiet": True,
+        }
+    if not _send_raw(packet):
+        return False
+    _player_sound_seq = next_seq
+    return True
+
+
+def poll_player_sound():
+    """Return one fresh spatial cue identity, or None, without echoing it."""
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        _prune_player_sounds(now_ms)
+        for _ in range(len(_player_sounds)):
+            received_ms, packet, sound_id = _player_sounds.popleft()
+            status = _player_sound_source_status(packet)
+            if status == 1:
+                _player_sounds.append((received_ms, packet, sound_id))
+                continue
+            if status == 2:
+                age_ms = max(0, now_ms - received_ms)
+                remaining_ms = max(0, PLAYER_SOUND_MAX_AGE_MS - age_ms)
+                return (int(packet["clientId"]),
+                        int(packet["interactionSession"]),
+                        int(packet["playerEpoch"]), int(sound_id),
+                        remaining_ms)
     return None
 
 
@@ -2237,6 +2494,7 @@ def set_local_room(room_id: int) -> bool:
         # a same-room metadata refresh must preserve active remote visuals.
         if _player_states.get(_client_id, {}).get("roomId") != room_id:
             _projectile_spawns.clear()
+            _reset_player_sounds()
         if _client_id in _player_states:
             _player_states[_client_id]["location"] = area_name
             _player_states[_client_id]["roomId"] = room_id

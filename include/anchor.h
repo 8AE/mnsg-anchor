@@ -266,6 +266,18 @@ extern "C"
    int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
                                float *x, float *y, float *z);
 
+   /* One-frame batches of local-player one-shot sound cues. The sender stamps
+    * the current player lifecycle and movement sample. Received cues are
+    * identity-checked, bounded, short-lived, and never enter durable state. */
+   int anchor_send_player_sounds(int interaction_session, int player_epoch,
+                                 const unsigned short *sound_ids,
+                                 int sound_count);
+   /* remaining_ms preserves the receiver's original absolute freshness
+    * deadline when native duplicate suppression defers a cue. */
+   int anchor_poll_player_sound(int *sender_cid, int *sender_session,
+                                int *sender_epoch, unsigned int *sound_id,
+                                unsigned int *remaining_ms);
+
    /**
     * @brief Broadcast the local player's currently selected character.
     *
