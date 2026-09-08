@@ -26,7 +26,6 @@
 #define WORLD_MAP_FACE_SCALE 0.2f
 #define WORLD_MAP_GROUP_SPACING 0.9f
 #define WORLD_MAP_REFRESH_UPDATES 21
-#define WORLD_MAP_LOCAL_FACE_OFFSET 0x5C
 #define WORLD_MAP_OBJECT_LAYER_OFFSET 0x05
 #define WORLD_MAP_OBJECT_X_OFFSET 0x08
 #define WORLD_MAP_OBJECT_Y_OFFSET 0x0C
@@ -241,6 +240,21 @@ static AnchorWorldMapRemote *claim_world_map_remote(int cid)
     return remote;
 }
 
+/* Active remote faces stay visible even while the stock local face blinks.
+ * Retained records for players no longer in the roster remain hidden, and
+ * every unrelated display-object flag is preserved. */
+static void update_world_map_remote_visibility(AnchorWorldMapRemote *remote)
+{
+    unsigned char *bytes;
+
+    if (!remote->object)
+        return;
+    bytes = (unsigned char *)remote->object;
+    bytes[WORLD_MAP_OBJECT_VISIBILITY_OFFSET] =
+        (unsigned char)((bytes[WORLD_MAP_OBJECT_VISIBILITY_OFFSET] & ~1u) |
+                        (remote->active ? 0u : 1u));
+}
+
 #ifndef ANCHOR_WORLD_MAP_HOST_TEST
 
 static void reset_active_world_map(void)
@@ -265,15 +279,6 @@ extern void *func_8000DBF0_E7F0(void *task, unsigned int model,
                                 short rot_x, short rot_y, short rot_z,
                                 float scale_x, float scale_y, float scale_z,
                                 short file_8, short file_9);
-
-static void set_object_visibility(void *object, int hidden)
-{
-    unsigned char *bytes = (unsigned char *)object;
-
-    bytes[WORLD_MAP_OBJECT_VISIBILITY_OFFSET] =
-        (unsigned char)((bytes[WORLD_MAP_OBJECT_VISIBILITY_OFFSET] & ~1u) |
-                        (hidden & 1));
-}
 
 static void update_world_map_object(AnchorWorldMapRemote *remote,
                                     void *map_task,
@@ -400,31 +405,19 @@ void anchor_world_map_update_begin(void *map_task, void *object)
 }
 
 /* Stock E630 toggles the local face and destination pins every 21 updates.
- * Mirror only that visibility bit after the native update so every player
- * face shares the stock face phase without altering other object flags. */
+ * Leave that local behavior untouched, but keep active remote faces visible
+ * and hide only retained records whose players left the roster. */
 RECOMP_HOOK_RETURN("func_8020E630_66D5E0")
 void anchor_world_map_update_end(void)
 {
     void *map_task = s_updating_map_task;
-    void *local_face;
-    int hidden;
     int index;
 
     s_updating_map_task = 0;
     if (!map_task || map_task != s_active_map_task)
         return;
-    local_face = *(void **)((unsigned char *)map_task +
-                            WORLD_MAP_LOCAL_FACE_OFFSET);
-    if (!local_face)
-        return;
-    hidden = ((unsigned char *)local_face)
-        [WORLD_MAP_OBJECT_VISIBILITY_OFFSET] & 1;
     for (index = 0; index < s_map_remote_count; ++index)
-    {
-        if (s_map_remotes[index].object)
-            set_object_visibility(s_map_remotes[index].object,
-                                  hidden || !s_map_remotes[index].active);
-    }
+        update_world_map_remote_visibility(&s_map_remotes[index]);
 }
 
 #endif /* !ANCHOR_WORLD_MAP_HOST_TEST */

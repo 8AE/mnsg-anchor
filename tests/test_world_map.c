@@ -107,11 +107,44 @@ static void refresh_slots_reuse_objects_and_retire_missing_clients(void)
     assert(s_map_remote_count == 2);
 }
 
+static void only_local_face_uses_native_blink_phase(void)
+{
+    unsigned char local_object[WORLD_MAP_OBJECT_VISIBILITY_OFFSET + 1] = {0};
+    unsigned char active_remote[WORLD_MAP_OBJECT_VISIBILITY_OFFSET + 1] = {0};
+    unsigned char inactive_remote[WORLD_MAP_OBJECT_VISIBILITY_OFFSET + 1] = {0};
+    AnchorWorldMapRemote remote = {0};
+    int local_hidden;
+
+    for (local_hidden = 0; local_hidden <= 1; ++local_hidden)
+    {
+        local_object[WORLD_MAP_OBJECT_VISIBILITY_OFFSET] =
+            (unsigned char)(0xD4u | (unsigned int)local_hidden);
+        active_remote[WORLD_MAP_OBJECT_VISIBILITY_OFFSET] = 0xA5u;
+        remote.object = active_remote;
+        remote.active = 1;
+        update_world_map_remote_visibility(&remote);
+
+        assert(local_object[WORLD_MAP_OBJECT_VISIBILITY_OFFSET] ==
+               (unsigned char)(0xD4u | (unsigned int)local_hidden));
+        assert(active_remote[WORLD_MAP_OBJECT_VISIBILITY_OFFSET] == 0xA4u);
+    }
+
+    inactive_remote[WORLD_MAP_OBJECT_VISIBILITY_OFFSET] = 0xA4u;
+    remote.object = inactive_remote;
+    remote.active = 0;
+    update_world_map_remote_visibility(&remote);
+    assert(inactive_remote[WORLD_MAP_OBJECT_VISIBILITY_OFFSET] == 0xA5u);
+
+    remote.object = 0;
+    update_world_map_remote_visibility(&remote);
+}
+
 int main(void)
 {
     parser_filters_and_preserves_order();
     grouping_places_faces_side_by_side();
     refresh_slots_reuse_objects_and_retire_missing_clients();
-    puts("world map roster filtering and grouped marker placement passed");
+    only_local_face_uses_native_blink_phase();
+    puts("world map roster, grouping, and remote visibility passed");
     return 0;
 }
