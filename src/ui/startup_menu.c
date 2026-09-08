@@ -3,6 +3,10 @@
 #include "anchor.h"
 #include "anchor_runtime.h"
 
+/* Race mode is still under development. Keep its implementation available,
+ * but compile its startup-menu entry and dispatch path out for now. */
+#define RACE_MODE_ENABLED 0
+
 static const RecompuiColor SM_BG = {8, 8, 12, 246};
 static const RecompuiColor SM_PANEL = {15, 15, 22, 255};
 static const RecompuiColor SM_PANEL_ALT = {21, 21, 31, 255};
@@ -19,7 +23,9 @@ static int s_visible = 0;
 static int s_pending_open = 0;
 static int s_pending_single = 0;
 static int s_pending_multiplayer = 0;
+#if RACE_MODE_ENABLED
 static int s_pending_race = 0;
+#endif
 
 static void on_single_clicked(RecompuiResource res,
                               const RecompuiEventData *ev, void *ud)
@@ -39,6 +45,7 @@ static void on_multiplayer_clicked(RecompuiResource res,
         s_pending_multiplayer = 1;
 }
 
+#if RACE_MODE_ENABLED
 static void on_race_clicked(RecompuiResource res,
                             const RecompuiEventData *ev, void *ud)
 {
@@ -47,6 +54,7 @@ static void on_race_clicked(RecompuiResource res,
     if (ev->type == UI_EVENT_CLICK)
         s_pending_race = 1;
 }
+#endif
 
 static RecompuiResource make_mode_button(RecompuiContext ctx, RecompuiResource parent,
                                          const char *title_text, const char *desc_text,
@@ -158,9 +166,11 @@ static void startup_menu_init(void)
         make_mode_button(s_menu_ctx, body, "Multiplayer",
                          "Connect through Anchor before starting.", &SM_TEAL,
                          on_multiplayer_clicked);
+#if RACE_MODE_ENABLED
         make_mode_button(s_menu_ctx, body, "Race",
                          "Connect online, choose a goal, and configure starting flags.",
                          &SM_BLUE, on_race_clicked);
+#endif
     }
     recompui_close_context(s_menu_ctx);
 }
@@ -232,6 +242,7 @@ void anchor_startup_menu_frame_hook(void)
         anchor_startup_multiplayer_open();
     }
 
+#if RACE_MODE_ENABLED
     if (s_pending_race)
     {
         s_pending_race = 0;
@@ -242,4 +253,5 @@ void anchor_startup_menu_frame_hook(void)
         }
         anchor_startup_multiplayer_open_for_race();
     }
+#endif
 }

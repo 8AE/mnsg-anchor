@@ -58,7 +58,6 @@ REPY_PREINIT_ADD_NRM_TO_ALL_INTERPRETERS;
      anchor_port          Number  TCP port (stored as double)
      anchor_room_id_new       String  room to join
      anchor_player_name   String  display name
-     anchor_team_id       String  team within the room
    ========================================================================= */
 
 REPY_ON_POST_INIT void anchor_init(void)
@@ -79,7 +78,7 @@ REPY_ON_POST_INIT void anchor_init(void)
 
 int anchor_connect(const char *host, int port,
                    const char *room_id, const char *player_name,
-                   unsigned int client_id, const char *team_id)
+                   unsigned int client_id)
 {
     REPY_FN_SETUP;
 
@@ -88,12 +87,11 @@ int anchor_connect(const char *host, int port,
     REPY_FN_SET_STR("room_id", (room_id && room_id[0]) ? room_id : "");
     REPY_FN_SET_STR("player_name", (player_name && player_name[0]) ? player_name : "Player");
     REPY_FN_SET_U32("client_id", client_id);
-    REPY_FN_SET_STR("team_id", (team_id && team_id[0]) ? team_id : "default");
 
     REPY_FN_EXEC_CACHE(anchor_connect_code,
                        "import anchor_mnsg\n"
                        "result = anchor_mnsg.connect(\n"
-                       "    host, port, room_id, player_name, client_id, team_id\n"
+                       "    host, port, room_id, player_name, client_id\n"
                        ")\n");
 
     int result = (int)REPY_FN_GET_BOOL("result");
@@ -546,18 +544,6 @@ int anchor_set_save_loaded(int is_loaded)
 /* =========================================================================
    Team / save state sync
    ========================================================================= */
-
-int anchor_set_team(const char *team_id)
-{
-    REPY_FN_SETUP;
-    REPY_FN_SET_STR("team_id", (team_id && team_id[0]) ? team_id : "default");
-    REPY_FN_EXEC_CACHE(anchor_set_team_code,
-                       "import anchor_mnsg\n"
-                       "result = anchor_mnsg.set_team(team_id)\n");
-    int result = (int)REPY_FN_GET_BOOL("result");
-    REPY_FN_CLEANUP;
-    return result;
-}
 
 int anchor_request_team_state(const char *team_id)
 {

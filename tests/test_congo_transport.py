@@ -365,13 +365,11 @@ class CongoTransportTests(unittest.TestCase):
         self.net.tick(0.1)
         self.assertEqual(self.net.status[3]["hits"], [])
 
-    def test_team_save_unload_and_disconnect_clear_local_encounter(self):
+    def test_save_unload_and_disconnect_clear_local_encounter(self):
         self.net.start()
         self.b.set_save_loaded(False)
         self.assertIsNone(self.b._congo.e)
         self.assertFalse(self.b._congo.outgoing)
-        self.a.set_team("red")
-        self.assertIsNone(self.a._congo.e)
         self.a.disconnect()
         self.assertIsNone(self.a._congo.e)
         self.assertFalse(self.a._congo.cache)

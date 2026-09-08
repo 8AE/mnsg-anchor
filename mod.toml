@@ -17,7 +17,7 @@ display_name = "Anchor Multiplayer"
 description = """
 Adds Anchor multiplayer support to Mystical Ninja Starring Goemon: Recompiled. \
 A setup screen appears at startup so you can enter your server address, room, \
-name and team before playing. Use the NET button (bottom-left corner) at any \
+and name before playing. Use the NET button (bottom-left corner) at any \
 time to disconnect or change connection settings. \
 Requires the RecompExternalPython (REPY) extlib for networking. \
 
@@ -108,13 +108,6 @@ name = "Player Name (default)"
 description = "Default player name pre-filled in the startup connection screen."
 type = "String"
 default = "Player"
-
-[[manifest.config_options]]
-id = "anchor_team_id"
-name = "Team Name (default)"
-description = "Team name pre-filled in the connection screens. Players with the same team share and sync progression."
-type = "String"
-default = "default"
 
 [[manifest.config_options]]
 id = "anchor_show_net_button"

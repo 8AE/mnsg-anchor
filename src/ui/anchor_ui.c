@@ -71,7 +71,6 @@ static const RecompuiColor COLOR_GREEN = {80, 200, 80, 255};
 static const RecompuiColor COLOR_RED = {220, 60, 60, 255};
 static const RecompuiColor COLOR_GOLD = {220, 190, 60, 255};
 static const RecompuiColor COLOR_ACCENT_BG = {20, 20, 20, 200};
-static const RecompuiColor COLOR_TEAM_HDR = {0, 160, 140, 255}; /* muted teal for team section labels */
 
 /* =========================================================================
    Notification context
@@ -135,14 +134,11 @@ static int s_plist_visible = 0;
 
 typedef struct
 {
-    RecompuiResource row;        /* outer column container (FLEX_COLUMN)              */
-    RecompuiResource team_hdr;   /* team section divider, DISPLAY_NONE by default     */
-    RecompuiResource team_label; /* team name label inside team_hdr                  */
-    RecompuiResource player_row; /* inner flex-row: icon + label                     */
+    RecompuiResource row;        /* outer column container (FLEX_COLUMN) */
+    RecompuiResource player_row; /* inner flex-row: icon + label        */
     RecompuiResource icon;
     RecompuiResource label;
     char name[128];
-    char team[40];
     int character;
     int room;
     int has_pos;
@@ -303,26 +299,6 @@ static int plist_ensure_rows(int needed)
         recompui_set_display(s_plist_rows[i].row, DISPLAY_NONE);
         recompui_set_flex_direction(s_plist_rows[i].row, FLEX_DIRECTION_COLUMN);
 
-        /* ── Team section header (hidden by default). ──────────────── */
-        s_plist_rows[i].team_hdr = recompui_create_element(
-            s_plist_ctx, s_plist_rows[i].row);
-        if (s_plist_rows[i].team_hdr == RECOMPUI_NULL_RESOURCE)
-            goto failed;
-        recompui_set_display(s_plist_rows[i].team_hdr, DISPLAY_NONE);
-        recompui_set_padding_left(s_plist_rows[i].team_hdr, 2.0f, UNIT_DP);
-        recompui_set_padding_top(s_plist_rows[i].team_hdr, 2.0f, UNIT_DP);
-        recompui_set_padding_bottom(s_plist_rows[i].team_hdr, 4.0f, UNIT_DP);
-        recompui_set_margin_top(s_plist_rows[i].team_hdr, 6.0f, UNIT_DP);
-        recompui_set_border_bottom_width(s_plist_rows[i].team_hdr, 1.0f, UNIT_DP);
-        recompui_set_border_bottom_color(s_plist_rows[i].team_hdr, &COLOR_BORDER);
-
-        s_plist_rows[i].team_label = recompui_create_label(
-            s_plist_ctx, s_plist_rows[i].team_hdr, "", LABELSTYLE_ANNOTATION);
-        if (s_plist_rows[i].team_label == RECOMPUI_NULL_RESOURCE)
-            goto failed;
-        recompui_set_color(s_plist_rows[i].team_label, &COLOR_TEAM_HDR);
-        recompui_set_font_weight(s_plist_rows[i].team_label, 700);
-
         /* ── Player row: flex-row with icon and label. ─────────────── */
         s_plist_rows[i].player_row = recompui_create_element(
             s_plist_ctx, s_plist_rows[i].row);
@@ -431,14 +407,14 @@ void anchor_ui_update(void)
     s_plist_refresh_timer = PLAYER_LIST_REFRESH_FRAMES;
 
     /* Fetch structured player info from Python:
-     * [{"n":"Name - Location","c":0,"r":165,"t":"default","hp":1,"x":10,"y":20,"z":30}, ...]
+     * [{"n":"Name - Location","c":0,"r":165,"hp":1,"x":10,"y":20,"z":30}, ...]
      * where "c" is the character index (0=Goemon..3=Yae, -1=unknown). */
     char *info_json = anchor_get_player_info_json();
     if (!info_json)
         return;
 
-    /* Python sorts by team/client identity. Allocate every roster entry,
-     * then bound all field reads to its own object (names may contain braces). */
+    /* Allocate every roster entry, then bound all field reads to its own
+     * object (names may contain braces). */
     int row_count = 0;
     int required = 0;
     char *cursor = info_json;
@@ -465,9 +441,7 @@ void anchor_ui_update(void)
         char saved = *end;
         *end = 0;
         row->name[0] = 0;
-        row->team[0] = 0;
         mnsg_json_copy_display_string(object, "n", row->name, sizeof(row->name));
-        mnsg_json_copy_display_string(object, "t", row->team, sizeof(row->team));
         row->character = plist_int_field(object, "c", -1);
         row->room = plist_int_field(object, "r", -1);
         row->has_pos = plist_int_field(object, "hp", 0);
@@ -489,34 +463,8 @@ void anchor_ui_update(void)
     recompui_open_context(s_plist_ctx);
     for (int i = 0; i < row_count; i++)
     {
-        /* ── Determine if a new team section starts at this slot. ────── */
-        int new_team = (i == 0);
-        if (!new_team)
-        {
-            const char *a = s_plist_rows[i].team, *b = s_plist_rows[i - 1].team;
-            while (*a && *b && *a == *b)
-            {
-                ++a;
-                ++b;
-            }
-            if (*a != *b)
-                new_team = 1;
-        }
-
         /* Show the outer slot (column wrapper). */
         recompui_set_display(s_plist_rows[i].row, DISPLAY_FLEX);
-
-        /* Team section header – visible only for the first player of each team. */
-        if (new_team)
-        {
-            const char *tname = s_plist_rows[i].team[0] ? s_plist_rows[i].team : "default";
-            recompui_set_text(s_plist_rows[i].team_label, tname);
-            recompui_set_display(s_plist_rows[i].team_hdr, DISPLAY_FLEX);
-        }
-        else
-        {
-            recompui_set_display(s_plist_rows[i].team_hdr, DISPLAY_NONE);
-        }
 
         /* Character icon. */
         int ci = s_plist_rows[i].character;

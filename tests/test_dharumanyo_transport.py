@@ -564,13 +564,11 @@ class DharumanyoTransportTests(unittest.TestCase):
         self.net.tick(0.1)
         self.assertEqual(self.net.status[2]["hits"], [[3, 303, 7, 1, 1]])
 
-    def test_save_unload_team_change_room_leave_and_disconnect_reset(self):
+    def test_save_unload_room_leave_and_disconnect_reset(self):
         self.net.start()
         self.b.set_save_loaded(False)
         self.assertIsNone(self.b._dharumanyo.e)
         self.assertFalse(self.b._dharumanyo.outgoing)
-        self.a.set_team("red")
-        self.assertIsNone(self.a._dharumanyo.e)
         self.a.disconnect()
         self.assertIsNone(self.a._dharumanyo.e)
         self.assertFalse(self.a._dharumanyo.cache)

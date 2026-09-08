@@ -355,7 +355,7 @@ class BossInvitationTransportTests(unittest.TestCase):
             mock.patch.object(self.client.secrets, "randbelow", return_value=303),
         ):
             self.assertTrue(self.client.connect("example.test", 43383, "arena-test",
-                                                "One", client_id=1, team_id="blue"))
+                                                "One", client_id=1))
         self.assertFalse(self.current())
         self.assertIsNone(self.invitation())
         handshake = json.loads(reconnect_socket.sent[0][:-1])
@@ -366,14 +366,15 @@ class BossInvitationTransportTests(unittest.TestCase):
         entry = json.loads(reconnect_socket.sent[-1][:-1])
         self.assertEqual((entry["session"], entry["seq"], entry["entered"]), (304, 1, True))
 
-    def test_local_team_change_cancels_old_team_dialog_and_entry_targets_new_team(self):
+    def test_client_state_cannot_override_hidden_team(self):
         self.assertTrue(self.receive())
         self.assertTrue(self.current())
         self.assertTrue(self.client.update_client_state('{"teamId":"red"}'))
-        self.assertFalse(self.current())
-        self.assertFalse(self.receive(seq=2))
+        state_packet = json.loads(self.sock.sent[-1][:-1])
+        self.assertEqual(state_packet["state"]["teamId"], "blue")
+        self.assertTrue(self.current())
         self.assertTrue(self.client.set_boss_arena(self.client.CONGO_ARENA))
-        self.assertEqual(json.loads(self.sock.sent[-1][:-1])["targetTeamId"], "red")
+        self.assertEqual(json.loads(self.sock.sent[-1][:-1])["targetTeamId"], "blue")
 
     def test_players_already_in_arena_do_not_get_join_invitation(self):
         self.assertTrue(self.client.set_boss_arena(self.client.CONGO_ARENA))

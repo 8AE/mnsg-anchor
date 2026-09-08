@@ -22,9 +22,9 @@ also declines. Cancellation, including a sender leaving, releases the pause.
 Yes closes the dialog and asks the native room loader to move the recipient
 to the selected arena's normal entrance. No closes the dialog. The saved respawn position
 is preserved. An existing conversation, cutscene, pause, death or room load
-defers a pending invitation. A sender leaving the arena, disconnecting,
-unloading their save or changing teams invalidates their invitation, including
-one already on screen. Players already in the destination arena do not get
+defers a pending invitation. A sender leaving the arena, disconnecting, or
+unloading their save invalidates their invitation, including one already on
+screen. Players already in the destination arena do not get
 invited to it; players in a different boss arena can still receive invitations.
 
 Update all participating clients to receive the three added bosses. Congo's
@@ -40,7 +40,7 @@ The Python bridge sends `MNSG_BOSS_ARENA` only for entry/exit edges or a new
 native visit, independently of movement and `ALL_CLIENT_STATE` refreshes:
 
 ```json
-{"type":"MNSG_BOSS_ARENA","clientId":2,"targetTeamId":"blue","arena":1,"entered":true,"session":123,"seq":7}
+{"type":"MNSG_BOSS_ARENA","clientId":2,"targetTeamId":"default","arena":1,"entered":true,"session":123,"seq":7}
 ```
 
 Arena IDs use the fixed mapping above. `session` identifies the sender's live connection;
@@ -87,7 +87,7 @@ initialization; the mod does not overwrite the current room or save spawn.
 ## Validation
 
 The automated tests cover serialized sender packets through the receiver,
-team and session identity, delayed metadata, reconnects, deduplication,
+fixed routing and session identity, delayed metadata, reconnects, deduplication,
 same-room reloads, sender departures, queued dialogs, Yes/No/cancel behavior,
 and native destination preparation before changing engine steps. The pause
 checks cover frozen task subtrees, responsive choices, exactly one scenario
@@ -96,12 +96,12 @@ and lifecycle behavior across pause/resume. Native
 symbol signatures, dialog script controls and entrance values are checked
 against the USA game code/data. Release and debug packages use the same flow.
 
-In-game validation is left to the user. With two updated clients on the same
-team in different rooms, enter each supported arena on one client and test No,
+In-game validation is left to the user. With two updated clients using the same
+Room ID but in different game rooms, enter each supported arena on one client and test No,
 then leave and re-enter to test Yes. For Control Machine, use the dragon-flight
 encounter. Also enter while the recipient is reading a sign:
 the invitation should wait until that dialog closes. Check that an invitation
-closes if its sender leaves, and that a client on another team receives none.
+closes if its sender leaves, and that a client using another Room ID receives none.
 While the invitation is open, check that nearby enemies and existing local
 and remote projectiles stop, the choice cursor still works, and No/B resumes
 the same scene. Yes should release the pause and load the named arena normally.

@@ -294,7 +294,6 @@ static RecompuiResource s_enemy_multiplier_detail_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_live_config_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_result_title_lbl = RECOMPUI_NULL_RESOURCE;
-static RecompuiResource s_result_team_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_result_players_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_goal_btns[RACE_MAX_FLAGS];
 static RecompuiResource s_start_btns[RACE_MAX_FLAGS];
@@ -307,7 +306,6 @@ static char s_location_btn_text[RACE_MAX_LOCATIONS][RACE_TEXT_LEN];
 static char s_config_code[RACE_CONFIG_CODE_LEN];
 static char s_category_count_text[RACE_MAX_CATEGORIES][32];
 static char s_goal_category_count_text[RACE_MAX_CATEGORIES][32];
-static char s_result_team_text[128];
 static char s_result_players_text[512];
 static char s_config_json[8192];
 static char s_challenges_summary[64];
@@ -1113,12 +1111,6 @@ static void race_result_ui_init(void)
         recompui_set_font_size(s_result_title_lbl, 30.0f, UNIT_DP);
         recompui_set_text_align(s_result_title_lbl, TEXT_ALIGN_CENTER);
 
-        s_result_team_lbl = recompui_create_label(s_result_ctx, panel, "", LABELSTYLE_NORMAL);
-        recompui_set_color(s_result_team_lbl, &R_WHITE);
-        recompui_set_font_weight(s_result_team_lbl, 700);
-        recompui_set_font_size(s_result_team_lbl, 20.0f, UNIT_DP);
-        recompui_set_text_align(s_result_team_lbl, TEXT_ALIGN_CENTER);
-
         s_result_players_lbl = recompui_create_label(s_result_ctx, panel, "", LABELSTYLE_SMALL);
         recompui_set_color(s_result_players_lbl, &R_DIM);
         recompui_set_font_size(s_result_players_lbl, 16.0f, UNIT_DP);
@@ -1154,20 +1146,14 @@ static int local_team_matches(const char *team)
     return same;
 }
 
-static void show_race_result(int victory, const char *team, const char *players)
+static void show_race_result(int victory, const char *players)
 {
     int pos;
 
     race_result_ui_init();
 
-    copy_text(s_result_team_text, "Winning Team: ", (int)sizeof(s_result_team_text));
-    pos = 13;
-    append_text_limited(s_result_team_text, &pos, (int)sizeof(s_result_team_text),
-                        (team && team[0]) ? team : "default");
-    s_result_team_text[pos] = '\0';
-
-    copy_text(s_result_players_text, "Players: ", (int)sizeof(s_result_players_text));
-    pos = 9;
+    copy_text(s_result_players_text, "Winning Players: ", (int)sizeof(s_result_players_text));
+    pos = 17;
     append_text_limited(s_result_players_text, &pos, (int)sizeof(s_result_players_text),
                         (players && players[0]) ? players : "Player");
     s_result_players_text[pos] = '\0';
@@ -1175,7 +1161,6 @@ static void show_race_result(int victory, const char *team, const char *players)
     recompui_open_context(s_result_ctx);
     recompui_set_text(s_result_title_lbl, victory ? "Victory!" : "Defeated");
     recompui_set_color(s_result_title_lbl, victory ? &R_GREEN : &R_RED);
-    recompui_set_text(s_result_team_lbl, s_result_team_text);
     recompui_set_text(s_result_players_lbl, s_result_players_text);
     recompui_close_context(s_result_ctx);
 
@@ -1193,8 +1178,8 @@ void anchor_race_on_forced_disconnect(void)
     recompui_open_context(s_result_ctx);
     recompui_set_text(s_result_title_lbl, "Race Disconnected");
     recompui_set_color(s_result_title_lbl, &R_RED);
-    recompui_set_text(s_result_team_lbl, "The server connection was lost.");
-    recompui_set_text(s_result_players_lbl, "Quit out of the application before starting another race.");
+    recompui_set_text(s_result_players_lbl,
+                      "The server connection was lost. Quit out of the application before starting another race.");
     recompui_close_context(s_result_ctx);
 
     if (!s_result_visible)
@@ -2761,10 +2746,10 @@ static void finish_race_with_payload(const char *payload_json, int local_finish)
         anchor_send_game_complete();
     }
     anchor_set_race_lobby_state("finished", anchor_race_get_config_json());
-    show_race_result(victory, team, players);
+    show_race_result(victory, players);
 
-    recomp_printf("[Race] Race finished. Winning team='%s' players='%s'\n",
-                  team[0] ? team : "default", players[0] ? players : "Player");
+    recomp_printf("[Race] Race finished. Winning players='%s'\n",
+                  players[0] ? players : "Player");
 }
 
 void anchor_race_on_finish_packet(const char *packet_json)

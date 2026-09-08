@@ -48,13 +48,12 @@ extern "C"
     * @param room_id     The room to join (created automatically if absent).
     * @param player_name Display name visible to other players in the room.
     * @param client_id   Previous session client ID for reconnection (0 = new).
-    * @param team_id     Team identifier within the room ("default" if NULL/empty).
     *
     * @return 1 on success, 0 on failure.
     */
    int anchor_connect(const char *host, int port,
                       const char *room_id, const char *player_name,
-                      unsigned int client_id, const char *team_id);
+                      unsigned int client_id);
 
    /**
     * @brief Disconnect from the Anchor server.
@@ -293,14 +292,6 @@ extern "C"
       ========================================================================= */
 
    /**
-    * @brief Switch the current team within the room.
-    *
-    * @param team_id  New team identifier.
-    * @return 1 on success, 0 on failure.
-    */
-   int anchor_set_team(const char *team_id);
-
-   /**
     * @brief Request the current team save state from online teammates.
     *
     * A response UPDATE_TEAM_STATE packet will arrive in the poll queue when a
@@ -414,11 +405,10 @@ extern "C"
     *   ``c``  – character index: 0=Goemon, 1=Ebisumaru, 2=Sasuke, 3=Yae.
     *            -1 if the character has not been broadcast by that player yet.
     *   ``r``  – raw room ID, or -1 if unknown.
-    *   ``t``  – team ID string.
     *   ``hp`` – 1 if x/y/z position data is available.
     *   ``x``/``y``/``z`` – last broadcast world-space position.
     *
-    * Example: ``[{"n":"Alice - Oedo Town","c":0,"r":165,"t":"default","hp":1,"x":10,"y":20,"z":30}]``
+    * Example: ``[{"n":"Alice - Oedo Town","c":0,"r":165,"hp":1,"x":10,"y":20,"z":30}]``
     *
     * Returns ``"[]"`` when not connected or the room is empty.
     * The caller must free the result with recomp_free().
@@ -472,7 +462,7 @@ extern "C"
    /**
     * @brief Return compact race lobby player info as JSON.
     *
-    * Each element: {"cid":int,"n":"name","t":"team","s":"status","self":0|1}
+    * Each element: {"cid":int,"n":"name","s":"status","self":0|1}
     */
    char *anchor_get_race_lobby_json(void);
 

@@ -4,10 +4,10 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 
 ### Features
 
-* **Item / flag sync** — every tracked item or flag gained by a player is broadcast to the team in real time.  Players who join late automatically receive the team's accumulated progress.
-* **Race challenges** — race hosts can optionally sync team damage and healing, or sync both ryo earnings and spending, alongside the No Hit, 1 Life, and enemy-multiplier challenges. These rules do not run in standard multiplayer.
+* **Item / flag sync** — every tracked item or flag gained by a player is shared with the room in real time. Players who join late automatically receive the room's accumulated progress.
+* **Race mode (temporarily disabled)** — the in-development race flow remains in the source but is currently hidden from the startup menu.
 * **In-game HUD** — a notification banner confirms connection success or failure; a persistent player-list panel (top-left) shows every player currently in the room, their character, and their position.
-* **Teams** — players can be grouped by Team Name within a room so that flag queues and save-state syncs are scoped to that team.
+* **Shared progression** — every player using the same Room ID automatically shares one progression state.
 * **Reconnect support** — client IDs are preserved across sessions so the server can deliver queued packets on reconnect.
 * **Remote player collision** — remote models collide with the local player, other remote players, and enemies. Elevators, doors, and other world objects do not block remote models. Collision is suspended during either client's cutscene or scripted movement. Use the updated mod on both clients for the remote cutscene exemption; see [collision behavior and validation](docs/remote-player-collision.md).
 * **Player combat and pushing** — players in the same area can hit each other with native melee and player-owned projectile attack volumes, and push each other by moving into contact. Hits use the victim's native armour, hurt reaction and recovery; both interactions pause during cutscenes. Install the updated mod on all clients.
@@ -15,7 +15,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 * **Growing room capacity** — remote rosters, interactions, and native task/model pools expand as needed, with shared expression textures. See [capacity, crash protection, and validation](docs/multiplayer-capacity.md) for the engine's remaining resource constraints.
 * **Boss arena invitations** — entering Congo, Dharumanyo, Tsurami, or Control Machine's arena sends teammates a native Yes/No dialog offering to join. Control Machine uses Koryuta's dragon-flight room. The recipient's world pauses while the invitation is open. Yes resumes into the selected arena at its normal entrance; No resumes where you were. Invitations wait for an existing conversation or cutscene to finish. Install the updated mod on all clients; see [arena invitation behavior and validation](docs/boss-arena-invitations.md).
 * **Shared boss fights** — Congo and Dharumanyo use one elected simulator so late entrants adopt the current health/lives, phase, animation and attack hazards. Both bosses can target any eligible player in the arena, and every player's native attacks are routed to the shared authority. State is capped at 10 Hz with bounded hazards, hit queues, and rotating acknowledgment slices; see [Congo synchronization](docs/congo-sync.md) and [Dharumanyo synchronization](docs/dharumanyo-sync.md).
-* **Congo reward progression** — collecting Miracle Moon shares both the item and its completion flag. Teammates' uncollected Moon disappears, and Congo's exit door and camera follow their native completion sequence. A pickup scene already in progress finishes normally. Late joins receive the same progress through the existing team snapshot; see [Miracle Moon behavior](docs/congo-sync.md#miracle-moon-and-the-exit).
+* **Congo reward progression** — collecting Miracle Moon shares both the item and its completion flag. Other players' uncollected Moon disappears, and Congo's exit door and camera follow their native completion sequence. A pickup scene already in progress finishes normally. Late joins receive the same shared progress; see [Miracle Moon behavior](docs/congo-sync.md#miracle-moon-and-the-exit).
 * **Dharumanyo reward progression** — each shared terminal runs the original post-fight sequence, and its Miracle Flower reward is also carried by durable item sync for clients elsewhere or joining later. Native evidence identifies this reward as Miracle Flower; Miracle Star belongs to Tsurami. See [Dharumanyo reward synchronization](docs/dharumanyo-sync.md#reward-progression).
 
 ### What is synced
@@ -56,11 +56,11 @@ Networking is handled by `py/anchor_mnsg.py`, a Python module that runs inside t
 
 Player movement is coalesced to a steady 5 Hz update rate, with action/animation edges and sparse motion starts, stops, and reversals sent immediately. Receivers keep only the newest movement state per player instead of adding movement packets to the gameplay-event queue. A native-order client predictor [reconstructs the 30 Hz game ticks between those snapshots](docs/remote-player-movement-interpolation.md) from final linear/angular displacement and the source animation's actual per-tick rate, with signed arrival phase, bounded constant residual correction, conservative shortest-path rotation, and bounded packet-underrun prediction.
 
-Join-time item synchronization uses one compact team-state snapshot followed by durable incremental flag packets. This avoids the previous burst of hundreds of individual packets when a save loads or a teammate joins.
+Join-time item synchronization uses one compact shared-state snapshot followed by durable incremental flag packets. This avoids the previous burst of hundreds of individual packets when a save loads or another player joins.
 
 The public default server is **anchor.hm64.org:43383**.
 
-Room IDs are required and have no shared default. Choose a unique private value and share it only with the people you want in the session. The client adds the hidden `mnsg-` game namespace when connecting. Players must use both the same Room ID and the same Team Name to share and sync game progression.
+Room IDs are required and have no shared default. Choose a unique private value and share it only with the people you want in the session. The client adds the hidden `mnsg-` game namespace when connecting. All players using the same Room ID share and sync game progression automatically.
 
 ### Configuration
 
@@ -72,7 +72,6 @@ All options are available in the mod settings menu inside the game:
 | Server Port             | `43383`           | TCP port of the Anchor server                                                  |
 | Room ID                 | *(blank)*         | Required private code that keeps multiplayer sessions separate                 |
 | Player Name             | `Player`          | Display name shown to other players                                            |
-| Team Name               | `default`         | Players with the same Team Name share and sync game progression                |
 | Show NET Button         | Enabled           | Show the NET button in the bottom-left corner                                  |
 | Show Item Notifications | Enabled           | Show a toast when items or flags are received or found                         |
 | Show Room ID (Hex)      | Disabled          | Display the raw hexadecimal room ID next to the area name in the player list   |

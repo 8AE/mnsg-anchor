@@ -74,7 +74,7 @@ class RoomIdTests(unittest.TestCase):
         self.assertIn("anchor_room_id_new", options)
         self.assertEqual(options["anchor_room_id_new"]["default"], "")
 
-    def test_handshake_uses_hidden_prefixed_room(self) -> None:
+    def test_handshake_uses_hidden_prefixed_room_and_fixed_team(self) -> None:
         fake_socket = FakeSocket()
         with (
             mock.patch.object(anchor_mnsg.socket, "socket", return_value=fake_socket),
@@ -82,14 +82,14 @@ class RoomIdTests(unittest.TestCase):
         ):
             self.assertTrue(
                 anchor_mnsg.connect(
-                    "example.test", 43383, "friends", "Player", team_id="team"
+                    "example.test", 43383, "friends", "Player"
                 )
             )
 
         self.assertEqual(len(fake_socket.sent), 1)
         handshake = json.loads(fake_socket.sent[0].removesuffix(b"\x00"))
         self.assertEqual(handshake["roomId"], "mnsg-friends")
-        self.assertEqual(handshake["clientState"]["teamId"], "team")
+        self.assertEqual(handshake["clientState"]["teamId"], "default")
 
     def test_room_metadata_invalidates_the_old_transform(self) -> None:
         anchor_mnsg._player_states[7] = {

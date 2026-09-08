@@ -17,7 +17,6 @@ static const RecompuiColor L_BORDER = {72, 62, 96, 225};
 static const RecompuiColor L_WHITE = {248, 248, 252, 255};
 static const RecompuiColor L_DIM = {170, 172, 182, 255};
 static const RecompuiColor L_PURPLE = {168, 104, 255, 255};
-static const RecompuiColor L_TEAL = {0, 190, 165, 255};
 static const RecompuiColor L_RED = {220, 68, 68, 255};
 static const RecompuiColor L_ROW = {18, 18, 27, 255};
 
@@ -189,7 +188,6 @@ static void refresh_lobby_rows(void)
     char *cursor;
     char *p;
     char *obj_end;
-    char last_team[40];
     int row = 0;
     int required = 0;
 
@@ -200,12 +198,12 @@ static void refresh_lobby_rows(void)
     cursor = json;
     while (mnsg_json_next_object(&cursor, &obj_end))
     {
-        if (required > 0x7fffffff - 2)
+        if (required == 0x7fffffff)
         {
             recomp_free(json);
             return;
         }
-        required += 2; /* Every player may begin a separate team section. */
+        ++required;
     }
     if (!ensure_lobby_rows(required))
     {
@@ -214,49 +212,30 @@ static void refresh_lobby_rows(void)
         return;
     }
     cursor = json;
-    last_team[0] = '\0';
 
     recompui_open_context(s_ctx);
     while ((p = mnsg_json_next_object(&cursor, &obj_end)) != 0)
     {
         char name[40];
-        char team[40];
         char status[20];
         int cid = 0;
         char saved = *obj_end;
         *obj_end = 0;
-        name[0] = team[0] = status[0] = 0;
+        name[0] = status[0] = 0;
         mnsg_json_get_s32(p, "cid", &cid);
         mnsg_json_copy_display_string(p, "n", name, sizeof(name));
-        mnsg_json_copy_display_string(p, "t", team, sizeof(team));
         mnsg_json_copy_display_string(p, "s", status, sizeof(status));
         *obj_end = saved;
-        if (!team[0])
-            copy_text(team, "default", (int)sizeof(team));
 
-        if (!text_equal(team, last_team))
-        {
-            copy_text(s_rows[row].text, "Team: ", LOBBY_TEXT_LEN);
-            append_text(s_rows[row].text, team, LOBBY_TEXT_LEN);
-            recompui_set_text(s_rows[row].label, s_rows[row].text);
-            recompui_set_color(s_rows[row].label, &L_TEAL);
-            recompui_set_display(s_rows[row].label, DISPLAY_BLOCK);
-            copy_text(last_team, team, (int)sizeof(last_team));
-            row++;
-        }
-
-        {
-            copy_text(s_rows[row].text, "  ", LOBBY_TEXT_LEN);
-            append_text(s_rows[row].text, name[0] ? name : "Player", LOBBY_TEXT_LEN);
-            if (cid == (int)anchor_get_race_host_id())
-                append_text(s_rows[row].text, "  [Host]", LOBBY_TEXT_LEN);
-            if (text_equal(status, "started"))
-                append_text(s_rows[row].text, "  [Started]", LOBBY_TEXT_LEN);
-            recompui_set_text(s_rows[row].label, s_rows[row].text);
-            recompui_set_color(s_rows[row].label, &L_WHITE);
-            recompui_set_display(s_rows[row].label, DISPLAY_BLOCK);
-            row++;
-        }
+        copy_text(s_rows[row].text, name[0] ? name : "Player", LOBBY_TEXT_LEN);
+        if (cid == (int)anchor_get_race_host_id())
+            append_text(s_rows[row].text, "  [Host]", LOBBY_TEXT_LEN);
+        if (text_equal(status, "started"))
+            append_text(s_rows[row].text, "  [Started]", LOBBY_TEXT_LEN);
+        recompui_set_text(s_rows[row].label, s_rows[row].text);
+        recompui_set_color(s_rows[row].label, &L_WHITE);
+        recompui_set_display(s_rows[row].label, DISPLAY_BLOCK);
+        row++;
     }
 
     while (row < s_row_count)

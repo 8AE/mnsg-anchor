@@ -27,7 +27,6 @@ static RecompuiResource s_in_host = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_in_port = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_in_room = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_in_name = RECOMPUI_NULL_RESOURCE;
-static RecompuiResource s_in_team = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_title_lbl = RECOMPUI_NULL_RESOURCE;
 static RecompuiResource s_status_lbl = RECOMPUI_NULL_RESOURCE;
 
@@ -98,7 +97,6 @@ static void try_connect_from_ui(void)
     char *port_str = recompui_get_input_text(s_in_port);
     char *room_str = recompui_get_input_text(s_in_room);
     char *name_str = recompui_get_input_text(s_in_name);
-    char *team_str = recompui_get_input_text(s_in_team);
     recompui_close_context(s_ctx);
 
     int port = mnsg_string_to_s32(port_str, 43383);
@@ -121,8 +119,7 @@ static void try_connect_from_ui(void)
         port,
         room_str,
         (name_str && name_str[0]) ? name_str : "Player",
-        0,
-        (team_str && team_str[0]) ? team_str : "default");
+        0);
 
     if (ok)
     {
@@ -150,8 +147,6 @@ connect_cleanup:
         recomp_free(room_str);
     if (name_str)
         recomp_free(name_str);
-    if (team_str)
-        recomp_free(team_str);
 }
 
 static void multiplayer_ui_init(void)
@@ -163,7 +158,6 @@ static void multiplayer_ui_init(void)
     char *cfg_host = recomp_get_config_string("anchor_host");
     char *cfg_room = recomp_get_config_string("anchor_room_id_new");
     char *cfg_name = recomp_get_config_string("anchor_player_name");
-    char *cfg_team = recomp_get_config_string("anchor_team_id");
 
     int cfg_port = (int)recomp_get_config_double("anchor_port");
     if (cfg_port <= 0)
@@ -278,17 +272,6 @@ static void multiplayer_ui_init(void)
         make_field(s_ctx, name_col, "Player Name",
                    (cfg_name && cfg_name[0]) ? cfg_name : "Player", &s_in_name);
 
-        RecompuiResource team_col = recompui_create_element(s_ctx, nt_row);
-        recompui_set_display(team_col, DISPLAY_FLEX);
-        recompui_set_flex_direction(team_col, FLEX_DIRECTION_COLUMN);
-        recompui_set_flex_grow(team_col, 1.0f);
-        recompui_set_gap(team_col, 5.0f, UNIT_DP);
-        make_field(s_ctx, team_col, "Team Name",
-                   (cfg_team && cfg_team[0]) ? cfg_team : "default", &s_in_team);
-        make_field_hint(
-            s_ctx, team_col,
-            "Players with the same Team Name share and sync game progression.");
-
         RecompuiResource status_row = recompui_create_element(s_ctx, body);
         recompui_set_padding(status_row, 12.0f, UNIT_DP);
         recompui_set_min_height(status_row, 44.0f, UNIT_DP);
@@ -320,8 +303,6 @@ static void multiplayer_ui_init(void)
         recomp_free_config_string(cfg_room);
     if (cfg_name)
         recomp_free_config_string(cfg_name);
-    if (cfg_team)
-        recomp_free_config_string(cfg_team);
 }
 
 void anchor_startup_multiplayer_open(void)

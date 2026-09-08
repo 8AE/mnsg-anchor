@@ -94,7 +94,8 @@ _connected: bool = False
 _disabled: bool = False
 _client_id: int = 0
 _room_id: str = ""
-_team_id: str = "default"
+DEFAULT_TEAM_ID: str = "default"
+_team_id: str = DEFAULT_TEAM_ID
 _player_name: str = ""
 
 # Queue of raw JSON strings received from the server, ready to be polled by C.
@@ -872,7 +873,6 @@ def connect(
     room_id: str,
     player_name: str,
     client_id: int = 0,
-    team_id: str = "default",
 ) -> bool:
     """
     Connect to an Anchor server and send the HANDSHAKE packet.
@@ -883,7 +883,6 @@ def connect(
         room_id:     User-facing room name (creates it if it doesn't exist).
         player_name: Display name for this player.
         client_id:   Previous client ID for session resumption (0 = new session).
-        team_id:     Team identifier within the room (default: "default").
 
     Returns True on success, False on failure.
     """
@@ -908,7 +907,9 @@ def connect(
     # The MNSG namespace is deliberately added only at the protocol boundary;
     # connection screens and config continue to show the player's own value.
     _room_id = normalized_room_id
-    _team_id = team_id or "default"
+    # Anchor requires a team for shared-state routing. MNSG exposes one shared
+    # group per room, so this protocol detail is fixed and never user supplied.
+    _team_id = DEFAULT_TEAM_ID
     _player_name = player_name
     _client_id = client_id
     _disabled = False
@@ -1435,23 +1436,14 @@ def update_client_state(state_json: str) -> bool:
 
     Returns True on successful send.
     """
-    global _team_id
     try:
         state: dict = json.loads(state_json) if state_json else {}
     except json.JSONDecodeError:
         state = {}
 
-    # Keep internal team_id in sync.
-    if "teamId" in state:
-        if state["teamId"] != _team_id:
-            with _player_states_lock:
-                _arena_events.clear()
-                _congo.reset()
-                _dharumanyo.reset()
-        _team_id = state["teamId"]
-
-    # Server requires these fields.
-    state.setdefault("teamId", _team_id)
+    # Server routing requires this field, but callers cannot override the
+    # client's single hidden team through an arbitrary state update.
+    state["teamId"] = _team_id
     state.setdefault("isSaveLoaded", _local_save_loaded)
     if _local_room_id >= 0:
         state.setdefault("currentRoomId", _local_room_id)
@@ -2214,16 +2206,6 @@ def get_stats() -> bool:
     return _send_raw({"type": "STATS"})
 
 
-def set_team(new_team_id: str) -> bool:
-    """
-    Move to a different team within the same room.
-
-    Args:
-        new_team_id: The new team identifier.
-    """
-    return update_client_state(json.dumps({"teamId": new_team_id}))
-
-
 def get_player_names_json() -> str:
     """
     Return a JSON array of ``[CharName] Name - Location`` strings for all
@@ -2277,7 +2259,6 @@ def get_player_info_json() -> str:
         ``c``  – character index (int): 0=Goemon, 1=Ebisumaru, 2=Sasuke, 3=Yae.
                  -1 if the character has not been broadcast yet.
         ``r``  – raw room ID, or -1 if unknown.
-        ``t``  – team ID string.
         ``hp`` – 1 if the player has sent position data, else 0.
         ``x``/``y``/``z`` – last broadcast world position, 0 when hp is 0.
 
@@ -2285,8 +2266,7 @@ def get_player_info_json() -> str:
     """
     with _player_states_lock:
         entries = []
-        # Sort by (teamId, clientId) so teammates are grouped together.
-        for _k, v in sorted(_player_states.items(), key=lambda kv: (kv[1].get("teamId", ""), kv[0])):
+        for _k, v in sorted(_player_states.items()):
             if not v.get("online", True):
                 continue
             name_str = v["name"]
@@ -2295,13 +2275,11 @@ def get_player_info_json() -> str:
                 name_str += " - " + loc
             char_idx = _CHAR_TO_IDX.get(v.get("character", ""), -1)
             room_id  = v.get("roomId", -1)
-            team_id  = v.get("teamId", "")
             has_pos = "posX" in v and "posY" in v and "posZ" in v
             entries.append({
                 "n": name_str,
                 "c": char_idx,
                 "r": room_id,
-                "t": team_id,
                 "hp": 1 if has_pos else 0,
                 "x": int(v.get("posX", 0)) if has_pos else 0,
                 "y": int(v.get("posY", 0)) if has_pos else 0,
@@ -2448,21 +2426,20 @@ def set_race_lobby_state(status: str, config_json: str = "") -> bool:
 
 def get_race_lobby_json() -> str:
     """
-    Return compact online lobby membership grouped by team on the C side.
+    Return compact online lobby membership in client-ID order.
 
-    Each entry: {"cid": int, "n": str, "t": str, "s": str, "self": 0|1}
+    Each entry: {"cid": int, "n": str, "s": str, "self": 0|1}
     """
     if not _connected:
         return "[]"
     with _player_states_lock:
         result = []
-        for cid, v in sorted(_player_states.items(), key=lambda kv: (kv[1].get("teamId", ""), kv[0])):
+        for cid, v in sorted(_player_states.items()):
             if not v.get("online", True):
                 continue
             result.append({
                 "cid": int(cid),
                 "n": v.get("name", f"Player{cid}"),
-                "t": v.get("teamId", "") or "default",
                 "s": v.get("mnsgRace", ""),
                 "self": 1 if cid == _client_id or v.get("self") else 0,
             })
