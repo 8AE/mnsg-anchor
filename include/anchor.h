@@ -172,6 +172,9 @@ extern "C"
    char *anchor_congo_update(int ready, unsigned int visit, int paused,
                              const char *state_json);
    int anchor_send_congo_hit(int sequence, int amount);
+   char *anchor_dharumanyo_update(int ready, unsigned int visit, int paused,
+                                  const char *state_json);
+   int anchor_send_dharumanyo_hit(int sequence);
 
    /**
     * @brief Broadcast the local player's world-space position to teammates.

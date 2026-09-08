@@ -80,6 +80,15 @@ with a subsequent checkpoint after the owner has processed the intents.
 Native vulnerability and recovery can reject a delivered hit. Acknowledgment
 means the intent was processed, not that health necessarily decreased.
 
+The owner retains one highest sequence per current client identity and sends at
+most 64 acknowledgment rows in one checkpoint. Pending rows rotate through
+later 10 Hz checkpoints, receivers merge the slices for authority handoff, and
+a late-join request replays the history in the same bounded form. Slice
+selection advances from the last successful row, so repeated requests cannot
+starve higher client IDs. A failed socket write consumes no rows and advances
+no cadence timer. The client rejects outbound and inbound Congo frames above
+the 8 KiB hot-packet budget.
+
 The local native layer and Python each bound pending hit queues. Authority
 delivery processes at most 32 different senders per frame, rotating among
 senders with pending work. These work budgets do not limit the number of

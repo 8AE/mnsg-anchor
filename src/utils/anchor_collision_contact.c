@@ -45,21 +45,28 @@ static void resolve_candidate(const AnchorCollisionBody *moving,
                                const AnchorCollisionVec3 *target, float scale,
                                const AnchorCollisionBody *peers, int count,
                                AnchorCollisionPeerFilter include,
+                               int world,
                                AnchorCollisionVec3 *out)
 {
     AnchorCollisionVec3 contact;
-    anchor_collision_world_move(&moving->position, target, scale, out);
+    if (world)
+        anchor_collision_world_move(&moving->position, target, scale, out);
+    else
+        *out = *target;
     if (!count)
         return;
     anchor_collision_move_peers_filtered(moving, out, peers, count, include,
                                          moving, &contact);
-    if (!same_position(&contact, out))
+    if (world && !same_position(&contact, out))
         anchor_collision_world_move(&moving->position, &contact, scale, out);
+    else
+        *out = contact;
 }
 
-int anchor_collision_move_body(const AnchorCollisionBody *moving,
+static int move_body(const AnchorCollisionBody *moving,
                                const AnchorCollisionVec3 *target, float scale,
                                const AnchorCollisionBody *peers, int count,
+                               int world,
                                AnchorCollisionVec3 *out)
 {
     static const float directions[8][2] = {
@@ -81,7 +88,7 @@ int anchor_collision_move_body(const AnchorCollisionBody *moving,
     if (count < 0 || (count && !peers))
         return 0;
 
-    resolve_candidate(moving, target, scale, peers, count, 0, &resolved);
+    resolve_candidate(moving, target, scale, peers, count, 0, world, &resolved);
     if (clear_of_peers(moving, &resolved, peers, count))
     {
         *out = resolved;
@@ -90,8 +97,10 @@ int anchor_collision_move_body(const AnchorCollisionBody *moving,
 
     /* Preserve the previous position when it still clears live world and
      * peer geometry. This avoids an unnecessary escape for ordinary contact. */
-    anchor_collision_world_move(&moving->position, &moving->position, scale,
-                                &resolved);
+    resolved = moving->position;
+    if (world)
+        anchor_collision_world_move(&moving->position, &moving->position, scale,
+                                    &resolved);
     if (clear_of_peers(moving, &resolved, peers, count))
     {
         *out = resolved;
@@ -136,7 +145,7 @@ int anchor_collision_move_body(const AnchorCollisionBody *moving,
         candidate.z += dz * distance;
         resolve_candidate(moving, &candidate, scale, peers,
                            path_count ? count : 0,
-                           clear_at_origin, &resolved);
+                           clear_at_origin, world, &resolved);
         if (!clear_of_peers(moving, &resolved, peers, count))
             continue;
         dx = resolved.x - moving->position.x;
@@ -152,4 +161,20 @@ int anchor_collision_move_body(const AnchorCollisionBody *moving,
     if (found)
         *out = best;
     return found;
+}
+
+int anchor_collision_move_body(const AnchorCollisionBody *moving,
+                               const AnchorCollisionVec3 *target, float scale,
+                               const AnchorCollisionBody *peers, int count,
+                               AnchorCollisionVec3 *out)
+{
+    return move_body(moving, target, scale, peers, count, 1, out);
+}
+
+int anchor_collision_move_actors(const AnchorCollisionBody *moving,
+                                 const AnchorCollisionVec3 *target,
+                                 const AnchorCollisionBody *actors, int count,
+                                 AnchorCollisionVec3 *out)
+{
+    return move_body(moving, target, 1.0f, actors, count, 0, out);
 }

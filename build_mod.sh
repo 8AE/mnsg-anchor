@@ -20,11 +20,13 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 echo "Building release package (debug button disabled)..."
 make clean
 make DEBUG_BUTTON_ENABLED=0 "$@"
+python3 tools/check_collision_dispatch.py build/mod.elf
 ./RecompModTool mod.toml "$TEMP_DIR"
 
 echo "Building debug package (debug button enabled)..."
 make clean
 make DEBUG_BUTTON_ENABLED=1 "$@"
+python3 tools/check_collision_dispatch.py build/mod.elf
 ./RecompModTool mod.toml build
 mv "$RELEASE_NRM" "$DEBUG_NRM"
 cp "$TEMP_DIR/${MOD_FILENAME}.nrm" "$RELEASE_NRM"

@@ -1,13 +1,19 @@
 # Remote player collision
 
 Remote models retain their standalone task and animation architecture. A local
-contact body now constrains their displayed position against the room, registered
-moving collision meshes, the local player, and other visible remote players.
+contact body constrains their displayed position against the local player,
+other visible remote players, and live native enemy combat bodies. Remote
+display positions are not constrained by terrain, elevators, platforms, doors
+or other object meshes on the receiving client. Their sending client already
+resolves ordinary native world movement. This prevents an elevator at a
+different local position from trapping a remote model beneath the arena.
 The packet target and animation timeline remain the sender's state. Contact
 changes the receiving client's resolved position; it does not run a second
 playable character's input, combat, camera, or gravity callbacks.
 
-`src/anchor_collision_world.c` uses the native static and dynamic wall correction
+The receiving client's own playable body still uses its normal native world
+collision. Corrections caused by incoming player pressure also remain safe
+against its world: `src/anchor_collision_world.c` uses the native static and dynamic wall correction
 queries (`func_8002EB10_2F710`, `func_80030730_31330`) and nearest geometry ray
 query (`func_8002C9D4_2D5D4`). Sweeps cover the body's leading edge, shoulders,
 feet, and head; the wall probes use the native normal-player envelope, scaled
@@ -22,10 +28,31 @@ preserves tangential movement. The per-character radii/heights come from the
 native unsigned tables at `D_801FC660_5B8570` / `D_801FC668_5B8578`, multiplied by
 the model scale. Native code uses those tables for hit detection; the mod uses
 their dimensions for solid contact without registering remote combat actors.
-The shared contact solver checks the result against both peers and the world.
+The shared contact solver has separate actor-only and world-safe entry points.
+Remote models use `anchor_collision_move_actors`; the real player's push
+correction uses `anchor_collision_move_body`.
 Overlapping spawns try bounded alternative separation directions; a model with
 no free placement stays hidden and retries instead of becoming an overlapping
 or invisible obstacle.
+
+`src/anchor_collision_actors.c` reads live native enemy combat cylinders from
+the current task list, validating each native backlink and display record. It
+uses explicit enemy/boss IDs; a shared actor-manager group does not make an
+elevator, prop, spawner or projectile an enemy. Radius, height and local offsets
+come from task `+0x3C..+0x42`, transformed by display scale and rotation as in
+`func_80033688_34288`. Disabled bodies, retired displays and removal-pending
+actors are excluded. The collector never registers a remote in native victim
+lists or writes hit records. Body storage grows with the live roster.
+
+The enemy-ID whitelist is stored as a sorted 16-bit table and searched with
+bounded comparisons. An earlier `switch` over the same 46 IDs compiled to a
+MIPS jump table whose computed branch targeted an interior basic block. The
+live recompiler treated that branch as an indirect function dispatch, so
+entering Dharumanyo's arena could call `get_function` for an unregistered block
+and exit the game; the later RmlUi/free-block fault in the crash report was
+shutdown fallout. The table lookup preserves the exact enemy and boss IDs,
+including Dharumanyo `0x0CC`, while keeping reward controllers, spawners,
+projectiles, props and level machinery excluded.
 
 The local player's `func_801CBAF8_587A08` entry/return hooks capture native
 movement and constrain it against visible remote bodies. A contact correction
@@ -96,7 +123,19 @@ remote cutscene exemption.
 
 ## Validation
 
-Host tests cover swept peer crossings, vertical separation/contact, sliding,
+Both variants built by `build_mod.sh` run `tools/check_collision_dispatch.py`
+against the linked MIPS collector before packaging. It rejects computed jumps
+or calls within this function, catching the compiler-generated switch defect.
+The optional `bash tests/run_collision_jit.sh` regression uses a built sibling
+Goemon64Recomp checkout to execute the packaged collector against synthetic
+actor records. It reproduced missing function lookups in five of seven cases
+with the crashing package and passed all seven with the fixed package. This
+executes compiled mod code without launching the game or calling game functions.
+
+Host tests cover remote passage through an elevator underside and room walls
+without any world query, retained enemy/player contact, live enemy body decoding,
+prop/spawner exclusion, retired and disabled actor rejection, and 128 bodies.
+They also cover swept peer crossings, vertical separation/contact, sliding,
 coincident spawns, Mini dimensions, native script gates, static/dynamic walls,
 fast movement, floor/ceiling clearance, step/headroom conflicts, and moving
 geometry pushing a stationary model. Native geometry calls in those tests are
@@ -109,7 +148,7 @@ at walls or a third player. These are host tests, not native gameplay captures.
 
 These checks and MIPS package builds do not certify native gameplay. A fresh
 two-client run still needs to cover all four characters, walking/jumping into
-each other, walls and movable objects, Mini tunnels, scripted destinations,
+each other, walking/riding elevators into the arena, enemies, Mini tunnels, scripted destinations,
 room changes, reconnects, and busy rooms with many remote models. Native scene
 geometry can differ from the analytic test fixtures; special swimming/crouching
 poses and runtime performance require that gameplay check.

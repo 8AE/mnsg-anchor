@@ -41,6 +41,7 @@
 #include "anchor_remote_animation.h"
 #include "anchor_remote_appearance.h"
 #include "anchor_remote_collision.h"
+#include "anchor_collision_actors.h"
 #include "anchor_player_damage.h"
 #include "item_sync.h"
 #include "anchor.h"
@@ -1479,6 +1480,7 @@ static int resolve_slot_collision(RemoteModelSlot *slot,
                             &s_collision_peer_capacity, s_slot_capacity + 1,
                             sizeof(*s_collision_peers)))
     {
+        slot->collision_ready = 0;
         hide_object(slot->object);
         slot->bound_action = -1;
         return 0;
@@ -1487,12 +1489,16 @@ static int resolve_slot_collision(RemoteModelSlot *slot,
     count = collect_collision_peers(slot, peers);
     if (local_collision_body(&local, &local_scale))
         peers[count++] = local;
-    if (!anchor_collision_move_body(&moving, &target, scale, peers, count,
-                                    &position))
+    count = anchor_collision_append_enemies(&s_collision_peers,
+                                             &s_collision_peer_capacity, count);
+    peers = s_collision_peers;
+    if (count < 0 || !anchor_collision_move_actors(&moving, &target, peers, count,
+                                                 &position))
     {
         /* A new body with no available space must not become an invisible
          * obstacle or be displayed inside another player. Retry the binding
          * and placement on the next scheduled update as space opens. */
+        slot->collision_ready = 0;
         hide_object(slot->object);
         slot->bound_action = -1;
         return 0;

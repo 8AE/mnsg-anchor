@@ -31,6 +31,7 @@ static TestPlane s_planes[16];
 static int s_plane_count;
 static int s_static_wall_queries;
 static int s_dynamic_wall_queries;
+static int s_ray_queries;
 
 static int near_float(float actual, float expected)
 {
@@ -42,6 +43,7 @@ static void clear_scene(void)
     s_plane_count = 0;
     s_static_wall_queries = 0;
     s_dynamic_wall_queries = 0;
+    s_ray_queries = 0;
 }
 
 static TestPlane *add_plane(int axis, float coordinate, float normal, int dynamic)
@@ -107,6 +109,7 @@ void *func_8002C9D4_2D5D4(void *out, float x, float y, float z,
     const TestPlane *best = 0;
     int i;
 
+    ++s_ray_queries;
     no_hit(out);
     for (i = 0; i < s_plane_count; ++i)
     {
@@ -639,6 +642,35 @@ static int test_large_roster_spawn_escape_keeps_late_peers_swept(void)
     return 0;
 }
 
+static int test_remote_actor_contact_ignores_elevator_and_room_meshes(void)
+{
+    AnchorCollisionBody remote = {{0.0f, 0.0f, 0.0f}, 7.0f, 18.5f};
+    AnchorCollisionBody enemy = {{80.0f, 60.0f, 0.0f}, 10.0f, 25.0f};
+    AnchorCollisionVec3 target = {40.0f, 60.0f, 0.0f}, out;
+    clear_scene();
+    add_plane(1, 25.0f, -1.0f, 1); /* Elevator underside. */
+    add_plane(0, 20.0f, -1.0f, 0); /* Receiving client's room geometry. */
+    CHECK(anchor_collision_move_actors(&remote, &target, 0, 0, &out));
+    CHECK(out.x == target.x && out.y == target.y && out.z == target.z);
+    CHECK(!s_ray_queries && !s_static_wall_queries && !s_dynamic_wall_queries);
+
+    /* Once the packet reaches the arena, a live enemy/player body still
+     * blocks the remote even though meshes remain excluded. */
+    remote.position = out;
+    target.x = 120.0f;
+    CHECK(anchor_collision_move_actors(&remote, &target, &enemy, 1, &out));
+    CHECK(out.x > 62.9f && out.x < 63.01f && out.y == target.y);
+    CHECK(bodies_separate(&remote, out, &enemy));
+    CHECK(!s_ray_queries && !s_static_wall_queries && !s_dynamic_wall_queries);
+
+    /* A stationary platform cannot displace a remote display body. */
+    remote.position = (AnchorCollisionVec3){19.0f, 7.0f, 0.0f};
+    CHECK(anchor_collision_move_actors(&remote, &remote.position, 0, 0, &out));
+    CHECK(out.x == 19.0f && out.y == 7.0f);
+    CHECK(!s_ray_queries && !s_static_wall_queries && !s_dynamic_wall_queries);
+    return 0;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -663,5 +695,6 @@ int main(void)
     failures += test_player_pressure_moves_recipient_until_world_or_peer_blocks();
     failures += test_large_roster_sweeps_the_last_peer_and_preserves_free_motion();
     failures += test_large_roster_spawn_escape_keeps_late_peers_swept();
+    failures += test_remote_actor_contact_ignores_elevator_and_room_meshes();
     return failures != 0;
 }

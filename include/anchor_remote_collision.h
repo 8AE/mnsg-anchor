@@ -60,4 +60,12 @@ int anchor_collision_move_body(const AnchorCollisionBody *moving,
                                const AnchorCollisionBody *peers, int count,
                                AnchorCollisionVec3 *out);
 
+/* Remote display bodies collide with selected actors only. Never query the
+ * receiving client's terrain, props or moving platforms: their positions
+ * have already been resolved by the sending client's native movement. */
+int anchor_collision_move_actors(const AnchorCollisionBody *moving,
+                                 const AnchorCollisionVec3 *target,
+                                 const AnchorCollisionBody *actors, int count,
+                                 AnchorCollisionVec3 *out);
+
 #endif

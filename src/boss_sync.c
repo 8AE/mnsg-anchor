@@ -19,6 +19,8 @@
 #include "recomputils.h"
 #include "anchor.h"
 #include "anchor_congo_damage.h"
+#include "anchor_dharumanyo_damage.h"
+#include "anchor_dharumanyo_native.h"
 #include "boss_sync.h"
 #include "item_sync.h"
 #include "utils/json_utils.h"
@@ -30,6 +32,7 @@ extern int func_800240DC_24CDC(int flag_id);
 extern void func_80034EF8_35AF8(void *actor);
 
 #define ENTITY_DARUMANYO 0x00CCu
+#define ENTITY_DARUMANYO_REWARD_CONTROLLER 0x034Fu
 #define ENTITY_BENKEI 0x01C0u
 #define ENTITY_CONGO 0x0323u
 
@@ -110,6 +113,7 @@ static unsigned int s_tsurami_setup_actor_changed;
 static unsigned int s_darumanyo_setup_actor_changed;
 static void *s_darumanyo_damage_actor;
 static void *s_darumanyo_terminal_controller;
+static unsigned int s_darumanyo_reward_callback_observed;
 static unsigned int s_benkei_setup_actor_changed;
 static void *s_benkei_update_actor;
 static unsigned int s_congo_lethal_hit_pending;
@@ -176,6 +180,7 @@ void boss_sync_reset(void)
     s_darumanyo_setup_actor_changed = 0;
     s_darumanyo_damage_actor = 0;
     s_darumanyo_terminal_controller = 0;
+    s_darumanyo_reward_callback_observed = 0;
     s_benkei_setup_actor_changed = 0;
     s_benkei_update_actor = 0;
     s_congo_lethal_hit_pending = 0;
@@ -328,6 +333,9 @@ int boss_sync_has_active_encounter(const char *flag_name)
     }
     if (mnsg_string_equal(flag_name, "fl_dharmanyo"))
     {
+        if (anchor_dharumanyo_damage_is_shared() &&
+            !s_darumanyo_state.victory_complete)
+            return 1;
         if (native_remote_defeat_is_current(&s_darumanyo_state))
             return 1;
         return !s_darumanyo_state.victory_complete &&
@@ -354,6 +362,9 @@ int boss_sync_has_local_encounter(const char *flag_name)
                tracked_boss_is_local(&s_tsurami);
     if (mnsg_string_equal(flag_name, "fl_dharmanyo"))
     {
+        if (anchor_dharumanyo_damage_is_shared() &&
+            !s_darumanyo_state.victory_complete)
+            return 1;
         if (native_remote_defeat_is_current(&s_darumanyo_state))
             return 1;
         return !s_darumanyo_state.victory_complete &&
@@ -368,6 +379,27 @@ int boss_sync_has_local_encounter(const char *flag_name)
     return boss && tracked_boss_is_local(boss);
 }
 
+int boss_sync_is_darumanyo_reward_progress(const char *flag_name)
+{
+    return mnsg_string_equal(flag_name, "mi_flower") ||
+           mnsg_string_equal(flag_name, "cs_dhrm_1") ||
+           mnsg_string_equal(flag_name, "cs_dhrm_2") ||
+           mnsg_string_equal(flag_name, "cs_dhrm_3") ||
+           mnsg_string_equal(flag_name, "cs_dhrm_4");
+}
+
+int boss_sync_send_local_progress(const char *flag_name, int value,
+                                  int add_to_queue)
+{
+    if (s_darumanyo_state.remote_defeat_in_progress &&
+        boss_sync_is_darumanyo_reward_progress(flag_name))
+        return BOSS_SYNC_PROGRESS_SUPPRESSED;
+
+    return anchor_send_flag(flag_name, value, add_to_queue)
+               ? BOSS_SYNC_PROGRESS_SENT
+               : BOSS_SYNC_PROGRESS_SEND_FAILED;
+}
+
 int boss_sync_send_defeat(const char *flag_name)
 {
     char payload[64];
@@ -379,6 +411,10 @@ int boss_sync_send_defeat(const char *flag_name)
         return 0;
     if (mnsg_string_equal(flag_name, "fl_congo_killed") &&
         anchor_congo_damage_is_shared() && !anchor_congo_damage_is_owner())
+        return 0;
+    if (mnsg_string_equal(flag_name, "fl_dharmanyo") &&
+        anchor_dharumanyo_damage_is_shared() &&
+        !anchor_dharumanyo_damage_is_owner())
         return 0;
 
     mnsg_json_writer_begin(&writer, payload, (unsigned int)sizeof(payload));
@@ -404,6 +440,33 @@ int boss_sync_send_defeat(const char *flag_name)
     return sent;
 }
 
+int boss_sync_queue_darumanyo_shared_terminal(void)
+{
+    NativeBossState *state = &s_darumanyo_state;
+
+    if (!anchor_dharumanyo_damage_is_shared() ||
+        D_800C7AB2 != DARUMANYO_ROOM)
+        return 0;
+    if (state->victory_complete || state->local_defeat_started ||
+        native_remote_defeat_is_current(state))
+        return 1;
+    if (!darumanyo_can_take_damage())
+        return 0;
+
+    /* The follower must traverse 80218350 -> 0432C and the complete native
+     * destruction/reward controller. Keep the durable flag hidden through
+     * combat teardown and until scenario D0 sets it in controller 0x34F. */
+    func_80024088_24C88(DARUMANYO_KILL_FLAG);
+    state->lethal_hit_pending = 1;
+    state->lethal_hit_armed = 0;
+    state->lethal_hit_room = D_800C7AB2;
+    state->remote_defeat_in_progress = 1;
+    state->remote_defeat_room = D_800C7AB2;
+    state->remote_defeat_needs_rearm = 0;
+    recomp_printf("[BossSync] Shared Dharmanyo terminal queued through native last-life path.\n");
+    return 1;
+}
+
 int boss_sync_apply_remote_defeat(const char *flag_name)
 {
     NativeBossState *state;
@@ -414,6 +477,10 @@ int boss_sync_apply_remote_defeat(const char *flag_name)
     {
         state = &s_darumanyo_state;
         flag_id = DARUMANYO_KILL_FLAG;
+        /* Shared checkpoints own the last-life transition. A terminal-only
+         * compatibility packet must not independently kill either replica. */
+        if (anchor_dharumanyo_damage_is_shared())
+            return 1;
         if (native_remote_defeat_is_current(state))
             return 1;
         if (state->victory_complete)
@@ -994,7 +1061,7 @@ void boss_sync_track_darumanyo_controller(void *actor)
     }
 
     /* Repair a flag-only save by replaying the real last hit and restoring
-     * durable progression only after 066E0 confirms teardown completion. */
+     * durable progression only after controller 0x34F reaches native D0. */
     if (!native_remote_defeat_is_current(&s_darumanyo_state) &&
         !s_darumanyo_state.local_defeat_started &&
         !s_darumanyo_state.victory_complete &&
@@ -1106,7 +1173,8 @@ void boss_sync_track_darumanyo_terminal_controller(void *actor)
 }
 
 /* 066E0 is installed only after 065E8 reaches zero, sets native internal flag
- * 0x16D, and tears down the fight.  Only now may fl_dharmanyo reach scripts. */
+ * 0x16D, and tears down combat.  The placed reward controller consumes 0x16D
+ * afterward, so the durable completion flag must remain deferred here. */
 RECOMP_HOOK("func_080066E0_6CE8F0")
 void boss_sync_finish_darumanyo_native_death(void *actor)
 {
@@ -1118,14 +1186,50 @@ void boss_sync_finish_darumanyo_native_death(void *actor)
     s_darumanyo_state.victory_complete = 1;
     s_darumanyo_state.lethal_hit_pending = 0;
     s_darumanyo_state.lethal_hit_armed = 0;
-    if (native_remote_defeat_is_current(&s_darumanyo_state))
-    {
-        item_sync_commit_boss_completion("fl_dharmanyo");
-        s_darumanyo_state.remote_defeat_in_progress = 0;
-        s_darumanyo_state.remote_defeat_needs_rearm = 0;
-    }
     s_darumanyo_terminal_controller = 0;
-    recomp_printf("[BossSync] Dharmanyo terminal callback reached; progression sync released.\n");
+    recomp_printf("[BossSync] Dharmanyo combat teardown reached; reward progression remains deferred.\n");
+}
+
+/* The placed entity 0x34F owns the complete 29-state Flower sequence.  D0
+ * sets packed flag 0x18 during this callback, before states 25-28 run D7 and
+ * release the camera/player.  Validate identity on entry while the actor is
+ * live, then observe the save bit after the original callback returns. */
+RECOMP_HOOK("func_08000090_72F920")
+void boss_sync_observe_darumanyo_reward_controller(void *actor)
+{
+    s_darumanyo_reward_callback_observed =
+        actor &&
+        D_800C7AB2 == DARUMANYO_ROOM &&
+        ACTOR_ENTITY_ID(actor) == ENTITY_DARUMANYO_REWARD_CONTROLLER &&
+        (ACTOR_STATUS(actor) & ACTOR_STATUS_REMOVE_PENDING) == 0;
+}
+
+RECOMP_HOOK_RETURN("func_08000090_72F920")
+void boss_sync_finish_darumanyo_reward_controller(void)
+{
+    int observed = (int)s_darumanyo_reward_callback_observed;
+    int remote;
+
+    s_darumanyo_reward_callback_observed = 0;
+    if (!observed ||
+        !s_darumanyo_state.victory_complete ||
+        !s_darumanyo_state.local_defeat_started ||
+        !func_800240DC_24CDC(DARUMANYO_KILL_FLAG))
+        return;
+
+    /* Keep the terminal encounter advertised after the combat tasks vanish,
+     * then retire it only once the stock reward script reaches D0. This lets a
+     * player entering during the post-fight ceremony adopt terminal instead
+     * of starting a fresh boss while the durable completion bit is deferred. */
+    remote = native_remote_defeat_is_current(&s_darumanyo_state);
+    anchor_dharumanyo_native_finish_terminal();
+    if (!remote)
+        return;
+
+    item_sync_commit_boss_completion("fl_dharmanyo");
+    s_darumanyo_state.remote_defeat_in_progress = 0;
+    s_darumanyo_state.remote_defeat_needs_rearm = 0;
+    recomp_printf("[BossSync] Dharmanyo native D0 completion observed; progression sync released.\n");
 }
 
 /* Benkei's controller uses 0x069, rather than the durable 0x033 dialogue bit,

@@ -326,6 +326,34 @@ int anchor_send_congo_hit(int sequence, int amount)
     return result;
 }
 
+char *anchor_dharumanyo_update(int ready, unsigned int visit, int paused,
+                               const char *state_json)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("ready", ready);
+    REPY_FN_SET_U32("visit", visit);
+    REPY_FN_SET_S32("paused", paused);
+    REPY_FN_SET_STR("state_json", state_json ? state_json : "null");
+    REPY_FN_EXEC_CACHE(anchor_dharumanyo_update_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.update_dharumanyo(ready, visit, paused, state_json)\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_send_dharumanyo_hit(int sequence)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("sequence", sequence);
+    REPY_FN_EXEC_CACHE(anchor_send_dharumanyo_hit_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.send_dharumanyo_hit(sequence)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_set_position(int pos_x, int pos_y, int pos_z)
 {
     REPY_FN_SETUP;

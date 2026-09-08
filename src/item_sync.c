@@ -1544,6 +1544,26 @@ static int sync_flag_index(const char *flag_name)
     return -1;
 }
 
+static void cache_darumanyo_native_reward(void)
+{
+    int i;
+
+    /* A remote replica has already changed these values through the original
+     * reward scripts. Align their monitor baselines before the remote-defeat
+     * gate is released at D0, including the final story flag set in D0 itself. */
+    for (i = 0; i < NUM_FIELDS; ++i)
+    {
+        if (boss_sync_is_darumanyo_reward_progress(s_fields[i].name))
+            s_fields[i].cached = SAVE_READ32(s_fields[i].off);
+    }
+    for (i = 0; i < NUM_FLAGS; ++i)
+    {
+        if (boss_sync_is_darumanyo_reward_progress(s_flag_bits[i].name))
+            s_flag_bits[i].cached =
+                (unsigned char)FLAG_IS_SET(s_flag_bits[i].id);
+    }
+}
+
 /* Native boss hooks can announce the live defeat before the durable save bit
  * changes.  Remember that send so the ordinary flag monitor does not emit the
  * same transient event again when the later progression bit rises. */
@@ -1582,6 +1602,8 @@ void item_sync_commit_boss_completion(const char *flag_name)
         return;
 
     apply_flag(flag_name, 1);
+    if (mnsg_string_equal(flag_name, "fl_dharmanyo"))
+        cache_darumanyo_native_reward();
     if (mnsg_string_equal(flag_name, "fl_benkei") && s_pending_benkei_sasuke_profile >= 0)
     {
         profile_display = apply_flag("sasuke_body",
@@ -2042,10 +2064,21 @@ static void monitor_and_send_changes(void)
 
         if (should_send)
         {
+            int send_result;
+
             if (sends >= MAX_SENDS_PER_FRAME || s_set_flag_send_timer > 0)
                 continue; /* budget exhausted – defer to next frame (cache not updated) */
 
-            if (!anchor_send_flag(s_fields[i].name, (int)cur, 1))
+            send_result = boss_sync_send_local_progress(
+                s_fields[i].name, (int)cur, 1);
+            if (send_result == BOSS_SYNC_PROGRESS_SUPPRESSED)
+            {
+                recomp_printf("[BossSync] Kept remote Dharumanyo reward field '%s' local.\n",
+                              s_fields[i].name);
+                s_fields[i].cached = cur;
+                continue;
+            }
+            if (send_result != BOSS_SYNC_PROGRESS_SENT)
                 continue;
             anchor_race_on_flag_synced(s_fields[i].name, (int)cur);
             ++sends;
@@ -2070,6 +2103,8 @@ static void monitor_and_send_changes(void)
 
         if (cur)
         { /* only broadcast when flag becomes set, not when cleared */
+            int send_result;
+
             /* Capture the room on the first frame that observes the native
              * 0->1 transition.  Keep it stable across send-budget deferrals
              * and transient transport failures. */
@@ -2123,7 +2158,16 @@ static void monitor_and_send_changes(void)
             if (sends >= MAX_SENDS_PER_FRAME || s_set_flag_send_timer > 0)
                 continue; /* defer to next frame */
 
-            if (!anchor_send_flag(s_flag_bits[i].name, 1, 1))
+            send_result = boss_sync_send_local_progress(
+                s_flag_bits[i].name, 1, 1);
+            if (send_result == BOSS_SYNC_PROGRESS_SUPPRESSED)
+            {
+                recomp_printf("[BossSync] Kept remote Dharumanyo reward flag '%s' local.\n",
+                              s_flag_bits[i].name);
+                s_flag_bits[i].cached = cur;
+                continue;
+            }
+            if (send_result != BOSS_SYNC_PROGRESS_SENT)
                 continue;
             if (!is_door_unlock_flag(i))
                 anchor_race_on_flag_synced(s_flag_bits[i].name, 1);

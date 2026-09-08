@@ -18,6 +18,21 @@ int boss_sync_send_defeat(const char *flag_name);
 int boss_sync_apply_remote_defeat(const char *flag_name);
 int boss_sync_has_active_encounter(const char *flag_name);
 int boss_sync_has_local_encounter(const char *flag_name);
+enum BossSyncProgressSendResult
+{
+    BOSS_SYNC_PROGRESS_SEND_FAILED = 0,
+    BOSS_SYNC_PROGRESS_SENT = 1,
+    BOSS_SYNC_PROGRESS_SUPPRESSED = 2
+};
+/* Remote Dharumanyo replicas run the native reward scripts locally. Route
+ * their reward-owned save changes through this gate so only the original
+ * simulator publishes duplicate durable deltas. Other progress is unchanged. */
+int boss_sync_is_darumanyo_reward_progress(const char *flag_name);
+int boss_sync_send_local_progress(const char *flag_name, int value,
+                                  int add_to_queue);
+/* A shared Dharumanyo terminal checkpoint enters the same verified native
+ * last-life path used by the terminal compatibility packet. */
+int boss_sync_queue_darumanyo_shared_terminal(void);
 void boss_sync_reset(void);
 
 #endif

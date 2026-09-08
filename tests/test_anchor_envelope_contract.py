@@ -159,6 +159,44 @@ class AnchorEnvelopeContractTests(unittest.TestCase):
         )
         self.assertTrue(self.sock.sent[-1].endswith(b"\x00"))
 
+    def test_boss_packets_have_and_enforce_eight_kibibyte_hot_budgets(self):
+        for packet_type in ("MNSG_CONGO", "MNSG_DHARUMANYO"):
+            with self.subTest(packet_type=packet_type):
+                self.assertEqual(
+                    anchor_mnsg.HOT_PACKET_MAX_BYTES[packet_type], 8 * 1024
+                )
+                before = len(self.sock.sent)
+                self.assertFalse(anchor_mnsg._send_raw({
+                    "type": packet_type,
+                    "clientId": 7,
+                    "payload": "x" * (8 * 1024),
+                }))
+                self.assertEqual(len(self.sock.sent), before)
+
+    def test_oversized_inbound_boss_packet_never_reaches_transport(self):
+        transports = {
+            "MNSG_CONGO": anchor_mnsg._congo,
+            "MNSG_DHARUMANYO": anchor_mnsg._dharumanyo,
+        }
+        for packet_type, transport in transports.items():
+            with self.subTest(packet_type=packet_type):
+                packet = {
+                    "type": packet_type,
+                    "clientId": 2,
+                    "payload": "x" * (8 * 1024),
+                }
+                wire = (json.dumps(packet, separators=(",", ":")) + "\0").encode()
+                self.assertGreater(
+                    len(wire), anchor_mnsg.HOT_PACKET_MAX_BYTES[packet_type]
+                )
+                receiver = ByteSocket((wire, b""))
+                anchor_mnsg._sock = receiver
+                anchor_mnsg._connected = True
+                with mock.patch.object(transport, "receive") as receive:
+                    with mock.patch.object(anchor_mnsg, "_do_disconnect"):
+                        anchor_mnsg._recv_loop(receiver)
+                receive.assert_not_called()
+
 
 class RecordingWriter:
     def __init__(self) -> None:
