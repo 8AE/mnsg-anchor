@@ -51,6 +51,9 @@
 /** Flute image and its overlaid click target size in DP units. */
 #define TRANSFER_ACTION_SIZE 24.0f
 
+/** Keep the focused/pressed flute target square with subtly softened corners. */
+#define TRANSFER_ACTION_RADIUS 3.0f
+
 /** Bound a clicked transfer while native world gates are temporarily busy. */
 #define TRANSFER_REQUEST_TIMEOUT_FRAMES 300
 #define TRANSFER_RETRY_FRAMES 6
@@ -499,6 +502,8 @@ static int plist_ensure_rows(int needed)
         recompui_set_min_height(s_plist_rows[i].transfer_button,
                                 TRANSFER_ACTION_SIZE, UNIT_DP);
         recompui_set_padding(s_plist_rows[i].transfer_button, 0.0f, UNIT_DP);
+        recompui_set_border_radius(s_plist_rows[i].transfer_button,
+                                   TRANSFER_ACTION_RADIUS, UNIT_DP);
         recompui_set_border_width(s_plist_rows[i].transfer_button,
                                   0.0f, UNIT_DP);
         recompui_set_background_color(s_plist_rows[i].transfer_button,
