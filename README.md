@@ -6,7 +6,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 
 * **Item / flag sync** — every tracked item or flag gained by a player is shared with the room in real time. Players who join late automatically receive the room's accumulated progress.
 * **Race mode (temporarily disabled)** — the in-development race flow remains in the source but is currently hidden from the startup menu.
-* **In-game HUD** — a notification banner confirms connection success or failure; a persistent player-list panel (top-left) shows every player currently in the room, their character, and their position.
+* **In-game HUD** — a notification banner confirms connection success or failure; a persistent player-list panel (top-left) shows every online player, their character, and their position. Each eligible remote row has Yae's flute button for transferring to that player's current location; see [flute transfer behavior and validation](docs/player-list-flute-transfer.md).
 * **Shared progression** — every player using the same Room ID automatically shares one progression state.
 * **Reconnect support** — client IDs are preserved across sessions so the server can deliver queued packets on reconnect.
 * **Remote player collision** — remote models collide with the local player, other remote players, and enemies. Elevators, doors, and other world objects do not block remote models. Collision is suspended during either client's cutscene or scripted movement. Use the updated mod on both clients for the remote cutscene exemption; see [collision behavior and validation](docs/remote-player-collision.md).

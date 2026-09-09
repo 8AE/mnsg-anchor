@@ -15,4 +15,11 @@ int anchor_boss_invite_world_can_prompt(void);
  * the invitation dialog has completely closed and released player control. */
 int anchor_boss_invite_world_warp(int arena);
 
+/* Request an ordinary live-world load at an exact peer position. This uses the
+ * destination room's native camera/player rotations and intentionally permits a
+ * same-room reload. Rooms above 0x225, including the 0x226 World Map overlay,
+ * are rejected before the native room-start table is indexed. */
+int anchor_boss_invite_world_transfer_to(unsigned short room,
+                                         short x, short y, short z);
+
 #endif

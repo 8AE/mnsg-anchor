@@ -33,6 +33,7 @@
 #include "item_sync.h"
 #include "anchor_runtime.h"
 #include "anchor_flag_catalog.h"
+#include "debug_ui.h"
 
 /* build_mod.sh produces release (0) and debug (1) variants automatically. */
 #ifndef DEBUG_BUTTON_ENABLED
@@ -797,8 +798,10 @@ static const RecompuiColor C_OVERLAY = {0, 0, 0, 145};
    UI state
    ========================================================================= */
 
-/* Small toggle button context – always visible, never captures input. */
-static RecompuiContext s_toggle_ctx = RECOMPUI_NULL_CONTEXT;
+/* Shared persistent HUD context. It captures the mouse for the DBG/NET
+ * controls and the online-player roster, but never captures game input. */
+static RecompuiContext s_hud_ctx = RECOMPUI_NULL_CONTEXT;
+static RecompuiResource s_hud_root = RECOMPUI_NULL_RESOURCE;
 
 /* Full modal context – shown while the menu is open. */
 static RecompuiContext s_modal_ctx = RECOMPUI_NULL_CONTEXT;
@@ -806,9 +809,9 @@ static RecompuiContext s_modal_ctx = RECOMPUI_NULL_CONTEXT;
 /* Label updated after every Force click to show what was last forced. */
 static RecompuiResource s_status_label = RECOMPUI_NULL_RESOURCE;
 
-static int s_initialized = 0;    /* guard for one-time lazy initialisation */
-static int s_toggle_visible = 0; /* 1 after the toggle button is shown    */
-static int s_modal_visible = 0;  /* tracks actual shown/hidden state      */
+static int s_initialized = 0; /* guard for one-time lazy initialisation */
+static int s_hud_visible = 0; /* 1 after the shared HUD is shown        */
+static int s_modal_visible = 0; /* tracks actual shown/hidden state     */
 
 /* Handle to the NET button so we can show/hide it based on config. */
 static RecompuiResource s_net_btn = RECOMPUI_NULL_RESOURCE;
@@ -973,20 +976,21 @@ static void debug_init_ui(void)
 {
     int i;
 
-    /* ── Toggle button (bottom-right corner of the screen) ──────────── */
+    /* ── Shared persistent HUD (DBG/NET plus online roster) ─────── */
 
-    s_toggle_ctx = recompui_create_context();
-    recompui_set_context_captures_input(s_toggle_ctx, 0);
-    recompui_set_context_captures_mouse(s_toggle_ctx, 1); /* must be 1 for button clicks to register */
+    s_hud_ctx = recompui_create_context();
+    recompui_set_context_captures_input(s_hud_ctx, 0);
+    recompui_set_context_captures_mouse(s_hud_ctx, 1); /* must be 1 for button clicks to register */
 
-    recompui_open_context(s_toggle_ctx);
+    recompui_open_context(s_hud_ctx);
     {
-        RecompuiResource root = recompui_context_root(s_toggle_ctx);
+        RecompuiResource root = recompui_context_root(s_hud_ctx);
+        s_hud_root = root;
 
         /* Button placed directly as an absolute child of root.
          * A full-screen wrapper would intercept clicks for other contexts. */
         s_dbg_btn = recompui_create_button(
-            s_toggle_ctx, root, "DBG", BUTTONSTYLE_SECONDARY);
+            s_hud_ctx, root, "DBG", BUTTONSTYLE_SECONDARY);
         RecompuiResource btn = s_dbg_btn;
         recompui_set_position(btn, POSITION_ABSOLUTE);
         recompui_set_bottom(btn, 12.0f, UNIT_DP); /* bottom-right */
@@ -1001,7 +1005,7 @@ static void debug_init_ui(void)
 
         /* NET button shares this context so both buttons are at the same Z-level. */
         s_net_btn = recompui_create_button(
-            s_toggle_ctx, root, "NET", BUTTONSTYLE_SECONDARY);
+            s_hud_ctx, root, "NET", BUTTONSTYLE_SECONDARY);
         RecompuiResource net_btn = s_net_btn;
         recompui_set_position(net_btn, POSITION_ABSOLUTE);
         recompui_set_bottom(net_btn, 12.0f, UNIT_DP); /* bottom-left */
@@ -1011,8 +1015,8 @@ static void debug_init_ui(void)
         recompui_set_tab_index(net_btn, TAB_INDEX_NONE);
         recompui_register_callback(net_btn, anchor_connect_ui_net_btn_callback, 0);
     }
-    recompui_close_context(s_toggle_ctx);
-    /* show is deferred to the frame hook via s_toggle_visible flag */
+    recompui_close_context(s_hud_ctx);
+    /* show is deferred to the frame hook via s_hud_visible flag */
 
     /* ── Modal panel (hidden at startup) ─────────────────────────────── */
 
@@ -1304,29 +1308,16 @@ static void debug_init_ui(void)
     /* Modal stays hidden until the toggle button is clicked. */
 }
 
-/* =========================================================================
-   Public utility
-   ========================================================================= */
-
-/**
- * Re-raise the toggle-button context to the top of the recompui Z-order.
- *
- * recompui_show_context() bumps a context to the top of the Z-stack every
- * time it is called.  Whenever any other context is shown after s_toggle_ctx
- * (e.g. the player-list panel in anchor_ui.c), the toggle buttons end up
- * below it and stop receiving mouse events.  Call this function after
- * showing any persistent HUD context to restore correct ordering.
- */
-void debug_ui_bump_toggle_ctx(void)
+/* The roster retries initialization until these become valid. debug.c owns
+ * the context lifetime and is the only module that may show or hide it. */
+RecompuiContext debug_ui_hud_context(void)
 {
-    /* recompui_show_context errors if the context is already visible, so we
-     * must hide it first before re-showing to move it to the top of the
-     * Z-stack.  Only do this once the toggle is actually visible.          */
-    if (s_initialized && s_toggle_visible && s_toggle_ctx != RECOMPUI_NULL_CONTEXT)
-    {
-        recompui_hide_context(s_toggle_ctx);
-        recompui_show_context(s_toggle_ctx);
-    }
+    return s_hud_ctx;
+}
+
+RecompuiResource debug_ui_hud_root(void)
+{
+    return s_hud_root;
 }
 
 /* =========================================================================
@@ -1349,19 +1340,19 @@ void debug_ui_frame_hook(void)
 
     if (!anchor_startup_menu_is_complete())
     {
-        if (s_toggle_visible)
+        if (s_hud_visible)
         {
-            recompui_hide_context(s_toggle_ctx);
-            s_toggle_visible = 0;
+            recompui_hide_context(s_hud_ctx);
+            s_hud_visible = 0;
         }
         return;
     }
 
-    /* Show the toggle button once after the startup menu is finished. */
-    if (!s_toggle_visible)
+    /* Show the shared HUD once after the startup menu is finished. */
+    if (!s_hud_visible)
     {
-        recompui_show_context(s_toggle_ctx);
-        s_toggle_visible = 1;
+        recompui_show_context(s_hud_ctx);
+        s_hud_visible = 1;
     }
 
     /* Show or hide the NET button based on config. */
@@ -1370,9 +1361,9 @@ void debug_ui_frame_hook(void)
         int show_net = anchor_startup_menu_is_complete() &&
                        !anchor_race_is_active() &&
                        (recomp_get_config_u32("anchor_show_net_button") == 0);
-        recompui_open_context(s_toggle_ctx);
+        recompui_open_context(s_hud_ctx);
         recompui_set_display(s_net_btn, show_net ? DISPLAY_BLOCK : DISPLAY_NONE);
-        recompui_close_context(s_toggle_ctx);
+        recompui_close_context(s_hud_ctx);
     }
 
     /* Process pending location-selector actions from the transport section. */

@@ -124,8 +124,92 @@ class SingleTeamTests(unittest.TestCase):
 
         players = json.loads(anchor_mnsg.get_player_info_json())
 
+        self.assertEqual([player["cid"] for player in players], [2, 9])
         self.assertEqual([player["n"] for player in players], ["Two", "Nine"])
         self.assertTrue(all("t" not in player for player in players))
+
+    def test_transfer_target_requires_fresh_safe_remote_movement(self) -> None:
+        anchor_mnsg._connected = True
+        anchor_mnsg._client_id = 9
+        sample = {
+            "name": "Two",
+            "online": True,
+            "isSaveLoaded": True,
+            "currentRoomId": 0x161,
+            "posX": -123,
+            "posY": 45,
+            "posZ": 678,
+            "posSeq": 1,
+            "posT": 1000,
+            "collisionDisabled": 0,
+            "playerEpoch": 7,
+            "interactionSession": 11,
+        }
+        with mock.patch.object(anchor_mnsg.time, "monotonic", return_value=100.0):
+            self.assertTrue(anchor_mnsg._merge_client_state(
+                2, sample, enforce_movement_order=True
+            ))
+        with anchor_mnsg._player_states_lock:
+            anchor_mnsg._player_states[9] = {
+                "name": "Local", "online": True, "self": True,
+                "isSaveLoaded": True,
+            }
+
+        with mock.patch.object(anchor_mnsg.time, "monotonic", return_value=104.999):
+            target = json.loads(anchor_mnsg.get_transfer_target_json(2))
+            players = json.loads(anchor_mnsg.get_player_info_json())
+        self.assertEqual(target, {
+            "cid": 2, "room": 0x161, "x": -123, "y": 45, "z": 678,
+        })
+        self.assertEqual(players[0]["ct"], 1)
+        self.assertEqual(players[0]["self"], 0)
+        self.assertEqual((players[1]["cid"], players[1]["self"], players[1]["ct"]),
+                         (9, 1, 0))
+
+        with mock.patch.object(anchor_mnsg.time, "monotonic", return_value=105.001):
+            self.assertEqual(anchor_mnsg.get_transfer_target_json(2), "{}")
+        self.assertEqual(anchor_mnsg.get_transfer_target_json(9), "{}")
+
+    def test_transfer_target_rejects_scripted_world_map_and_wide_coordinates(self) -> None:
+        anchor_mnsg._connected = True
+        anchor_mnsg._client_id = 1
+        base = {
+            "name": "Two",
+            "online": True,
+            "isSaveLoaded": True,
+            "currentRoomId": 0x130,
+            "posX": 1,
+            "posY": 2,
+            "posZ": 3,
+            "posSeq": 1,
+            "posT": 1000,
+            "collisionDisabled": 0,
+            "playerEpoch": 4,
+            "interactionSession": 8,
+        }
+
+        rejected = (
+            {"collisionDisabled": 1},
+            {"currentRoomId": anchor_mnsg.WORLD_MAP_ROOM_ID},
+            {"currentRoomId": anchor_mnsg.TRANSFER_ROOM_MAX + 1},
+            {"posX": anchor_mnsg.TRANSFER_COORD_MAX + 1},
+            {"posY": anchor_mnsg.TRANSFER_COORD_MIN - 1},
+            {"playerEpoch": 0},
+            {"interactionSession": 0},
+            {"isSaveLoaded": False},
+        )
+        for index, changes in enumerate(rejected, start=1):
+            with self.subTest(changes=changes):
+                with anchor_mnsg._player_states_lock:
+                    anchor_mnsg._player_states.clear()
+                    anchor_mnsg._player_movement_order.clear()
+                    anchor_mnsg._retired_interaction_sessions.clear()
+                sample = {**base, **changes, "posSeq": index}
+                with mock.patch.object(anchor_mnsg.time, "monotonic", return_value=100.0):
+                    self.assertTrue(anchor_mnsg._merge_client_state(
+                        2, sample, enforce_movement_order=True
+                    ))
+                    self.assertEqual(anchor_mnsg.get_transfer_target_json(2), "{}")
 
     def test_race_lobby_is_flat_and_sorted_by_client_id(self) -> None:
         anchor_mnsg._connected = True

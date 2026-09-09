@@ -428,6 +428,9 @@ extern "C"
     * @brief Return structured player info as a compact JSON array.
     *
     * Each element is an object with these keys:
+    *   ``cid`` – stable client ID for this connection.
+    *   ``self`` – 1 for the local player, otherwise 0.
+    *   ``ct`` – 1 when the remote currently has a safe transfer target.
     *   ``n``  – display string: "Name - Location"
     *   ``c``  – character index: 0=Goemon, 1=Ebisumaru, 2=Sasuke, 3=Yae.
     *            -1 if the character has not been broadcast by that player yet.
@@ -435,12 +438,24 @@ extern "C"
     *   ``hp`` – 1 if x/y/z position data is available.
     *   ``x``/``y``/``z`` – last broadcast world-space position.
     *
-    * Example: ``[{"n":"Alice - Oedo Town","c":0,"r":165,"hp":1,"x":10,"y":20,"z":30}]``
+    * Example: ``[{"cid":2,"self":0,"ct":1,"n":"Alice - Oedo Town","c":0,"r":165,"hp":1,"x":10,"y":20,"z":30}]``
     *
     * Returns ``"[]"`` when not connected or the room is empty.
     * The caller must free the result with recomp_free().
     */
    char *anchor_get_player_info_json(void);
+
+   /**
+    * @brief Resolve one freshly validated remote player transfer target.
+    *
+    * Returns ``{"cid":...,"room":...,"x":...,"y":...,"z":...}`` only
+    * while the client is connected and that remote has a recent ordinary-world
+    * movement sample. Scripted/cutscene motion, stale samples, the World Map,
+    * invalid sessions and coordinates outside signed 16-bit range are rejected.
+    * Returns ``"{}"`` when the target is unavailable. The caller must free
+    * the returned string with recomp_free().
+    */
+   char *anchor_get_transfer_target_json(unsigned int client_id);
 
    /**
     * @brief Return positions of same-team, same-raw-room teammates as JSON.

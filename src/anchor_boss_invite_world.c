@@ -1,4 +1,5 @@
 #include "anchor_boss_invite_world.h"
+#include "anchor_dialog.h"
 #include "item_sync.h"
 
 #ifndef ANCHOR_BOSS_INVITE_WORLD_HOST_TEST
@@ -34,6 +35,7 @@ extern void func_80003728_4328(unsigned char step);
 #define SYS_ROOM_START_BUSY 0xCF8A2u
 #define STEP_WORLD 13u
 #define STEP_WARP 12u
+#define LAST_TRANSFER_ROOM 0x225u
 
 static unsigned int s_visit;
 static unsigned short s_loaded_room;
@@ -130,19 +132,26 @@ int anchor_boss_invite_world_can_prompt(void)
            system[SYS_SCRIPTED_INPUT] == 0;
 }
 
-int anchor_boss_invite_world_warp(int arena)
+static const short *room_default_start(unsigned int room)
 {
-    const short *start;
-    int room = anchor_boss_arena_room(arena);
-    if (room < 0 || !anchor_boss_invite_world_can_prompt() ||
-        D_800C7AB2 == (unsigned short)room)
+    if (room > LAST_TRANSFER_ROOM)
         return 0;
-    /* The native table defines x, y, z, camera rotation, player rotation.
-     * Select the verified room's resident entry instead of duplicating
-     * transforms or accepting network coordinates. */
-    start = &D_8006B780_6C380[(unsigned int)room * 5u];
-    func_8000607C_6C7C((unsigned short)room,
-                      start[0], start[1], start[2], start[3], start[4], 0, 0);
+    return &D_8006B780_6C380[room * 5u];
+}
+
+static int request_live_world_transfer(unsigned short room, const short *start,
+                                       short x, short y, short z)
+{
+    /* The mod-owned invitation dialog releases native pause/control bits
+     * before its scenario/window lifetime has fully ended. Keep room loads
+     * out until that higher-level owner is also gone. */
+    if (!start || anchor_dialog_busy() ||
+        !anchor_boss_invite_world_can_prompt())
+        return 0;
+    /* The peer supplies only the exact destination position. Camera and player
+     * rotation remain native room-start data rather than network-controlled
+     * values. room_default_start() has already bounded the table index. */
+    func_8000607C_6C7C(room, x, y, z, start[3], start[4], 0, 0);
     /* The warp state calls 8000B364, which consumes this destination directly
      * and clears control state before loading the new world. It does not read
      * saved spawn fields. Preserve the player's saved respawn location and
@@ -150,4 +159,27 @@ int anchor_boss_invite_world_warp(int arena)
     s_room_loaded = 0;
     func_80003728_4328(STEP_WARP);
     return 1;
+}
+
+int anchor_boss_invite_world_transfer_to(unsigned short room,
+                                         short x, short y, short z)
+{
+    const short *start = room_default_start(room);
+    /* Deliberately do not reject D_800C7AB2 == room. Step 12 owns the complete
+     * same-room teardown/reload and is safer than moving player records by hand. */
+    return request_live_world_transfer(room, start, x, y, z);
+}
+
+int anchor_boss_invite_world_warp(int arena)
+{
+    const short *start;
+    int room = anchor_boss_arena_room(arena);
+    if (room < 0 || D_800C7AB2 == (unsigned short)room)
+        return 0;
+    /* Invitations retain their existing default-entrance semantics. */
+    start = room_default_start((unsigned int)room);
+    if (!start)
+        return 0;
+    return request_live_world_transfer((unsigned short)room, start,
+                                       start[0], start[1], start[2]);
 }

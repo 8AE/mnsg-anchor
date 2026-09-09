@@ -14,10 +14,11 @@ static unsigned char s_task[0xf0], s_object[0x98], s_work[0x80];
 static void *s_backlink;
 unsigned char *D_8015C5C8_15D1C8 = s_system.bytes;
 unsigned short D_800C7AB2;
-short D_8006B780_6C380[0x200 * 5];
+short D_8006B780_6C380[0x226 * 5];
 void *D_801FC604_5B8514;
 void *D_801FC60C_5B851C;
-static int s_saved, s_health, s_destination_calls, s_step_calls;
+static int s_saved, s_health, s_dialog_busy;
+static int s_destination_calls, s_step_calls;
 static short s_destination[7];
 static int s_last_field91;
 
@@ -39,6 +40,7 @@ void anchor_boss_invite_world_finish_load(void);
 
 int item_sync_save_is_loaded(void) { return s_saved; }
 unsigned int item_sync_local_player_health(void) { return (unsigned int)s_health; }
+int anchor_dialog_busy(void) { return s_dialog_busy; }
 
 void func_8000607C_6C7C(unsigned short room, short x, short y, short z,
                         short camera, short player, short field90, int field91)
@@ -90,6 +92,7 @@ static void ready(unsigned short room)
                sizeof(arenas[i].start));
     s_saved = 1;
     s_health = 5;
+    s_dialog_busy = 0;
     s_destination_calls = s_step_calls = 0;
     anchor_boss_invite_world_begin_load();
     assert(!anchor_boss_invite_world_can_prompt());
@@ -103,6 +106,13 @@ static void check_gate(unsigned int offset, unsigned char value)
     assert(!anchor_boss_invite_world_can_prompt());
     for (int arena = 1; arena <= 4; ++arena)
         assert(!anchor_boss_invite_world_warp(arena));
+    assert(!anchor_boss_invite_world_transfer_to(0x130, 123, -456, 789));
+    assert(s_destination_calls == 0 && s_step_calls == 0);
+}
+
+static void check_transfer_blocked(void)
+{
+    assert(!anchor_boss_invite_world_transfer_to(0x130, 123, -456, 789));
     assert(s_destination_calls == 0 && s_step_calls == 0);
 }
 
@@ -148,20 +158,76 @@ int main(void)
 
     ready(0x130); s_saved = 0;
     assert(!anchor_boss_invite_world_can_prompt());
+    check_transfer_blocked();
     ready(0x130); s_health = 0;
     assert(!anchor_boss_invite_world_can_prompt());
+    check_transfer_blocked();
     ready(0x130); s_work[0x69] = 1;
     assert(!anchor_boss_invite_world_can_prompt());
+    check_transfer_blocked();
     ready(0x130); s_backlink = 0;
     assert(!anchor_boss_invite_world_can_prompt());
+    check_transfer_blocked();
     ready(0x130); D_801FC60C_5B851C = 0;
     assert(!anchor_boss_invite_world_can_prompt());
+    check_transfer_blocked();
     ready(0x130); D_801FC604_5B8514 = (void *)0x80000000ul;
     assert(!anchor_boss_invite_world_can_prompt());
+    check_transfer_blocked();
+    ready(0x130); s_dialog_busy = 1;
+    assert(anchor_boss_invite_world_can_prompt());
+    check_transfer_blocked();
     ready(0x130); D_800C7AB2 = 0x131;
     assert(!anchor_boss_invite_world_can_prompt());
+    check_transfer_blocked();
     ready(0x130); D_8015C5C8_15D1C8 = 0;
     assert(!anchor_boss_invite_world_can_prompt());
+    check_transfer_blocked();
+
+    /* Peer transfer preserves exact signed coordinates and uses only the
+     * destination room's native rotations. The native loader still owns the
+     * current-room write, including a same-room reload. */
+    ready(0x0049);
+    assert(anchor_boss_invite_world_transfer_to(0x0049,
+                                                -32768, 32767, -12345));
+    assert(s_destination_calls == 1 && s_step_calls == 1);
+    assert(D_800C7AB2 == 0x0049);
+    assert(s_destination[0] == 0x0049);
+    assert(s_destination[1] == -32768);
+    assert(s_destination[2] == 32767);
+    assert(s_destination[3] == -12345);
+    assert(s_destination[4] == arenas[1].start[3]);
+    assert(s_destination[5] == arenas[1].start[4]);
+    assert(s_destination[6] == 0 && s_last_field91 == 0);
+
+    ready(0x0130);
+    assert(anchor_boss_invite_world_transfer_to(0x0016, 321, -222, 17));
+    assert(s_destination_calls == 1 && s_step_calls == 1);
+    assert(D_800C7AB2 == 0x0130);
+    assert(s_destination[0] == 0x0016);
+    assert(s_destination[1] == 321);
+    assert(s_destination[2] == -222);
+    assert(s_destination[3] == 17);
+    assert(s_destination[4] == arenas[0].start[3]);
+    assert(s_destination[5] == arenas[0].start[4]);
+    assert(s_destination[6] == 0 && s_last_field91 == 0);
+
+    /* 0x225 is the last index admitted by the live transfer API. */
+    ready(0x0130);
+    D_8006B780_6C380[0x225 * 5 + 3] = -512;
+    D_8006B780_6C380[0x225 * 5 + 4] = 1023;
+    assert(anchor_boss_invite_world_transfer_to(0x0225, 1, 2, 3));
+    assert(s_destination[0] == 0x0225);
+    assert(s_destination[1] == 1 && s_destination[2] == 2 &&
+           s_destination[3] == 3);
+    assert(s_destination[4] == -512 && s_destination[5] == 1023);
+
+    /* Reject the World Map overlay and every larger unsigned room before any
+     * room-indexed native-table read or destination mutation. */
+    ready(0x0130);
+    assert(!anchor_boss_invite_world_transfer_to(0x0226, 1, 2, 3));
+    assert(!anchor_boss_invite_world_transfer_to(0xffff, 1, 2, 3));
+    assert(s_destination_calls == 0 && s_step_calls == 0);
 
     for (unsigned int i = 0; i < sizeof(arenas) / sizeof(arenas[0]); ++i) {
         int arena = arenas[i].arena;
@@ -203,6 +269,6 @@ int main(void)
     }
     assert(!s_destination_calls && !s_step_calls);
 
-    puts("boss invitation world: entry, intro, lifecycle gates and native warp passed");
+    puts("boss invitation world: entry, lifecycle gates, peer transfer and native warp passed");
     return 0;
 }

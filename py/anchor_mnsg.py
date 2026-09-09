@@ -203,6 +203,10 @@ PLAYER_HIT_MAX_AGE_MS: int = 500
 PLAYER_SOUND_MAX_AGE_MS: int = 500
 PLAYER_SOUND_BATCH_COUNT: int = 8
 PLAYER_SOUND_QUEUE_COUNT: int = 64
+TRANSFER_TARGET_MAX_AGE_MS: int = 5000
+TRANSFER_ROOM_MAX: int = 0x225
+TRANSFER_COORD_MIN: int = -0x8000
+TRANSFER_COORD_MAX: int = 0x7FFF
 PLAYER_SOUND_TIMESTAMP_MAX: int = 0x7fffffffffffffff
 # 0x026D has a matching 0x826D global stop command. The native mixer owns
 # sounds by cue rather than player, so replaying that loop for one peer could
@@ -356,6 +360,7 @@ def _clear_movement_state(state: dict) -> None:
     """Invalidate a transform without discarding identity/room metadata."""
     for field in _MOVEMENT_STATE_FIELDS:
         state.pop(field, None)
+    state.pop("_positionReceivedMs", None)
 
 
 def _retire_interaction_session(cid: int, session: int) -> None:
@@ -530,12 +535,18 @@ def _merge_client_state(
         )
         if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
             state[anchor_tsurami.METADATA_KEY] = value
+    now_ms = int(time.monotonic() * 1000)
+    if enforce_movement_order:
+        # Sender monotonic timestamps are useful only for packet ordering; they
+        # cannot be compared across machines.  Keep a local receive timestamp
+        # for actions (such as player transfer) that require a fresh target.
+        state["_positionReceivedMs"] = now_ms
     context = _boss_context()
     _congo.observe(context)
     _dharumanyo.observe(context)
     _tsurami.observe(context)
     _invalidate_confirmed_boss_invitation(cid)
-    _prune_projectile_spawns(int(time.monotonic() * 1000))
+    _prune_projectile_spawns(now_ms)
     return True
 
 
@@ -580,6 +591,8 @@ def _replace_all_client_states(states: list) -> None:
                 for field in _MOVEMENT_STATE_FIELDS:
                     if field in previous:
                         merged[field] = previous[field]
+                if "_positionReceivedMs" in previous:
+                    merged["_positionReceivedMs"] = previous["_positionReceivedMs"]
                 if "appearanceFlags" in previous:
                     merged["appearanceFlags"] = previous["appearanceFlags"]
             # A fresh handshake already identifies this live connection.
@@ -2750,6 +2763,9 @@ def get_player_info_json() -> str:
     sorted by client ID.
 
     Each object has these keys:
+        ``cid`` – stable client ID for this connection.
+        ``self`` – 1 for the local player, otherwise 0.
+        ``ct`` – 1 when this row currently has a safe transfer target.
         ``n``  – display string: "Name - Location"
         ``c``  – character index (int): 0=Goemon, 1=Ebisumaru, 2=Sasuke, 3=Yae.
                  -1 if the character has not been broadcast yet.
@@ -2759,9 +2775,10 @@ def get_player_info_json() -> str:
 
     Returns ``'[]'`` when not connected or no online players are present.
     """
+    now_ms = int(time.monotonic() * 1000)
     with _player_states_lock:
         entries = []
-        for _k, v in sorted(_player_states.items()):
+        for cid, v in sorted(_player_states.items()):
             if not v.get("online", True):
                 continue
             name_str = v["name"]
@@ -2771,7 +2788,12 @@ def get_player_info_json() -> str:
             char_idx = _CHAR_TO_IDX.get(v.get("character", ""), -1)
             room_id  = v.get("roomId", -1)
             has_pos = "posX" in v and "posY" in v and "posZ" in v
+            is_self = cid == _client_id or bool(v.get("self", False))
             entries.append({
+                "cid": int(cid),
+                "self": 1 if is_self else 0,
+                "ct": 1 if (_connected and _client_id > 0 and
+                              _transfer_target_locked(cid, now_ms) is not None) else 0,
                 "n": name_str,
                 "c": char_idx,
                 "r": room_id,
@@ -2781,6 +2803,56 @@ def get_player_info_json() -> str:
                 "z": int(v.get("posZ", 0)) if has_pos else 0,
             })
     return json.dumps(entries, separators=(",", ":"))
+
+
+def _transfer_target_locked(cid: int, now_ms: int) -> "dict | None":
+    """Resolve a safe, current remote destination while the state lock is held."""
+    if type(cid) is not int or cid <= 0 or cid == _client_id:
+        return None
+    state = _player_states.get(cid)
+    if not state or not state.get("online", True):
+        return None
+    if state.get("self", False) or not state.get("isSaveLoaded", False):
+        return None
+    if int(state.get("collisionDisabled", 0)) != 0:
+        return None
+    if int(state.get("interactionSession", 0)) <= 0:
+        return None
+    if int(state.get("playerEpoch", 0)) <= 0:
+        return None
+
+    received_ms = int(state.get("_positionReceivedMs", 0))
+    age_ms = now_ms - received_ms
+    if received_ms <= 0 or age_ms < 0 or age_ms > TRANSFER_TARGET_MAX_AGE_MS:
+        return None
+
+    room = state.get("roomId")
+    if type(room) is not int or not 0 <= room <= TRANSFER_ROOM_MAX:
+        return None
+    coordinates = (state.get("posX"), state.get("posY"), state.get("posZ"))
+    if any(type(value) is not int for value in coordinates):
+        return None
+    if any(not TRANSFER_COORD_MIN <= value <= TRANSFER_COORD_MAX
+           for value in coordinates):
+        return None
+
+    return {
+        "cid": cid,
+        "room": room,
+        "x": coordinates[0],
+        "y": coordinates[1],
+        "z": coordinates[2],
+    }
+
+
+def get_transfer_target_json(cid: int) -> str:
+    """Return one freshly validated remote transfer target, or ``'{}'``."""
+    if not _connected or _client_id <= 0:
+        return "{}"
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        target = _transfer_target_locked(cid, now_ms)
+    return json.dumps(target, separators=(",", ":")) if target else "{}"
 
 
 def get_teammate_positions_json() -> str:
