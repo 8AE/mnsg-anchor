@@ -1887,8 +1887,20 @@ def update_client_state(state_json: str) -> bool:
     })
     if sent and _client_id:
         with _player_states_lock:
+            # Keep the local cache in the same normalized schema used for
+            # received metadata. A raw update stores currentCharacter while
+            # roster readers consume character, leaving the self icon blank or
+            # stuck on the previous selection until a later membership packet.
             local = _player_states.setdefault(_client_id, {})
             local.update(state)
+            for source, destination in (
+                ("currentRoomId", "roomId"),
+                ("currentRoom", "location"),
+                ("currentCharacter", "character"),
+            ):
+                if source in state:
+                    local[destination] = state[source]
+                    local.pop(source, None)
             _cache_map_snapshot(local, state)
             local["self"] = True
     return sent
@@ -2594,8 +2606,10 @@ def set_character(char_name: str) -> bool:
         return False
     if char_name == _local_character:
         return False
-    _local_character = char_name
-    return update_client_state(json.dumps({"currentCharacter": char_name}))
+    sent = update_client_state(json.dumps({"currentCharacter": char_name}))
+    if sent:
+        _local_character = char_name
+    return sent
 
 
 def set_local_room(room_id: int) -> bool:
@@ -3289,36 +3303,3 @@ def _decode_png_rgba(png: bytes) -> bytes:
 
     import struct as _struct
     return _struct.pack(">II", width, height) + bytes(rgba)
-
-
-def load_icon_rgba(nrm_path: str, char_name: str) -> bytes:
-    """
-    Load a character icon from the NRM archive as raw RGBA32 pixel data.
-
-    The NRM file is a zip archive.  Icons are stored as raw RGBA32 files at
-    ``icons/{char_name}_icon.rgba`` (200x200 pixels, 160000 bytes).
-
-    Returns:
-        ``struct.pack(">II", width, height) + rgba_bytes``  on success.
-        ``struct.pack(">II", 0, 0)``  (8 zero bytes) on any error.
-    """
-    import struct
-    import zipfile
-
-    _ICON_SIZE = 200
-    icon_key = f"icons/{char_name.lower()}_icon.rgba"
-    try:
-        with zipfile.ZipFile(nrm_path, "r") as nrm:
-            rgba = nrm.read(icon_key)
-    except Exception as exc:
-        logger.warning("anchor_mnsg.load_icon_rgba: cannot read %s from %s: %s",
-                       icon_key, nrm_path, exc)
-        return struct.pack(">II", 0, 0)
-
-    expected = _ICON_SIZE * _ICON_SIZE * 4
-    if len(rgba) != expected:
-        logger.warning("anchor_mnsg.load_icon_rgba: unexpected size %d for %s (expected %d)",
-                       len(rgba), icon_key, expected)
-        return struct.pack(">II", 0, 0)
-
-    return struct.pack(">II", _ICON_SIZE, _ICON_SIZE) + rgba

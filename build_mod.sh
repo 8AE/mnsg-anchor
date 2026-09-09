@@ -4,8 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-python3 tools/gen_icon_headers.py
-
 MOD_FILENAME="$(awk -F'"' '/^[[:space:]]*mod_filename[[:space:]]*=/ { print $2; exit }' mod.toml)"
 if [[ -z "$MOD_FILENAME" ]]; then
     echo "Error: could not read inputs.mod_filename from mod.toml" >&2

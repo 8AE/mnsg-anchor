@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Extract the pause-menu flute icon from a decompressed MNSG US ROM.
+"""Verify or inspect the pause-menu flute icon in a decompressed MNSG US ROM.
 
 The pause overlay registers packed resource 0x8016 as a 64x32 texture and
 draws the 24x24 rectangle at source coordinates (40, 0).  Resource 0x8016 is
 stored in the game's PIC0000 format at ROM offset 0x007EB740 in the
 decompressed US ROM.
 
+By default this only validates the packed resource and decoded crop. Optional
+output flags are for reverse-engineering inspection; the mod does not build or
+run from extracted files.
+
 Usage:
     python3 tools/extract_flute_icon.py /path/to/mnsg.us.decompressed.z64
+    python3 tools/extract_flute_icon.py ROM --png-out /tmp/flute.png
 """
 
 from __future__ import annotations
@@ -18,12 +23,6 @@ import hashlib
 import struct
 import zlib
 from pathlib import Path
-
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_RGBA_OUT = ROOT_DIR / "icons" / "flute_icon.rgba"
-DEFAULT_PNG_OUT = ROOT_DIR / "icons" / "flute_icon.png"
-
 RESOURCE_ID = 0x8016
 RESOURCE_ROM_OFFSET = 0x007EB740
 RESOURCE_PACKED_SIZE = 0x2C0
@@ -323,30 +322,29 @@ def main() -> None:
     parser.add_argument(
         "--rgba-out",
         type=Path,
-        default=DEFAULT_RGBA_OUT,
-        help=f"raw RGBA32 output (default: {DEFAULT_RGBA_OUT})",
+        help="optional raw RGBA32 inspection output",
     )
     parser.add_argument(
         "--png-out",
         type=Path,
-        default=DEFAULT_PNG_OUT,
-        help=f"PNG output (default: {DEFAULT_PNG_OUT})",
+        help="optional PNG inspection output",
     )
     args = parser.parse_args()
 
     rgba = extract(args.rom)
-    args.rgba_out.parent.mkdir(parents=True, exist_ok=True)
-    args.png_out.parent.mkdir(parents=True, exist_ok=True)
-    args.rgba_out.write_bytes(rgba)
-    args.png_out.write_bytes(encode_png(CROP_WIDTH, CROP_HEIGHT, rgba))
-
     print(
-        f"extracted resource 0x{RESOURCE_ID:04X} crop "
+        f"verified resource 0x{RESOURCE_ID:04X} crop "
         f"({CROP_X}, {CROP_Y}, {CROP_WIDTH}, {CROP_HEIGHT})"
     )
-    print(f"wrote {args.rgba_out} ({len(rgba)} bytes)")
-    print(f"wrote {args.png_out}")
     print(f"RGBA32 SHA-256 {sha256(rgba)}")
+    if args.rgba_out is not None:
+        args.rgba_out.parent.mkdir(parents=True, exist_ok=True)
+        args.rgba_out.write_bytes(rgba)
+        print(f"wrote {args.rgba_out} ({len(rgba)} bytes)")
+    if args.png_out is not None:
+        args.png_out.parent.mkdir(parents=True, exist_ok=True)
+        args.png_out.write_bytes(encode_png(CROP_WIDTH, CROP_HEIGHT, rgba))
+        print(f"wrote {args.png_out}")
 
 
 if __name__ == "__main__":

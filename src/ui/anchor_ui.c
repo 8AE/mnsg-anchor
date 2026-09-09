@@ -33,11 +33,7 @@
 #include "debug_ui.h"
 #include "utils/array_utils.h"
 #include "utils/json_utils.h"
-#include "icon_goemon.h"
-#include "icon_ebisumaru.h"
-#include "icon_sasuke.h"
-#include "icon_yae.h"
-#include "icon_flute.h"
+#include "anchor_rom_icons.h"
 
 /* =========================================================================
    Tunables
@@ -176,14 +172,22 @@ static int s_plist_row_count;
 static RecompuiResource s_plist_rows_container = RECOMPUI_NULL_RESOURCE;
 
 /* Pre-loaded character textures: 0=Goemon, 1=Ebisumaru, 2=Sasuke, 3=Yae. */
-static RecompuiTextureHandle s_char_textures[4];
+static RecompuiTextureHandle s_char_textures[ANCHOR_MAP_FACE_ICON_COUNT];
 static RecompuiTextureHandle s_blank_texture;
 static RecompuiTextureHandle s_flute_texture;
 static int s_textures_initialized = 0;
+static int s_map_face_textures_ready = 0;
+static int s_flute_texture_ready = 0;
+static unsigned char s_map_face_rgba[ANCHOR_MAP_FACE_ICONS_RGBA32_SIZE]
+    __attribute__((aligned(8)));
+static unsigned char s_flute_rgba[ANCHOR_FLUTE_ICON_RGBA32_SIZE]
+    __attribute__((aligned(8)));
 
-/** Load character icon textures from baked-in C arrays. */
+/** Materialize the map faces and flute from the game's ROM resource table. */
 static void plist_load_textures(void)
 {
+    unsigned int character;
+
     if (s_textures_initialized)
         return;
     s_textures_initialized = 1;
@@ -192,16 +196,44 @@ static void plist_load_textures(void)
     static const unsigned char blank_px[4] = {0, 0, 0, 0};
     s_blank_texture = recompui_create_texture_rgba32((void *)blank_px, 1, 1);
 
-    s_char_textures[0] = recompui_create_texture_rgba32(
-        (void *)icon_goemon_data, ICON_GOEMON_WIDTH, ICON_GOEMON_HEIGHT);
-    s_char_textures[1] = recompui_create_texture_rgba32(
-        (void *)icon_ebisumaru_data, ICON_EBISUMARU_WIDTH, ICON_EBISUMARU_HEIGHT);
-    s_char_textures[2] = recompui_create_texture_rgba32(
-        (void *)icon_sasuke_data, ICON_SASUKE_WIDTH, ICON_SASUKE_HEIGHT);
-    s_char_textures[3] = recompui_create_texture_rgba32(
-        (void *)icon_yae_data, ICON_YAE_WIDTH, ICON_YAE_HEIGHT);
-    s_flute_texture = recompui_create_texture_rgba32(
-        (void *)icon_flute_data, ICON_FLUTE_WIDTH, ICON_FLUTE_HEIGHT);
+    for (character = 0; character < ANCHOR_MAP_FACE_ICON_COUNT; ++character)
+        s_char_textures[character] = s_blank_texture;
+    if (anchor_rom_load_map_face_icons_rgba32(
+            s_map_face_rgba, sizeof(s_map_face_rgba)))
+    {
+        for (character = 0; character < ANCHOR_MAP_FACE_ICON_COUNT;
+             ++character)
+        {
+            s_char_textures[character] = recompui_create_texture_rgba32(
+                s_map_face_rgba +
+                    character * ANCHOR_MAP_FACE_ICON_RGBA32_SIZE,
+                ANCHOR_MAP_FACE_ICON_WIDTH, ANCHOR_MAP_FACE_ICON_HEIGHT);
+        }
+        s_map_face_textures_ready = 1;
+    }
+    else
+    {
+        recomp_printf(
+            "[Anchor] Map-face ROM resource 0x%04X at 0x%08X was unavailable\n",
+            ANCHOR_MAP_FACE_RESOURCE_ID,
+            ANCHOR_MAP_FACE_RESOURCE_ROM_ADDRESS);
+    }
+
+    s_flute_texture = s_blank_texture;
+    if (anchor_rom_load_flute_icon_rgba32(s_flute_rgba,
+                                           sizeof(s_flute_rgba)))
+    {
+        s_flute_texture = recompui_create_texture_rgba32(
+            s_flute_rgba, ANCHOR_FLUTE_ICON_WIDTH,
+            ANCHOR_FLUTE_ICON_HEIGHT);
+        s_flute_texture_ready = 1;
+    }
+    else
+    {
+        recomp_printf(
+            "[Anchor] Flute ROM resource 0x%04X at 0x%08X was unavailable\n",
+            ANCHOR_FLUTE_RESOURCE_ID, ANCHOR_FLUTE_RESOURCE_ROM_ADDRESS);
+    }
 }
 
 static void append_char_limited(char *dst, int *pos, int max_len, char value)
@@ -296,9 +328,6 @@ static int plist_ensure_init(void)
     if (s_plist_ctx == RECOMPUI_NULL_CONTEXT ||
         root == RECOMPUI_NULL_RESOURCE)
         return 0;
-
-    /* Load icon textures (GPU resources, not bound to any context). */
-    plist_load_textures();
 
     recompui_open_context(s_plist_ctx);
 
@@ -601,6 +630,7 @@ void anchor_ui_update(void)
     int required;
     int show_room_hex;
     int show_positions;
+    int retry_self_character;
     unsigned int local_cid;
 
     /* The first call precedes debug.c's initialization. Retry every frame
@@ -637,6 +667,11 @@ void anchor_ui_update(void)
 
     if (s_plist_panel == RECOMPUI_NULL_RESOURCE)
         return;
+
+    /* The panel itself can be constructed during startup. Defer native ROM
+     * resource decoding until multiplayer is active, after normal game and
+     * resource-manager initialization has completed. */
+    plist_load_textures();
 
     /* Run before the refresh throttle so a click is handled promptly. The
      * resolver and native transfer helper independently revalidate every gate. */
@@ -707,6 +742,7 @@ void anchor_ui_update(void)
     static const char s_hex_chars[] = "0123456789ABCDEF";
     static char label_buf[PLAYER_LABEL_BUF_LEN];
 
+    retry_self_character = 0;
     recompui_open_context(s_plist_ctx);
     for (int i = 0; i < row_count; i++)
     {
@@ -715,15 +751,23 @@ void anchor_ui_update(void)
 
         /* Character icon. */
         int ci = s_plist_rows[i].character;
+        if ((s_plist_rows[i].is_self ||
+             s_plist_rows[i].cid == local_cid) &&
+            (ci < 0 || ci >= (int)ANCHOR_MAP_FACE_ICON_COUNT))
+            retry_self_character = 1;
         RecompuiTextureHandle tex =
-            (ci >= 0 && ci < 4) ? s_char_textures[ci] : s_blank_texture;
+            (s_map_face_textures_ready && ci >= 0 &&
+             ci < (int)ANCHOR_MAP_FACE_ICON_COUNT)
+                ? s_char_textures[ci]
+                : s_blank_texture;
         recompui_set_imageview_texture(s_plist_rows[i].icon, tex);
 
         /* Hide the action for our row and for remotes whose latest state is
          * already known not to satisfy transfer-target freshness/safety. */
         recompui_set_display(
             s_plist_rows[i].transfer_action,
-            s_plist_rows[i].cid && !s_plist_rows[i].is_self &&
+            s_flute_texture_ready && s_plist_rows[i].cid &&
+                    !s_plist_rows[i].is_self &&
                     s_plist_rows[i].cid != local_cid &&
                     s_plist_rows[i].can_transfer
                 ? DISPLAY_BLOCK
@@ -766,6 +810,11 @@ void anchor_ui_update(void)
     for (int i = row_count; i < s_plist_row_count; i++)
         recompui_set_display(s_plist_rows[i].row, DISPLAY_NONE);
     recompui_close_context(s_plist_ctx);
+
+    /* The roster hook can run one frame before local character publication on
+     * connect. Do not leave that transient blank cached for the normal second. */
+    if (retry_self_character)
+        s_plist_refresh_timer = 0;
 
     plist_set_visible(1);
 }

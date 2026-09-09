@@ -112,6 +112,91 @@ class SingleTeamTests(unittest.TestCase):
         self.assertEqual(packet["state"]["teamId"], "default")
         self.assertEqual(anchor_mnsg.get_team_id(), "default")
 
+    def test_local_character_updates_player_info_immediately(self) -> None:
+        self.connect()
+
+        self.assertTrue(anchor_mnsg.set_character("Yae"))
+        players = json.loads(anchor_mnsg.get_player_info_json())
+        self.assertEqual(len(players), 1)
+        self.assertEqual((players[0]["self"], players[0]["c"]), (1, 3))
+
+        self.assertTrue(anchor_mnsg.set_character("Sasuke"))
+        players = json.loads(anchor_mnsg.get_player_info_json())
+        self.assertEqual((players[0]["self"], players[0]["c"]), (1, 2))
+        local = anchor_mnsg._player_states[anchor_mnsg._client_id]
+        self.assertEqual(local["character"], "Sasuke")
+        self.assertNotIn("currentCharacter", local)
+
+    def test_failed_character_update_retries_the_same_selection(self) -> None:
+        self.connect()
+
+        with mock.patch.object(
+            anchor_mnsg, "_send_raw", side_effect=(False, True)
+        ) as send:
+            self.assertFalse(anchor_mnsg.set_character("Yae"))
+            self.assertEqual(anchor_mnsg._local_character, "")
+            self.assertTrue(anchor_mnsg.set_character("Yae"))
+
+        self.assertEqual(send.call_count, 2)
+        self.assertEqual(anchor_mnsg._local_character, "Yae")
+        players = json.loads(anchor_mnsg.get_player_info_json())
+        self.assertEqual((players[0]["self"], players[0]["c"]), (1, 3))
+
+    def test_character_update_retries_after_server_assigns_client_id(self) -> None:
+        fake_socket = self.connect(client_id=0)
+
+        self.assertFalse(anchor_mnsg.set_character("Yae"))
+        self.assertEqual(anchor_mnsg._local_character, "")
+        self.assertEqual(len(fake_socket.sent), 1)
+
+        anchor_mnsg._replace_all_client_states([
+            {
+                "clientId": 7,
+                "self": True,
+                "clientState": {
+                    "name": "Player",
+                    "teamId": "default",
+                    "online": True,
+                },
+            }
+        ])
+        self.assertTrue(anchor_mnsg.set_character("Yae"))
+
+        players = json.loads(anchor_mnsg.get_player_info_json())
+        self.assertEqual((players[0]["cid"], players[0]["self"], players[0]["c"]),
+                         (7, 1, 3))
+        packet = json.loads(fake_socket.sent[-1].removesuffix(b"\x00"))
+        self.assertEqual(packet["state"]["currentCharacter"], "Yae")
+
+    def test_remote_character_survives_characterless_movement(self) -> None:
+        anchor_mnsg._connected = True
+        anchor_mnsg._client_id = 7
+        with anchor_mnsg._player_states_lock:
+            self.assertTrue(anchor_mnsg._merge_client_state(9, {
+                "name": "Remote",
+                "currentCharacter": "Ebisumaru",
+                "currentRoomId": 10,
+            }))
+
+        players = json.loads(anchor_mnsg.get_player_info_json())
+        self.assertEqual((players[0]["cid"], players[0]["c"], players[0]["hp"]),
+                         (9, 1, 0))
+
+        with anchor_mnsg._player_states_lock:
+            self.assertTrue(anchor_mnsg._merge_client_state(9, {
+                "currentRoomId": 10,
+                "posX": 1,
+                "posY": 2,
+                "posZ": 3,
+                "posSeq": 1,
+                "posT": 1000,
+                "playerEpoch": 2,
+                "interactionSession": 3,
+            }, enforce_movement_order=True))
+
+        players = json.loads(anchor_mnsg.get_player_info_json())
+        self.assertEqual((players[0]["cid"], players[0]["c"]), (9, 1))
+
     def test_player_info_is_flat_and_sorted_by_client_id(self) -> None:
         with anchor_mnsg._player_states_lock:
             anchor_mnsg._player_states.update(

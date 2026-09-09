@@ -5,11 +5,8 @@
 
 #include "recompui.h"
 #include "anchor_nameplates.h"
+#include "anchor_rom_icons.h"
 #include "utils/array_utils.h"
-#include "icon_goemon.h"
-#include "icon_ebisumaru.h"
-#include "icon_sasuke.h"
-#include "icon_yae.h"
 
 #define NAMEPLATE_ICON_SIZE 22.0f
 #define NAMEPLATE_NEAR_DISTANCE_SQ 160000.0f
@@ -34,9 +31,14 @@ static int s_nameplate_capacity;
 static int s_nameplate_count;
 static int s_nameplate_initialized;
 static int s_nameplate_ctx_visible;
-static RecompuiTextureHandle s_nameplate_char_textures[4];
+static RecompuiTextureHandle
+    s_nameplate_char_textures[ANCHOR_MAP_FACE_ICON_COUNT];
 static RecompuiTextureHandle s_nameplate_blank_texture;
 static int s_nameplate_textures_initialized;
+static int s_nameplate_map_faces_ready;
+static unsigned char
+    s_nameplate_map_face_rgba[ANCHOR_MAP_FACE_ICONS_RGBA32_SIZE]
+        __attribute__((aligned(8)));
 
 static const RecompuiColor NAMEPLATE_TEXT = {255, 255, 255, 235};
 static const RecompuiColor NAMEPLATE_TEXT_OPPONENT = {255, 72, 72, 245};
@@ -45,20 +47,32 @@ static const RecompuiColor NAMEPLATE_BG = {0, 0, 0, 150};
 static void nameplates_load_textures(void)
 {
     static const unsigned char blank_px[4] = {0, 0, 0, 0};
+    unsigned int character;
 
     if (s_nameplate_textures_initialized)
         return;
     s_nameplate_textures_initialized = 1;
 
-    s_nameplate_blank_texture = recompui_create_texture_rgba32((void *)blank_px, 1, 1);
-    s_nameplate_char_textures[0] = recompui_create_texture_rgba32(
-        (void *)icon_goemon_data, ICON_GOEMON_WIDTH, ICON_GOEMON_HEIGHT);
-    s_nameplate_char_textures[1] = recompui_create_texture_rgba32(
-        (void *)icon_ebisumaru_data, ICON_EBISUMARU_WIDTH, ICON_EBISUMARU_HEIGHT);
-    s_nameplate_char_textures[2] = recompui_create_texture_rgba32(
-        (void *)icon_sasuke_data, ICON_SASUKE_WIDTH, ICON_SASUKE_HEIGHT);
-    s_nameplate_char_textures[3] = recompui_create_texture_rgba32(
-        (void *)icon_yae_data, ICON_YAE_WIDTH, ICON_YAE_HEIGHT);
+    s_nameplate_blank_texture =
+        recompui_create_texture_rgba32((void *)blank_px, 1, 1);
+    for (character = 0; character < ANCHOR_MAP_FACE_ICON_COUNT; ++character)
+        s_nameplate_char_textures[character] = s_nameplate_blank_texture;
+
+    if (anchor_rom_load_map_face_icons_rgba32(
+            s_nameplate_map_face_rgba, sizeof(s_nameplate_map_face_rgba)))
+    {
+        for (character = 0; character < ANCHOR_MAP_FACE_ICON_COUNT;
+             ++character)
+        {
+            s_nameplate_char_textures[character] =
+                recompui_create_texture_rgba32(
+                    s_nameplate_map_face_rgba +
+                        character * ANCHOR_MAP_FACE_ICON_RGBA32_SIZE,
+                    ANCHOR_MAP_FACE_ICON_WIDTH,
+                    ANCHOR_MAP_FACE_ICON_HEIGHT);
+        }
+        s_nameplate_map_faces_ready = 1;
+    }
 }
 
 static int nameplates_ensure_init(int needed)
@@ -290,7 +304,10 @@ int anchor_nameplates_render_slot(
     recompui_set_height(s_nameplates[slot_index].icon, icon_size, UNIT_DP);
     recompui_set_imageview_texture(
         s_nameplates[slot_index].icon,
-        (remote->ch >= 0 && remote->ch < 4) ? s_nameplate_char_textures[remote->ch] : s_nameplate_blank_texture);
+        (s_nameplate_map_faces_ready && remote->ch >= 0 &&
+         remote->ch < (int)ANCHOR_MAP_FACE_ICON_COUNT)
+            ? s_nameplate_char_textures[remote->ch]
+            : s_nameplate_blank_texture);
     recompui_set_text(s_nameplates[slot_index].label, remote->name ? remote->name : "");
     recompui_set_font_size(s_nameplates[slot_index].label, font_size, UNIT_DP);
     recompui_set_color(s_nameplates[slot_index].label, remote->same_team ? &NAMEPLATE_TEXT : &NAMEPLATE_TEXT_OPPONENT);
