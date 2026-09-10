@@ -120,11 +120,11 @@ default = "Enabled"
 
 [[manifest.config_options]]
 id = "anchor_show_notifications"
-name = "Show Item Notifications"
-description = "Show a toast notification when items or flags are received or found."
+name = "Item Notifications"
+description = "Which check notifications to show. Important shows main progress only (characters, locations, items, keys, dolls, boss defeats and quest items); All also shows cutscenes and miscellaneous flags."
 type = "Enum"
-options = ["Enabled", "Disabled"]
-default = "Enabled"
+options = ["Off", "Important", "All"]
+default = "Important"
 
 [[manifest.config_options]]
 id = "anchor_show_room_hex"

@@ -1146,28 +1146,28 @@ static void capture_caches(void)
    bottom-right corner upward.  Each card auto-dismisses after NOTIF_FRAMES
    game frames.  Slots are allocated round-robin; idle slots are preferred.
 
+   Each card is a single-line rectangle that shrink-wraps the check name.
+   Its colours match the online player list panel.
+
    Card layout (each slot):
-     ┌─[teal strip]──────────────────────────────────┐
-     │  Received from team                           │  ← annotation, teal
-     │  Chain Pipe                                   │  ← small, white
-     └───────────────────────────────────────────────┘
+     ┌───────────────────────────────┐
+     │  Chain Pipe                   │  ← small, white
+     └───────────────────────────────┘
    ========================================================================= */
 
 #define NOTIF_SLOTS 8      /* max concurrent toasts             */
 #define NOTIF_FRAMES 300   /* display duration (~5 s @ 60 fps)  */
-#define NOTIF_WIDTH 240.0f /* card width in DP                  */
-#define NOTIF_SLOT_H 52.0f /* vertical spacing between slots    */
+#define NOTIF_SLOT_H 34.0f /* vertical spacing between slots    */
 #define NOTIF_BOTTOM 16.0f /* bottom edge of slot 0             */
 #define NOTIF_RIGHT 16.0f  /* right edge of all cards           */
 
-static const RecompuiColor C_NTEAL = {0, 180, 160, 255};
-static const RecompuiColor C_NBLACK = {0, 0, 0, 210};
-static const RecompuiColor C_NBORDER = {60, 60, 60, 200};
+/* Match the online player list panel (see anchor_ui.c COLOR_BG / COLOR_BORDER). */
+static const RecompuiColor C_NBLACK = {0, 0, 0, 180};
+static const RecompuiColor C_NBORDER = {80, 80, 80, 200};
 static const RecompuiColor C_NWHITE = {255, 255, 255, 255};
 
 static RecompuiContext s_notif_ctx = RECOMPUI_NULL_CONTEXT;
 static RecompuiResource s_notif_card[NOTIF_SLOTS];
-static RecompuiResource s_notif_hdr[NOTIF_SLOTS]; /* header label per slot */
 static RecompuiResource s_notif_name[NOTIF_SLOTS];
 static int s_notif_timer[NOTIF_SLOTS];
 static int s_notif_next = 0;        /* round-robin write cursor */
@@ -1201,49 +1201,32 @@ static void item_notif_ensure_init(void)
 
     for (i = 0; i < NOTIF_SLOTS; ++i)
     {
-        /* ── Outer card ──────────────────────────────────────────────── */
+        /* ── Outer card: shrink-wraps its single-line label ──────────── */
         RecompuiResource card = recompui_create_element(s_notif_ctx, root);
         recompui_set_position(card, POSITION_ABSOLUTE);
         recompui_set_right(card, NOTIF_RIGHT, UNIT_DP);
         recompui_set_bottom(card, NOTIF_BOTTOM + (float)i * NOTIF_SLOT_H, UNIT_DP);
-        recompui_set_width(card, NOTIF_WIDTH, UNIT_DP);
+        /* Absolute right edge with no left edge makes auto resolve as
+         * shrink-to-fit, so the rectangle is exactly as wide as its text. */
+        recompui_set_width_auto(card);
         recompui_set_display(card, DISPLAY_NONE); /* hidden until needed */
         recompui_set_flex_direction(card, FLEX_DIRECTION_ROW);
-        recompui_set_align_items(card, ALIGN_ITEMS_STRETCH);
+        recompui_set_align_items(card, ALIGN_ITEMS_CENTER);
         recompui_set_background_color(card, &C_NBLACK);
         recompui_set_border_radius(card, 6.0f, UNIT_DP);
         recompui_set_border_width(card, 1.0f, UNIT_DP);
         recompui_set_border_color(card, &C_NBORDER);
+        recompui_set_padding(card, 7.0f, UNIT_DP);
         s_notif_card[i] = card;
 
-        /* ── Left teal accent strip ──────────────────────────────────── */
-        RecompuiResource accent = recompui_create_element(s_notif_ctx, card);
-        recompui_set_width(accent, 4.0f, UNIT_DP);
-        recompui_set_background_color(accent, &C_NTEAL);
-        recompui_set_border_top_left_radius(accent, 6.0f, UNIT_DP);
-        recompui_set_border_bottom_left_radius(accent, 6.0f, UNIT_DP);
-
-        /* ── Text area ───────────────────────────────────────────────── */
-        RecompuiResource area = recompui_create_element(s_notif_ctx, card);
-        recompui_set_flex_grow(area, 1.0f);
-        recompui_set_padding(area, 7.0f, UNIT_DP);
-        recompui_set_flex_direction(area, FLEX_DIRECTION_COLUMN);
-        recompui_set_display(area, DISPLAY_FLEX);
-
-        /* Header – text is set dynamically in item_notif_push */
-        RecompuiResource hdr = recompui_create_label(s_notif_ctx, area,
-                                                     "",
-                                                     LABELSTYLE_ANNOTATION);
-        recompui_set_color(hdr, &C_NTEAL);
-        recompui_set_font_weight(hdr, 700);
-        recompui_set_margin_bottom(hdr, 2.0f, UNIT_DP);
-        s_notif_hdr[i] = hdr;
-
-        /* Item name */
-        RecompuiResource nam = recompui_create_label(s_notif_ctx, area,
+        /* ── Check name ──────────────────────────────────────────────── */
+        RecompuiResource nam = recompui_create_label(s_notif_ctx, card,
                                                      "", LABELSTYLE_SMALL);
         recompui_set_color(nam, &C_NWHITE);
         recompui_set_font_weight(nam, 600);
+        /* Keep the label on one intrinsic-width line inside the card. */
+        recompui_set_width_auto(nam);
+        recompui_set_flex_shrink(nam, 0.0f);
         s_notif_name[i] = nam;
 
         s_notif_timer[i] = 0;
@@ -1253,22 +1236,33 @@ static void item_notif_ensure_init(void)
     /* Context stays hidden until the first push.                         */
 }
 
+/* Notification verbosity, matching the mod.toml option order. */
+#define NOTIF_MODE_OFF 0
+#define NOTIF_MODE_IMPORTANT 1
+#define NOTIF_MODE_ALL 2
+
 /**
- * @brief Show a toast notification for an item acquisition.
+ * @brief Show a toast notification for a check.
  *
  * Picks the first idle slot (timer == 0), falling back to round-robin so
- * bursts from a syncing player fill all 8 slots before recycling.
+ * bursts from a syncing player fill all 8 slots before recycling.  Respects
+ * the anchor_show_notifications mode: Off, Important (catalog-filtered) or
+ * All.
  *
- * @param header        Small label above the item name (e.g. "Item found!" or
- *                      "Received from team").
- * @param item_display  Human-readable item name (e.g. "Chain Pipe").
+ * @param key           Catalog/SET_FLAG key (used to classify importance).
+ * @param item_display  Human-readable check name (e.g. "Chain Pipe").
  */
-static void item_notif_push(const char *header, const char *item_display)
+static void item_notif_push(const char *key, const char *item_display)
 {
     int i, slot;
+    unsigned int mode;
     if (!item_display || !item_display[0])
         return;
-    if (recomp_get_config_u32("anchor_show_notifications") != 0)
+
+    mode = recomp_get_config_u32("anchor_show_notifications");
+    if (mode == NOTIF_MODE_OFF)
+        return;
+    if (mode == NOTIF_MODE_IMPORTANT && !anchor_flag_catalog_is_important(key))
         return;
 
     item_notif_ensure_init();
@@ -1286,9 +1280,8 @@ static void item_notif_push(const char *header, const char *item_display)
     /* Advance round-robin past this slot. */
     s_notif_next = (slot + 1) % NOTIF_SLOTS;
 
-    /* Update card texts and make it visible. */
+    /* Update card text and make it visible. */
     recompui_open_context(s_notif_ctx);
-    recompui_set_text(s_notif_hdr[slot], header ? header : "");
     recompui_set_text(s_notif_name[slot], item_display);
     recompui_set_display(s_notif_card[slot], DISPLAY_FLEX);
     recompui_close_context(s_notif_ctx);
@@ -1631,7 +1624,7 @@ static void notify_remote_boss_completion(int index)
     anchor_race_on_remote_flag_synced(s_flag_bits[index].name, 1);
     display = get_flag_display_name(s_flag_bits[index].name);
     if (display)
-        item_notif_push("Received from team", display);
+        item_notif_push(s_flag_bits[index].name, display);
     s_remote_boss_completion_notified[index] = 1;
 }
 
@@ -1657,7 +1650,7 @@ void item_sync_commit_boss_completion(const char *flag_name)
                                      s_pending_benkei_sasuke_profile);
         s_pending_benkei_sasuke_profile = -1;
         if (profile_display)
-            item_notif_push("Received from team", profile_display);
+            item_notif_push("sasuke_body", profile_display);
     }
     notify_remote_boss_completion(index);
     s_flag_bits[index].cached = 1;
@@ -1872,7 +1865,7 @@ static void process_incoming_packets(void)
                 }
                 /* Door transitions are world state, not item checks. */
                 if (display && !is_door_unlock_name(fname))
-                    item_notif_push("Received from team", display);
+                    item_notif_push(fname, display);
             }
         }
         else if (mnsg_json_string_equals(pkt, "type", "MNSG_DOOR_UNLOCK"))
@@ -2143,7 +2136,7 @@ static void monitor_and_send_changes(void)
                           s_fields[i].name, cur);
             const char *display = get_flag_display_name(s_fields[i].name);
             if (display)
-                item_notif_push("Item found!", display);
+                item_notif_push(s_fields[i].name, display);
         }
         /* Update cache when we send, or when we don't need to send (e.g. item
            lost / dropped) – but NOT when the send was deferred due to budget. */
@@ -2241,7 +2234,7 @@ static void monitor_and_send_changes(void)
                 const char *display =
                     get_flag_display_name(s_flag_bits[i].name);
                 if (display)
-                    item_notif_push("Item found!", display);
+                    item_notif_push(s_flag_bits[i].name, display);
             }
         }
         else

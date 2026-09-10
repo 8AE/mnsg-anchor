@@ -775,6 +775,65 @@ const char *anchor_flag_catalog_find_display(const char *key)
     return 0;
 }
 
+/* Sections whose checks are "important" for the notification filter: the
+ * main collectibles (characters, locations, items, keys, dolls) plus major
+ * boss-defeat and quest-item progression.  Cutscenes, world/NPC chatter,
+ * weapon tiers, fish counts and shop purchases are excluded. */
+static int flag_catalog_section_is_important(const char *section)
+{
+    static const char *const important_sections[] = {
+        "Characters",
+        "Equipment",
+        "Abilities",
+        "Quest Items",
+        "Warp Points",
+        "Miracle Items",
+        "Boss Defeats",
+        "Quest Flags",
+        "Keys: Oedo Castle",
+        "Keys: Ghost Toys Castle",
+        "Keys: Festival Temple",
+        "Keys: Gourmet Submarine",
+        "Keys: Musical Castle",
+        "Silver Fortune Dolls",
+        "Gold Fortune Dolls",
+    };
+    int i;
+
+    if (!section)
+        return 0;
+
+    for (i = 0; i < (int)(sizeof(important_sections) /
+                          sizeof(important_sections[0])); ++i)
+    {
+        if (debug_text_equals(section, important_sections[i]))
+            return 1;
+    }
+    return 0;
+}
+
+int anchor_flag_catalog_is_important(const char *key)
+{
+    const char *section = 0;
+    int i;
+
+    if (!key)
+        return 0;
+
+    for (i = 0; i < NUM_ENTRIES; i++)
+    {
+        if (!s_entries[i].key)
+        {
+            section = s_entries[i].display;
+            continue;
+        }
+        if (debug_text_equals(s_entries[i].key, key))
+            return flag_catalog_section_is_important(section);
+    }
+
+    return 0;
+}
+
 /* =========================================================================
    Colours
    ========================================================================= */
