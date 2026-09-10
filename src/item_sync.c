@@ -573,6 +573,103 @@ static SyncFlagBit s_flag_bits[] = {
     {0x00F4, 0, "gd_mc2_gc"}, /* GOLD_DOLL_MUSICAL_2_GOLD_CAT        */
     {0x00F5, 0, "gd_bizen"},  /* GOLD_DOLL_BIZEN                     */
     {0x00F6, 0, "gd_kegon"},  /* GOLD_DOLL_WATERFALL_KEGON           */
+
+    /* Quest / story progression */
+    {0x000F, 0, "fl_cucumber"},    /* Received Quality Cucumber         */
+    {0x0012, 0, "fl_silver_wpn"},  /* Silver weapon upgrade event       */
+    {0x001B, 0, "fl_si_train"},    /* Sudden Impact training            */
+    {0x0021, 0, "fl_sj_train"},    /* Super Jump training               */
+    {0x0026, 0, "fl_train_rej"},   /* Rejected priest training          */
+    {0x0030, 0, "fl_mini_rej"},    /* Rejected Mini Ebisumaru           */
+    {0x003C, 0, "fl_si_plasma"},   /* Sudden Impact from Plasma         */
+    {0x003E, 0, "fl_crack_door"},  /* Saw the cracked door              */
+    {0x0041, 0, "fl_plasma_sil"},  /* Plasma: silver weapon hint        */
+    {0x0042, 0, "fl_plasma_swpn"}, /* Plasma: silver weapons granted    */
+    {0x0043, 0, "fl_plasma_fv"},   /* Plasma: Festival Village hint     */
+    {0x0044, 0, "fl_plasma_keg"},  /* Plasma: Waterfall Kegon hint      */
+    {0x0045, 0, "fl_plasma_snow"}, /* Plasma: asks Benkei about snow    */
+    {0x0046, 0, "fl_plasma_end"},  /* Plasma: no more advice            */
+    {0x0065, 0, "fl_son_cuke"},    /* Priest's son: no cucumber         */
+    {0x0066, 0, "fl_omitsu_wm"},   /* Omitsu: Wise Man hint             */
+    {0x0067, 0, "fl_lost_benkei"}, /* Lost to Benkei                    */
+    {0x0068, 0, "fl_witch_sec"},   /* Sasuke secret from the Witch      */
+    {0x0079, 0, "fl_goemon_mg"},   /* Sudden/Super mini-game started    */
+    {0x007D, 0, "fl_miniebi_mg"},  /* Mini Ebisumaru mini-game started  */
+
+    /* World state / Yamato & turtle shrine / switches & walls */
+    {0x00C3, 0, "fl_mtfuji"},      /* Visited Mt. Fuji                  */
+    {0x00C5, 0, "fl_turtle_ryo"},  /* Turtle shrine ryo                 */
+    {0x00C6, 0, "fl_turtle_doll"}, /* Turtle shrine doll spawn          */
+    {0x00C7, 0, "fl_turtle_wall"}, /* Turtle shrine Yamato wall         */
+    {0x00C8, 0, "fl_turtle_gate"}, /* Turtle shrine red gate            */
+    {0x00C9, 0, "fl_yamato_open"}, /* Yamato Shrine unlocked            */
+    {0x015B, 0, "cr_off_txt"},     /* Crane power off text              */
+    {0x015C, 0, "cr_entered"},     /* Crane game entered                */
+    {0x015E, 0, "cam_grab"},       /* Camera grabbed                    */
+    {0x015F, 0, "cam_belt"},       /* Camera on belt                    */
+    {0x0194, 0, "wl_mc_left"},     /* Wall: Musical left entrance       */
+    {0x0195, 0, "wl_mc_box"},      /* Wall: Musical metal box           */
+    {0x0197, 0, "wl_iyo"},         /* Wall: Iyo                         */
+    {0x0198, 0, "wl_unk198"},      /* Wall: unidentified 0x198          */
+    {0x019A, 0, "dr_19a"},         /* Door state 0x19A                  */
+    {0x019B, 0, "dr_19b"},         /* Door state 0x19B                  */
+    {0x019C, 0, "wl_ghost"},       /* Wall: Ghost Toys entrance         */
+    {0x019D, 0, "sw_shore"},       /* Switch: Japan shoreline           */
+    {0x019E, 0, "dr_19e"},         /* Door state 0x19E                  */
+    {0x01A3, 0, "pk_camera"},      /* Camera minigame collected         */
+    {0x01A5, 0, "pk_bazooka"},     /* Yae bazooka collected             */
+    {0x01A6, 0, "pk_hammer"},      /* Meat hammer collected             */
+    {0x01C3, 0, "fl_shuhudo"},     /* Shuhudo tunnel blown              */
+    {0x01C4, 0, "cr_help"},        /* Crane game help text              */
+
+    /* Surprise packs (extra lives) */
+    {0x00F7, 0, "sp_gh_false"},    /* SURPRISE_PACK_GHOST_FALSE_FLOOR   */
+    {0x00F8, 0, "sp_ft_tank"},     /* SURPRISE_PACK_FESTIVAL_TANK       */
+    {0x00F9, 0, "sp_gs_blast"},    /* SURPRISE_PACK_GOURMET_BLASTER     */
+    {0x00FA, 0, "sp_gs_jet"},      /* SURPRISE_PACK_GOURMET_JETPACK     */
+    {0x00FB, 0, "sp_mc_aqua"},     /* SURPRISE_PACK_MUSICAL_AQUARIUM    */
+    {0x00FC, 0, "sp_yamato"},      /* SURPRISE_PACK_YAMATO_SHRINE       */
+    {0x00FD, 0, "sp_awaji"},       /* SURPRISE_PACK_KII_AWAJI           */
+    {0x00FE, 0, "sp_jp_sea"},      /* SURPRISE_PACK_UNDERWATER          */
+
+    /* Mr. Elly Fant / Mr. Arrow packed collection bits */
+    {0x00FF, 0, "me_oedo"},        /* MR_ELLY_FANT_OEDO_TURTLE          */
+    {0x0100, 0, "me_ghost"},       /* MR_ELLY_FANT_GHOST_SPIKE          */
+    {0x0101, 0, "me_fest"},        /* MR_ELLY_FANT_FESTIVAL_SPIKE       */
+    {0x0102, 0, "me_gour"},        /* MR_ELLY_FANT_GOURMET_ENTRANCE     */
+    {0x0103, 0, "me_music"},       /* MR_ELLY_FANT_MUSICAL_HIGH_JUMP    */
+    {0x0104, 0, "ma_oedo"},        /* MR_ARROW_OEDO_SPIKE_CHAIN         */
+    {0x0105, 0, "ma_ghost"},       /* MR_ARROW_GHOST_INVISIBLE          */
+    {0x0106, 0, "ma_fest"},        /* MR_ARROW_FESTIVAL_SAMURAI         */
+    {0x0107, 0, "ma_gour"},        /* MR_ARROW_GOURMET_RAMEN            */
+    {0x0108, 0, "ma_music"},       /* MR_ARROW_MUSICAL_BIG_AQUARIUM     */
+
+    /* Gist-only save bits (not in the rando header or documentation table) */
+    {0x0019, 0, "fl_oc_gate"},     /* Oedo town guards opened the gate  */
+    {0x002F, 0, "fl_imp_zazen"},   /* Talked to the imp in Zazen town   */
+    {0x0039, 0, "fl_sas_train"},   /* Sasuke's training started         */
+    {0x0084, 0, "fl_witch_house"}, /* Entered the witch's house         */
+    {0x0085, 0, "fl_witch_cs_a"},  /* Witch cutscene bit 0x085          */
+    {0x0086, 0, "fl_witch_cs_b"},  /* Witch cutscene bit 0x086          */
+    {0x0087, 0, "fl_witch_cs_c"},  /* Witch cutscene bit 0x087          */
+    {0x00B9, 0, "fl_mtfear"},      /* Mt. Fear rock destroyed           */
+    {0x00BB, 0, "fl_izumo_bat"},   /* Battery spawned at Izumo tree     */
+
+    /* Live Congo / crane / boss encounter state */
+    {0x0128, 0, "fl_congo_fight"}, /* Fighting Congo                    */
+    {0x012A, 0, "fl_congo_door"},  /* Congo door locked                 */
+    {0x012C, 0, "fl_congo_live"},  /* Currently fighting Congo          */
+    {0x0130, 0, "fl_congo_f2"},    /* Fighting Congo (0x26 bit 0)       */
+    {0x0131, 0, "fl_congo_f3"},    /* Fighting Congo (0x26 bit 1)       */
+    {0x0137, 0, "fl_congo_f7"},    /* Fighting Congo (0x26 bit 7)       */
+    {0x0143, 0, "cr_not_play"},    /* Ghost Toys: not playing claw game */
+    {0x0144, 0, "cr_playing"},     /* Ghost Toys: playing claw game     */
+    {0x0146, 0, "cr_pick1"},       /* Ghost Toys: claw picked up (1)    */
+    {0x0147, 0, "cr_pick2"},       /* Ghost Toys: claw picked up (2)    */
+    {0x0160, 0, "ft_boss_spawn"},  /* Festival Temple boss spawned      */
+    {0x0173, 0, "dhrm_item"},      /* Dharumanyo miracle item taken     */
+    {0x0174, 0, "dhrm_heart"},     /* Dharumanyo heart exposed          */
+    {0x01A0, 0, "gt_boss_lock"},   /* Ghost Toys boss room diamond lock */
 };
 
 #define NUM_FLAGS ((int)(sizeof(s_flag_bits) / sizeof(s_flag_bits[0])))
@@ -1178,8 +1275,35 @@ static int s_notif_ctx_visible = 0; /* 1 when context is currently shown */
  *
  * Uses the same catalog that backs the debug and race-config screens.
  */
+/* Synced for state parity but suppressed from the toast notification system. */
+static int flag_notification_hidden(const char *n)
+{
+    static const char *const prefixes[] = {
+        "cr_", "cam_", "wl_", "dr_", "sw_", "pk_",
+        "ft_boss_", "dhrm_", "gt_boss_",
+        "fl_congo_door", "fl_congo_live", "fl_congo_f",
+        "fl_plasma", "fl_turtle", "fl_yamato", "fl_mtfu", "fl_mtfe",
+        "fl_oc_gate", "fl_imp_", "fl_sas_train",
+        "fl_witch_house", "fl_witch_cs_", "fl_witch_sec",
+        "fl_izumo", "fl_shuhudo", "fl_cucumber", "fl_silver_wpn",
+        "fl_si_", "fl_sj_train", "fl_train", "fl_mini_rej",
+        "fl_miniebi_mg", "fl_crack", "fl_son_", "fl_omitsu",
+        "fl_lost_", "fl_goemon_mg",
+    };
+    int i;
+
+    for (i = 0; i < (int)(sizeof(prefixes) / sizeof(prefixes[0])); ++i)
+    {
+        if (mnsg_string_starts_with(n, prefixes[i]))
+            return 1;
+    }
+    return 0;
+}
+
 static const char *get_flag_display_name(const char *n)
 {
+    if (flag_notification_hidden(n))
+        return 0;
     return anchor_flag_catalog_find_display(n);
 }
 
