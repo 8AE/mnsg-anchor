@@ -119,6 +119,9 @@ _rx_thread: "threading.Thread | None" = None
 _local_room_id: int = -1
 _local_character: str = ""
 _local_save_loaded: bool = False
+_local_enemy_room: int = -1
+_local_enemy_sig: int = 0
+_local_enemy_bits: str = ""
 _last_position_sent: "tuple[int, int, int] | None" = None
 _last_position_sent_ms: int = 0
 _last_position_room_id: int = -1
@@ -195,6 +198,8 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     "MNSG_PLAYER_HIT": 512,
     "MNSG_PLAYER_SOUND": 320,
     "MNSG_PROJECTILE_SPAWN": 512,
+    "MNSG_ENEMY_LIVE": 3072,
+    "MNSG_ENEMY_HIT": 256,
     anchor_congo.PACKET_TYPE: 8 * 1024,
     anchor_dharumanyo.PACKET_TYPE: 8 * 1024,
     anchor_tsurami.PACKET_TYPE: 8 * 1024,
@@ -226,6 +231,7 @@ BOSS_ARENA_ROOMS: "dict[int, int]" = {
 }
 ARENA_METADATA_WAIT_MS: int = 5000
 ANIMATION_RESTART_DELTA_100: int = 50
+ENEMY_BITMAP_HEX_MAX: int = 64
 APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
 APPEARANCE_MINI_EBISUMARU: int = 1 << 1
 APPEARANCE_HURT_RECOVERY: int = 1 << 2
@@ -279,6 +285,32 @@ def _appearance_flags_from_payload(payload: dict, current: int = 0) -> int:
         else:
             flags &= ~APPEARANCE_MINI_EBISUMARU
     return flags
+
+
+def _bounded_int(value: object, minimum: int, maximum: int, default: int) -> int:
+    """Coerce untrusted client-state integers without letting bad peers break recv."""
+    try:
+        result = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return result if minimum <= result <= maximum else default
+
+
+def _normalize_enemy_bits(bits: object) -> "str | None":
+    """Normalize the low-index-first 256-bit byte string used by enemy sync."""
+    if not isinstance(bits, str):
+        return None
+    value = bits.strip().lower()
+    if len(value) > ENEMY_BITMAP_HEX_MAX or (len(value) & 1) != 0:
+        return None
+    if any(ch not in "0123456789abcdef" for ch in value):
+        return None
+    # C serializes bitmap bytes from the lowest actor indices upward and omits
+    # only zero bytes at the high-index end.  Leading zero bytes are therefore
+    # meaningful and must never be stripped.
+    while value.endswith("00"):
+        value = value[:-2]
+    return value
 
 
 def _valid_map_room_id(value: object) -> bool:
@@ -413,6 +445,9 @@ def _merge_client_state(
             "mnsgRaceConfig": str(payload.get("mnsgRaceConfig", "")),
             "appearanceFlags": _appearance_flags_from_payload(payload),
             "character": str(payload.get("currentCharacter", "")),
+            "er": _bounded_int(payload.get("er", -1), -1, 0xFFFF, -1),
+            "es": _bounded_int(payload.get("es", -1), 0, 0xFFFFFFFF, -1),
+            "eb": _normalize_enemy_bits(payload.get("eb")),
         }
         _player_states[cid] = state
 
@@ -465,6 +500,12 @@ def _merge_client_state(
             _drop_player_sounds(cid)
     if "isSaveLoaded" in payload:
         state["isSaveLoaded"] = bool(payload["isSaveLoaded"])
+    if "er" in payload:
+        state["er"] = _bounded_int(payload["er"], -1, 0xFFFF, -1)
+    if "es" in payload:
+        state["es"] = _bounded_int(payload["es"], 0, 0xFFFFFFFF, -1)
+    if "eb" in payload:
+        state["eb"] = _normalize_enemy_bits(payload["eb"])
     _cache_map_snapshot(state, payload)
     for field in _MOVEMENT_STATE_FIELDS:
         if field in payload:
@@ -585,6 +626,11 @@ def _replace_all_client_states(states: list) -> None:
                         "currentCharacter", previous.get("character", "")
                     )
                 ),
+                "er": _bounded_int(client_state.get("er", -1), -1, 0xFFFF, -1),
+                "es": _bounded_int(
+                    client_state.get("es", -1), 0, 0xFFFFFFFF, -1
+                ),
+                "eb": _normalize_enemy_bits(client_state.get("eb")),
             }
             _cache_map_snapshot(merged, client_state)
             if previous and int(previous.get("roomId", -1)) == room_id:
@@ -829,6 +875,29 @@ def _should_handle_team_state_request(packet: dict) -> bool:
     return not candidates or _client_id == min(candidates)
 
 
+def _should_handle_enemy_state_request(packet: dict) -> bool:
+    """Elect one matching room occupant to answer a compact enemy request."""
+    requester = _bounded_int(packet.get("clientId", 0), 0, 0xFFFFFFFF, 0)
+    room = _bounded_int(packet.get("r", -1), 0, 0xFFFF, -1)
+    signature = _bounded_int(packet.get("s", -1), 0, 0xFFFF, -1)
+    if _client_id <= 0 or room < 0 or signature < 0:
+        return True
+
+    with _player_states_lock:
+        candidates = [
+            cid
+            for cid, state in _player_states.items()
+            if cid != requester
+            and bool(state.get("online", False))
+            and bool(state.get("isSaveLoaded", False))
+            and state.get("teamId", "") == _team_id
+            and _bounded_int(state.get("roomId", -1), -1, 0xFFFF, -1) == room
+            and _bounded_int(state.get("er", -1), -1, 0xFFFF, -1) == room
+            and _bounded_int(state.get("es", -1), 0, 0xFFFF, -1) == signature
+        ]
+    return not candidates or _client_id == min(candidates)
+
+
 def _recv_loop(sock: socket.socket) -> None:
     """Background thread: read null-terminated packets and push to _recv_queue."""
     global _connected, _client_id, _server_message, _disabled, _local_room_id, _local_character
@@ -955,6 +1024,8 @@ def _recv_loop(sock: socket.socket) -> None:
 
                 if ptype == "REQUEST_TEAM_STATE" and not _should_handle_team_state_request(packet):
                     continue
+                if ptype == "MNSG_ER" and not _should_handle_enemy_state_request(packet):
+                    continue
 
                 # Enqueue durable/gameplay packets for C-side polling. For a
                 # stored response, apply the snapshot before queued deltas.
@@ -977,6 +1048,7 @@ def _recv_loop(sock: socket.socket) -> None:
 def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     """Close the socket and mark as disconnected (idempotent)."""
     global _sock, _connected, _local_room_id, _local_character, _local_save_loaded
+    global _local_enemy_room, _local_enemy_sig, _local_enemy_bits
     global _last_position_sent, _last_position_sent_ms, _last_position_room_id
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
@@ -996,6 +1068,9 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _local_room_id = -1
     _local_character = ""
     _local_save_loaded = False
+    _local_enemy_room = -1
+    _local_enemy_sig = 0
+    _local_enemy_bits = ""
     _last_position_sent = None
     _last_position_sent_ms = 0
     _last_position_room_id = -1
@@ -1066,6 +1141,7 @@ def connect(
     global _interaction_session
     global _player_hit_seq, _player_sound_seq
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
+    global _local_enemy_room, _local_enemy_sig, _local_enemy_bits
 
     normalized_room_id = normalize_room_id(room_id)
     if not normalized_room_id:
@@ -1102,6 +1178,9 @@ def connect(
     _position_seq = 0
     _local_character = ""
     _local_save_loaded = False
+    _local_enemy_room = -1
+    _local_enemy_sig = 0
+    _local_enemy_bits = ""
     _race_status = ""
     _race_config_json = ""
     with _player_states_lock:
@@ -1154,6 +1233,9 @@ def connect(
             "online": True,
             "isSaveLoaded": False,
             "interactionSession": _interaction_session,
+            "er": _local_enemy_room,
+            "es": _local_enemy_sig,
+            "eb": _local_enemy_bits,
             **_local_map_metadata(),
             anchor_congo.METADATA_KEY: _congo.advertisement(_boss_context()),
             anchor_dharumanyo.METADATA_KEY: _dharumanyo.advertisement(
@@ -1868,6 +1950,9 @@ def update_client_state(state_json: str) -> bool:
     # Repeat the complete bounded record on every metadata update so unrelated
     # room/character/save edges cannot erase a map location needed by a late join.
     state.update(_local_map_metadata())
+    state["er"] = _local_enemy_room
+    state["es"] = _local_enemy_sig
+    state["eb"] = _local_enemy_bits
     state["clientId"] = _client_id
     state["name"] = _player_name
     state["online"] = True
@@ -1904,6 +1989,97 @@ def update_client_state(state_json: str) -> bool:
             _cache_map_snapshot(local, state)
             local["self"] = True
     return sent
+
+
+def set_enemy_room_state(room_id: int, signature: int, bits: str) -> bool:
+    """Publish this client's compact dead-enemy bitmap for one raw game room."""
+    global _local_enemy_room, _local_enemy_sig, _local_enemy_bits
+
+    room = _bounded_int(room_id, 0, 0xFFFF, -1)
+    sig = _bounded_int(signature, 0, 0xFFFFFFFF, -1)
+    normalized_bits = _normalize_enemy_bits(bits)
+    if room < 0 or sig < 0 or normalized_bits is None:
+        logger.warning(
+            "anchor_mnsg: rejected enemy state room=%r sig=%r bits=%r",
+            room_id, signature, bits,
+        )
+        return False
+
+    _local_enemy_room = room
+    _local_enemy_sig = sig
+    _local_enemy_bits = normalized_bits
+    return update_client_state("{}")
+
+
+def get_enemy_room_state(room_id: int, signature: int) -> str:
+    """OR matching online teammates' dead-enemy bitmaps for a raw game room."""
+    room = _bounded_int(room_id, 0, 0xFFFF, -1)
+    sig = _bounded_int(signature, 0, 0xFFFFFFFF, -1)
+    if room < 0 or sig < 0:
+        return ""
+
+    combined = bytearray(ENEMY_BITMAP_HEX_MAX // 2)
+    matched = False
+    with _player_states_lock:
+        for cid, state in _player_states.items():
+            if cid == _client_id or bool(state.get("self", False)):
+                continue
+            if not bool(state.get("online", False)):
+                continue
+            if not bool(state.get("isSaveLoaded", False)):
+                continue
+            if state.get("teamId", "") != _team_id:
+                continue
+            if _bounded_int(state.get("roomId", -1), -1, 0xFFFF, -1) != room:
+                continue
+            if _bounded_int(state.get("er", -1), -1, 0xFFFF, -1) != room:
+                continue
+            if _bounded_int(state.get("es", -1), 0, 0xFFFFFFFF, -1) != sig:
+                continue
+            peer_bits = _normalize_enemy_bits(state.get("eb"))
+            if peer_bits is None:
+                continue
+            for offset in range(0, len(peer_bits), 2):
+                combined[offset // 2] |= int(peer_bits[offset:offset + 2], 16)
+            matched = True
+
+    if not matched:
+        return ""
+    last = len(combined) - 1
+    while last >= 0 and combined[last] == 0:
+        last -= 1
+    return "".join(f"{value:02x}" for value in combined[:last + 1])
+
+
+def get_enemy_authority() -> int:
+    """Return the elected live-enemy authority client id for the local room.
+
+    The authority is the lowest client id among same-team, save-loaded peers
+    currently in the local raw room.  The local client counts, so a lone player
+    is their own authority and still runs the shared simulation.
+    """
+    if _client_id <= 0 or not _connected:
+        return 0
+    with _player_states_lock:
+        stored_room = _bounded_int(
+            _player_states.get(_client_id, {}).get("roomId", -1),
+            -1, 0xFFFF, -1,
+        )
+        room = stored_room if stored_room >= 0 else _local_room_id
+        room = _bounded_int(room, -1, 0xFFFF, -1)
+        if room < 0:
+            return 0
+        candidates = [
+            cid
+            for cid, state in _player_states.items()
+            if bool(state.get("online", False))
+            and bool(state.get("isSaveLoaded", False))
+            and state.get("teamId", "") == _team_id
+            and _bounded_int(state.get("roomId", -1), -1, 0xFFFF, -1) == room
+        ]
+    if _client_id not in candidates:
+        candidates.append(_client_id)
+    return min(candidates)
 
 
 def _boss_context() -> dict:

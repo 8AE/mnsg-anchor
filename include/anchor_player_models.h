@@ -83,5 +83,9 @@ int anchor_player_models_peer_is_current(int cid, int session, int epoch);
  * in client-ID order. This scans the dynamic roster without a player limit. */
 int anchor_player_models_get_boss_target(int current_cid, int rotate,
                                          AnchorBossTarget *out);
+/* Fill every currently eligible player (local + visible same-team remotes)
+ * with its collision-body world position. Returns the number written (up to
+ * capacity) so a caller can choose the nearest target per actor. */
+int anchor_player_models_get_boss_targets(AnchorBossTarget *out, int capacity);
 
 #endif

@@ -1464,6 +1464,47 @@ int anchor_player_models_get_boss_target(int current_cid, int rotate,
     return out->cid != 0;
 }
 
+int anchor_player_models_get_boss_targets(AnchorBossTarget *out, int capacity)
+{
+    AnchorCollisionBody body;
+    float scale;
+    int count = 0;
+    int i;
+    (void)anchor_player_models_get_epoch();
+    if (!out || capacity <= 0 || !anchor_is_connected() ||
+        !item_sync_save_is_loaded() ||
+        s_owner_task != D_801FC604_5B8514 || !is_linked_task(s_owner_task))
+        return 0;
+    if (s_interaction_alive && !s_interaction_scripted &&
+        local_collision_body(&body, &scale))
+    {
+        out[count].cid = (int)anchor_get_client_id();
+        out[count].x = body.position.x;
+        out[count].y = body.position.y;
+        out[count].z = body.position.z;
+        ++count;
+    }
+    for (i = 0; i < s_slot_capacity && count < capacity; ++i)
+    {
+        const RemoteModelSlot *slot = &s_slots[i];
+        if (!slot->active || !slot->pending_valid || !slot->collision_ready ||
+            slot->pending_room != D_800C7AB2 ||
+            !slot->pending_remote.same_team ||
+            slot->pending_remote.collision_disabled ||
+            slot->pending_remote.player_epoch <= 0 ||
+            slot->pending_remote.interaction_session <= 0 ||
+            s_interaction_tick - slot->drive_sample_tick > 60u ||
+            !is_linked_remote_task(slot->task))
+            continue;
+        out[count].cid = slot->cid;
+        out[count].x = slot->collision_body.position.x;
+        out[count].y = slot->collision_body.position.y;
+        out[count].z = slot->collision_body.position.z;
+        ++count;
+    }
+    return count;
+}
+
 static void receive_player_hits(void)
 {
     int sender;

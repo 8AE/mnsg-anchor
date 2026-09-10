@@ -20,6 +20,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 * **Dharumanyo reward progression** — each shared terminal runs the original post-fight sequence, and its Miracle Flower reward is also carried by durable item sync for clients elsewhere or joining later. Native evidence identifies this reward as Miracle Flower; Miracle Star belongs to Tsurami. See [Dharumanyo reward synchronization](docs/dharumanyo-sync.md#reward-progression).
 
 * **Tsurami reward progression** — Miracle Star ownership and the following story completion are shared durably. Each active local reward controller finishes its native actor cleanup, control release and exit sequence. Reflecting Tsurami's projectiles also updates the shared fight; see [Tsurami and Miracle Star](docs/tsurami-sync.md).
+* **Regular enemy sync** — ordinary combat enemies in a shared room are simulated by one elected room authority. All players see and fight the same enemy through a shared health pool and streamed transforms/animation, the enemy turns toward one of the players it sees, and an enemy killed by anyone disappears for everyone. Enemy defeat state persists while the room stays occupied and respawns once everyone leaves. See [enemy synchronization](docs/enemy-sync.md).
 
 ### What is synced
 

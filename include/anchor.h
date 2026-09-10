@@ -158,6 +158,47 @@ extern "C"
    int anchor_set_local_room(unsigned int room_id);
 
    /**
+    * @brief Publish the local dead-enemy bitmap for one raw game room.
+    *
+    * The compact state is retained in every UPDATE_CLIENT_STATE packet so a
+    * teammate entering an already-occupied room can query it before spawning
+    * actors.  @p bits is a hexadecimal value of at most 64 characters (256
+    * bits); it is normalized to lowercase and an empty value means zero.
+    *
+    * @param room_id    Raw 16-bit room ID from D_800C7AB2.
+    * @param signature  Enemy-roster signature used to reject mismatched layouts.
+    * @param bits       Compact dead-enemy bitmap as hexadecimal text.
+    * @return 1 if the state update was sent, 0 on validation/send failure.
+    */
+   int anchor_set_enemy_room_state(unsigned int room_id, unsigned int signature,
+                                   const char *bits);
+
+   /**
+    * @brief Query matching online teammates' dead-enemy state for one room.
+    *
+    * Only same-team, non-self peers whose current raw room, enemy room, and
+    * roster signature all match are included.  Their bitmaps are ORed.
+    *
+    * @return Newly allocated lowercase hexadecimal text, or an empty string
+    *         when no matching peer state exists.  Caller must recomp_free().
+    */
+   char *anchor_get_enemy_room_state(unsigned int room_id,
+                                     unsigned int signature);
+
+   /**
+    * @brief Return the elected live-enemy authority for the local room.
+    *
+    * The authority is the lowest client ID among same-team, save-loaded peers
+    * currently in the local raw room (the local client counts).  It runs the
+    * shared enemy simulation and streams live enemy state; every other room
+    * occupant mirrors it.  Returns 0 while disconnected or when no room is
+    * known, in which case no live enemy simulation is active.
+    *
+    * @return Authority client ID, or 0.
+    */
+   unsigned int anchor_get_enemy_authority(void);
+
+   /**
     * @brief Publish the exact gameplay location used by the native Japan map.
     *
     * The map overlay changes the live room to 0x226. This separate snapshot

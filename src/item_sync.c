@@ -36,6 +36,7 @@
 #include "anchor_runtime.h"
 #include "anchor_flag_catalog.h"
 #include "boss_sync.h"
+#include "enemy_sync.h"
 #include "item_sync.h"
 #include "anchor_miracle_moon.h"
 #include "anchor_miracle_star.h"
@@ -1836,6 +1837,15 @@ static void process_incoming_packets(void)
             break;
         ++processed;
 
+        /* item_sync owns the sole Anchor packet poller.  Let the standalone
+         * enemy module consume its compact packet family before the existing
+         * item/boss/race dispatch chain. */
+        if (enemy_sync_handle_packet(pkt))
+        {
+            recomp_free(pkt);
+            continue;
+        }
+
         if (mnsg_json_string_equals(pkt, "type", "SET_FLAG"))
         {
             char fname[32];
@@ -2319,6 +2329,7 @@ void item_sync_update(void)
         clear_visual_collectible_pending();
         clear_door_unlock_pending();
         boss_sync_reset();
+        enemy_sync_disconnect();
         s_ds_initialized = 0;  /* reset damage-sync baseline on disconnect */
         s_ryo_initialized = 0; /* reset ryo-sync baseline on disconnect   */
     }
@@ -2333,6 +2344,7 @@ void item_sync_update(void)
         if (!offline_valid)
         {
             boss_sync_reset();
+            enemy_sync_reset();
             anchor_miracle_moon_reset();
             anchor_miracle_star_reset();
             s_pending_miracle_moon_completion = MIRACLE_COMPLETION_NONE;
@@ -2363,6 +2375,7 @@ void item_sync_update(void)
             s_pending_miracle_star_completion = MIRACLE_COMPLETION_NONE;
             clear_visual_collectible_pending();
             clear_door_unlock_pending();
+            enemy_sync_reset();
             s_push_cursor = PUSH_IDLE;
             s_team_snapshot_broadcast_timer = -1;
         }
@@ -2389,6 +2402,10 @@ void item_sync_update(void)
      * the initial state request above must still run while the world waits. */
     if (anchor_dialog_world_paused())
         return;
+
+    /* Establish the static-enemy roster before draining packets so an
+     * immediately queued room snapshot is not discarded on connect. */
+    enemy_sync_update();
 
     /* ── Process incoming packets ─────────────────────────────────────── */
     process_incoming_packets();
