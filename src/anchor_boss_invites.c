@@ -132,7 +132,8 @@ void anchor_boss_invites_update(void)
         /* The native dialog must finish releasing its world pause before
          * changing engine steps. If a pause intervenes, retain the accepted
          * request and recheck the sender until normal gameplay resumes. */
-        if (s_invitation.arena == ANCHOR_BOSS_ARENA_KASHIWAGI &&
+        if (s_invitation.arena >= ANCHOR_BOSS_ARENA_IMPACT_FIRST &&
+            s_invitation.arena <= ANCHOR_BOSS_ARENA_IMPACT_LAST &&
             s_invitation.stage)
         {
             if (anchor_boss_invite_world_warp_stage(s_invitation.stage,
@@ -168,9 +169,13 @@ void anchor_boss_invites_update(void)
         s_invitation.field90 = 0;
         s_invitation.field91 = 0;
         s_invitation.joining = 0;
-        if (arena == ANCHOR_BOSS_ARENA_KASHIWAGI)
+        if (arena >= ANCHOR_BOSS_ARENA_IMPACT_FIRST &&
+            arena <= ANCHOR_BOSS_ARENA_IMPACT_LAST)
         {
+            int room = anchor_boss_arena_room(arena);
             int stage, field;
+            /* Default to the arena's boss stage when a legacy peer omits it. */
+            s_invitation.stage = room > 0 ? (unsigned int)room : 0;
             if (mnsg_json_get_s32(json, "stage", &stage) &&
                 ANCHOR_BOSS_IMPACT_STAGE_VALID(stage))
                 s_invitation.stage = (unsigned int)stage;

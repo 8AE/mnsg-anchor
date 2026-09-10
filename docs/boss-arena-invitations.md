@@ -13,16 +13,26 @@ dragon-flight room. Congo's approach (`0x001A`) is separate from its arena.
 | 2 | Dharumanyo | `0x0049` (73) | `(145, -70, -99)` |
 | 3 | Tsurami | `0x0071` (113) | `(0, -71, 318)` |
 | 4 | Control Machine | `0x0155` (341) | `(27, 239, 131)` |
-| 5 | Kashiwagi (first Impact boss) | `0x0220` (544) | Impact stage default |
+| 5 | Kashiwagi (Impact 1) | `0x0220` (544) | Impact stage |
+| 6 | Thaisamba 2 (Impact 2) | `0x0221` (545) | Impact stage |
+| 7 | Balberra (Impact 3) | `0x0222` (546) | Impact stage |
+| 8 | D'Etoile (Impact 4) | `0x0223` (547) | Impact stage |
+
+The Impact arenas also cover their intro cutscene stage (`0x0239`–`0x023C`) and
+minigame stage (`0x021C`–`0x021F`), so the dialog names the boss the sender is
+fighting and the guest loads that boss's cutscene/fight. `0x0224` is an unused
+fifth Impact stage and the boss rush mode uses its own stage `0x0260`; neither
+is treated as an arena.
 
 The giant-robot Impact sequence occupies native stages `0x021C`–`0x0224`
 (`0x021C`–`0x021F` cutscene/high-speed minigames, `0x0220`–`0x0224` the five
-bosses, of which Kashiwagi is the first) plus the intro cutscene stage `0x0239`,
-where Goemon blows the triton shell and enters Impact. These stages are not
-ordinary rooms: the normal per-room actor metadata is absent and they are
-entered through the game's dedicated Impact-stage transition, the same entry the
-story and the consecutive-boss mode use. The invite is announced the moment the
-host enters the first stage of the sequence, which is `0x0239` when the intro
+bosses, of which Kashiwagi is the first) plus the intro cutscene stages
+`0x0239`–`0x023D`, one per boss (`0x0239` is Kashiwagi's, where Goemon blows the
+triton shell and enters Impact). These stages are not ordinary rooms: the normal
+per-room actor metadata is absent and they are entered through the game's
+dedicated Impact-stage transition, the same entry the story and the
+consecutive-boss mode use. The invite is announced the moment the host enters
+the first stage of the sequence, which is the intro cutscene stage when it
 plays, so it fires at the start of the Impact cutscene rather than only once the
 fight is running. The announcement carries that first stage and a guest that
 accepts loads it through the same entry, so they watch the cutscene from its

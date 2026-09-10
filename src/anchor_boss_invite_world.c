@@ -215,10 +215,10 @@ int anchor_boss_invite_world_arena(void)
 {
     int arena;
     refresh_impact_from_room();
-    /* Every Impact stage (cutscene, minigame and boss) belongs to the same
-     * giant-robot encounter, so any of them announces arena 5. */
+    /* Every Impact stage (intro, minigame and boss) belongs to one of the five
+     * giant-robot encounters; map the recorded first stage to its boss. */
     if (s_impact_active)
-        return ANCHOR_BOSS_ARENA_KASHIWAGI;
+        return anchor_boss_arena_for_impact_stage(s_impact_stage);
     if (room_loaded_matches())
     {
         arena = anchor_boss_arena_for_room(D_800C7AB2);
@@ -333,9 +333,9 @@ int anchor_boss_invite_world_warp(int arena)
     int room = anchor_boss_arena_room(arena);
     if (room < 0)
         return 0;
-    if (arena == ANCHOR_BOSS_ARENA_KASHIWAGI)
-        return anchor_boss_invite_world_warp_stage(ANCHOR_BOSS_ROOM_KASHIWAGI,
-                                                   0, 0);
+    if (arena >= ANCHOR_BOSS_ARENA_IMPACT_FIRST &&
+        arena <= ANCHOR_BOSS_ARENA_IMPACT_LAST)
+        return anchor_boss_invite_world_warp_stage((unsigned int)room, 0, 0);
     if (D_800C7AB2 == (unsigned short)room)
         return 0;
     /* Invitations retain their existing default-entrance semantics. */

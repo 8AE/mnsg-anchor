@@ -76,11 +76,10 @@ class BossInvitationTransportTests(unittest.TestCase):
             "entered": True, "session": 202, "seq": 1,
         }
         packet.update(changes)
-        if (packet.get("arena") == self.client.KASHIWAGI_ARENA and
-                "stage" not in packet):
-            packet["stage"] = self.client.BOSS_ARENA_ROOMS[
-                self.client.KASHIWAGI_ARENA]
-        if packet.get("arena") == self.client.KASHIWAGI_ARENA:
+        arena = packet.get("arena")
+        if self.client.impact_arena(arena):
+            if "stage" not in packet:
+                packet["stage"] = self.client.BOSS_ARENA_ROOMS[arena]
             packet.setdefault("f90", 0)
             packet.setdefault("f91", 0)
         return packet
@@ -144,7 +143,7 @@ class BossInvitationTransportTests(unittest.TestCase):
         self.assertEqual([(p["seq"], p["entered"]) for p in packets], [(2, False), (3, True)])
 
     def test_sender_rejects_unsupported_arena_unloaded_save_and_missing_identity(self):
-        for arena in (-1, 6, 0x155, True, "1", None):
+        for arena in (-1, 9, 0x155, True, "1", None):
             with self.subTest(arena=arena):
                 self.assertFalse(self.client.set_boss_arena(arena))
         for field, value in (("_local_save_loaded", False), ("_connected", False),
@@ -169,7 +168,7 @@ class BossInvitationTransportTests(unittest.TestCase):
 
     def test_receiver_rejects_self_other_teams_and_malformed_packets(self):
         invalid = [{"type": "SET_FLAG"}, {"clientId": 1}, {"targetTeamId": "red"},
-                   {"arena": 0}, {"arena": 6}, {"arena": 0x155}, {"arena": True},
+                   {"arena": 0}, {"arena": 9}, {"arena": 0x155}, {"arena": True},
                    {"entered": 1}, {"entered": "true"}]
         for field in ("clientId", "session", "seq"):
             invalid.extend({field: value} for value in (0, -1, 0x80000000, True, "2", None))
@@ -476,11 +475,12 @@ class BossInvitationTransportTests(unittest.TestCase):
         names = {name.removeprefix("ANCHOR_BOSS_ARENA_") for name in constants
                  if name.startswith("ANCHOR_BOSS_ARENA_")}
         self.assertEqual(names, {"CONGO", "DHARUMANYO", "TSURAMI", "CONTROL_MACHINE",
-                                 "KASHIWAGI"})
+                                 "KASHIWAGI", "THAISAMBA", "BALBERRA", "DETOILE"})
         native_map = {constants[f"ANCHOR_BOSS_ARENA_{name}"]:
                       constants[f"ANCHOR_BOSS_ROOM_{name}"] for name in names}
         self.assertEqual(self.client.BOSS_ARENA_ROOMS, native_map)
-        self.assertEqual(native_map, {1: 22, 2: 73, 3: 113, 4: 341, 5: 544})
+        self.assertEqual(native_map, {1: 22, 2: 73, 3: 113, 4: 341, 5: 544,
+                                      6: 545, 7: 546, 8: 547})
 
     def test_only_matching_destination_suppresses_a_recipient(self):
         for local_arena in (0, *self.client.BOSS_ARENA_ROOMS):

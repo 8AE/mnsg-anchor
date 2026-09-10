@@ -198,10 +198,11 @@ int main(void)
      * A player in one boss room can join a different boss's invitation. */
     static const char *arena_names[] = {
         "Congo's Arena", "Dharumanyo's Arena", "Tsurami's Arena",
-        "Control Machine's Arena", "Kashiwagi's Arena"
+        "Control Machine's Arena", "Kashiwagi's Arena",
+        "Thaisamba's Arena", "Balberra's Arena", "D'Etoile's Arena"
     };
     char arena_packet[160];
-    for (int arena = 1; arena <= 5; ++arena) {
+    for (int arena = 1; arena <= 8; ++arena) {
         snprintf(arena_packet, sizeof(arena_packet),
             "{\"cid\":2,\"session\":123,\"seq\":7,\"arena\":%d,\"name\":\"Ahmad\"}", arena);
         current_arena = arena == 1 ? 2 : 1;
@@ -209,12 +210,14 @@ int main(void)
         packet = arena_packet;
         choice = ANCHOR_DIALOG_PENDING;
         int prior_starts = starts, prior_warps = warps;
+        int prior_stage_warps = stage_warps;
         anchor_boss_invites_update();
         assert(modal && starts == prior_starts + 1);
         assert(strcmp(shown_arena, arena_names[arena - 1]) == 0);
         choice = ANCHOR_DIALOG_NO;
         anchor_boss_invites_update();
-        assert(!modal && warps == prior_warps && !packet);
+        assert(!modal && warps == prior_warps &&
+               stage_warps == prior_stage_warps && !packet);
 
         packet = arena_packet;
         choice = ANCHOR_DIALOG_PENDING;
@@ -223,17 +226,24 @@ int main(void)
         choice = ANCHOR_DIALOG_YES;
         warp_ready = 0;
         anchor_boss_invites_update();
-        assert(!modal && warps == prior_warps);
+        assert(!modal && warps == prior_warps &&
+               stage_warps == prior_stage_warps);
         /* Peeking a new queue head must not redirect the accepted request. */
         packet = invite;
         anchor_boss_invites_update();
-        assert(warps == prior_warps);
+        assert(warps == prior_warps && stage_warps == prior_stage_warps);
         warp_ready = 1;
         anchor_boss_invites_update();
-        assert(warps == prior_warps + 1 && destination_arena == arena);
+        if (arena >= ANCHOR_BOSS_ARENA_IMPACT_FIRST)
+            assert(stage_warps == prior_stage_warps + 1);
+        else
+            assert(warps == prior_warps + 1 && destination_arena == arena);
         assert(!packet);
         anchor_boss_invites_update();
-        assert(warps == prior_warps + 1);
+        if (arena >= ANCHOR_BOSS_ARENA_IMPACT_FIRST)
+            assert(stage_warps == prior_stage_warps + 1);
+        else
+            assert(warps == prior_warps + 1);
     }
 
     /* An Impact invitation carries the first native stage and the native

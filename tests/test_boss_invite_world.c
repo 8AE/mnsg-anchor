@@ -36,7 +36,10 @@ static const struct {
     {2, 0x0049, "Dharumanyo's Arena", {145, -70, -99, 768, 16}},
     {3, 0x0071, "Tsurami's Arena", {0, -71, 318, 512, 16}},
     {4, 0x0155, "Control Machine's Arena", {27, 239, 131, 0, 16}},
-    {5, 0x0220, "Kashiwagi's Arena", {0, 0, 0, 0, 0}}
+    {5, 0x0220, "Kashiwagi's Arena", {0, 0, 0, 0, 0}},
+    {6, 0x0221, "Thaisamba's Arena", {0, 0, 0, 0, 0}},
+    {7, 0x0222, "Balberra's Arena", {0, 0, 0, 0, 0}},
+    {8, 0x0223, "D'Etoile's Arena", {0, 0, 0, 0, 0}}
 };
 
 void anchor_boss_invite_world_begin_load(void);
@@ -140,7 +143,7 @@ static void check_gate(unsigned int offset, unsigned char value)
     ready(0x130);
     s_system.bytes[offset] = value;
     assert(!anchor_boss_invite_world_can_prompt());
-    for (int arena = 1; arena <= 5; ++arena)
+    for (int arena = 1; arena <= 8; ++arena)
         assert(!anchor_boss_invite_world_warp(arena));
     assert(!anchor_boss_invite_world_transfer_to(0x130, 123, -456, 789));
     assert(s_destination_calls == 0 && s_step_calls == 0 && s_impact_calls == 0);
@@ -269,6 +272,7 @@ int main(void)
         int arena = arenas[i].arena;
         assert(anchor_boss_arena_room(arena) == arenas[i].room);
         assert(strcmp(anchor_boss_arena_name(arena), arenas[i].name) == 0);
+        ready(0x0130); /* Clear any prior Impact sequence. */
         ready(arenas[i].room);
         assert(anchor_boss_invite_world_arena() == arena);
         assert(!anchor_boss_invite_world_warp(arena));
@@ -278,7 +282,8 @@ int main(void)
         assert(anchor_boss_invite_world_arena() == arena);
         assert(!anchor_boss_invite_world_can_prompt());
         ready(arenas[i].room);
-        if (arena == ANCHOR_BOSS_ARENA_KASHIWAGI)
+        if (arena >= ANCHOR_BOSS_ARENA_IMPACT_FIRST &&
+            arena <= ANCHOR_BOSS_ARENA_IMPACT_LAST)
             /* A same-stage Impact reload continues the sequence. */
             assert(anchor_boss_invite_world_visit() == visit);
         else
@@ -289,11 +294,12 @@ int main(void)
         ready(source);
         assert(anchor_boss_invite_world_can_prompt());
         assert(anchor_boss_invite_world_warp(arena));
-        if (arena == ANCHOR_BOSS_ARENA_KASHIWAGI) {
+        if (arena >= ANCHOR_BOSS_ARENA_IMPACT_FIRST &&
+            arena <= ANCHOR_BOSS_ARENA_IMPACT_LAST) {
             /* The giant-robot stage uses the dedicated Impact entry and lets
              * native transition data supply the spawn position. */
             assert(s_impact_calls == 1 &&
-                   s_impact_index == (int)(ANCHOR_BOSS_ROOM_KASHIWAGI -
+                   s_impact_index == (int)(arenas[i].room -
                                            ANCHOR_BOSS_IMPACT_STAGE_FIRST));
             assert(s_destination_calls == 0 && s_step_calls == 1);
         } else {
@@ -395,7 +401,7 @@ int main(void)
 
     ready(0x009d); /* Gourmet Submarine is not the dragon/Control Machine room. */
     assert(anchor_boss_invite_world_arena() == 0);
-    const int invalid_arenas[] = {-1, 0, 6, 0x155, 0x7fffffff};
+    const int invalid_arenas[] = {-1, 0, 9, 0x155, 0x7fffffff};
     for (unsigned int i = 0; i < sizeof(invalid_arenas) / sizeof(invalid_arenas[0]); ++i) {
         assert(anchor_boss_arena_room(invalid_arenas[i]) == -1);
         assert(!anchor_boss_arena_name(invalid_arenas[i]));

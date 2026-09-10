@@ -223,26 +223,41 @@ PROJECTILE_QUEUE_COUNT: int = 64
 PROJECTILE_MAX_JSON_BYTES: int = 512
 CONGO_ARENA: int = 1
 CONGO_ROOM: int = 0x16
+# The giant-robot Impact bosses. Each has its own arena ID/name; an Impact
+# invitation also carries the exact native stage so the guest loads the same
+# cutscene, minigame or boss stage as the sender.
 KASHIWAGI_ARENA: int = 5
-# The giant-robot Impact sequence: 0x21C..0x21F are the pre-boss minigames,
-# 0x220..0x224 the bosses, and 0x239 the intro cutscene stage. An Impact
-# invitation carries the exact stage so the guest loads the same cutscene,
-# minigame or boss stage as the sender.
+THAISAMBA_ARENA: int = 6
+BALBERRA_ARENA: int = 7
+DETOILE_ARENA: int = 8
+IMPACT_ARENA_FIRST: int = KASHIWAGI_ARENA
+IMPACT_ARENA_LAST: int = DETOILE_ARENA
+# Intro cutscene stages 0x239..0x23C, one per boss (0x239 = Kashiwagi).
+# Minigames 0x21C..0x21F and boss stages 0x220..0x223 follow the same order.
+# (Stage 0x0224 is an unused fifth slot; the boss rush mode uses stage 0x0260.)
 IMPACT_STAGE_FIRST: int = 0x21C
-IMPACT_STAGE_LAST: int = 0x224
-IMPACT_INTRO_STAGE: int = 0x239
+IMPACT_STAGE_LAST: int = 0x223
+IMPACT_INTRO_FIRST: int = 0x239
+IMPACT_INTRO_LAST: int = 0x23C
+
+
+def impact_arena(arena: int) -> bool:
+    return IMPACT_ARENA_FIRST <= arena <= IMPACT_ARENA_LAST
 
 
 def impact_stage_valid(stage: int) -> bool:
     return (type(stage) is int and
             (IMPACT_STAGE_FIRST <= stage <= IMPACT_STAGE_LAST or
-             stage == IMPACT_INTRO_STAGE))
+             IMPACT_INTRO_FIRST <= stage <= IMPACT_INTRO_LAST))
 BOSS_ARENA_ROOMS: "dict[int, int]" = {
     CONGO_ARENA: CONGO_ROOM,
     2: 0x49,  # Dharumanyo
     3: 0x71,  # Tsurami
     4: 0x155,  # Control Machine (Koryuta dragon flight)
     KASHIWAGI_ARENA: 0x220,  # Kashiwagi (first giant-robot Impact boss)
+    THAISAMBA_ARENA: 0x221,  # Thaisamba 2
+    BALBERRA_ARENA: 0x222,  # Balberra
+    DETOILE_ARENA: 0x223,  # D'Etoile
 }
 ARENA_METADATA_WAIT_MS: int = 5000
 ANIMATION_RESTART_DELTA_100: int = 50
@@ -2240,11 +2255,11 @@ def set_boss_arena(arena: int, visit: int = 0, stage: int = 0,
         return False
     if arena and not _local_save_loaded:
         return False
-    if arena == KASHIWAGI_ARENA:
-        # Default to the first boss through a missing stage, so older callers
+    if impact_arena(arena):
+        # Default to the boss stage through a missing stage, so older callers
         # still work; the native side always supplies the exact stage.
         if stage == 0:
-            stage = BOSS_ARENA_ROOMS[KASHIWAGI_ARENA]
+            stage = BOSS_ARENA_ROOMS[arena]
         elif not impact_stage_valid(stage):
             return False
     else:
@@ -2265,7 +2280,7 @@ def set_boss_arena(arena: int, visit: int = 0, stage: int = 0,
               "targetTeamId": _team_id, "arena": effective_arena,
               "entered": arena != 0, "session": _interaction_session,
               "seq": sequence}
-    if effective_arena == KASHIWAGI_ARENA:
+    if impact_arena(effective_arena):
         packet["stage"] = stage if arena else _arena_local_state[3]
         packet["f90"] = field90 if arena else _arena_local_state[4]
         packet["f91"] = field91 if arena else _arena_local_state[5]
@@ -2295,9 +2310,9 @@ def _receive_boss_arena(packet: dict) -> bool:
     stage = packet.get("stage", 0)
     field90 = packet.get("f90", 0)
     field91 = packet.get("f91", 0)
-    if packet["arena"] == KASHIWAGI_ARENA:
+    if impact_arena(packet["arena"]):
         if "stage" not in packet:
-            stage = BOSS_ARENA_ROOMS[KASHIWAGI_ARENA]
+            stage = BOSS_ARENA_ROOMS[packet["arena"]]
         elif not impact_stage_valid(stage):
             return False
         if (type(field90) is not int or not 0 <= field90 <= 0xFFFF or
@@ -2362,7 +2377,7 @@ def _boss_invitation_is_current(event: dict, now: int) -> bool:
     cid, session = event["cid"], event["session"]
     peer = _player_states.get(cid, {})
     known_session = peer.get("interactionSession") or _player_movement_order.get(cid, {}).get("interactionSession", 0)
-    expected_room = (event["stage"] if event["arena"] == KASHIWAGI_ARENA
+    expected_room = (event["stage"] if impact_arena(event["arena"])
                      else BOSS_ARENA_ROOMS[event["arena"]])
     eligible = (peer.get("online", False) and peer.get("isSaveLoaded", False) and
                 peer.get("teamId") == _team_id and
@@ -2395,7 +2410,7 @@ def get_boss_invitation_json() -> str:
                 payload = {"cid": event["cid"], "session": event["session"],
                            "seq": event["seq"], "arena": event["arena"],
                            "name": str(name)[:64]}
-                if event["arena"] == KASHIWAGI_ARENA:
+                if impact_arena(event["arena"]):
                     payload["stage"] = event["stage"]
                     payload["f90"] = event["field90"]
                     payload["f91"] = event["field91"]
