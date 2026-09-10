@@ -223,11 +223,26 @@ PROJECTILE_QUEUE_COUNT: int = 64
 PROJECTILE_MAX_JSON_BYTES: int = 512
 CONGO_ARENA: int = 1
 CONGO_ROOM: int = 0x16
+KASHIWAGI_ARENA: int = 5
+# The giant-robot Impact sequence: 0x21C..0x21F are the pre-boss minigames,
+# 0x220..0x224 the bosses, and 0x239 the intro cutscene stage. An Impact
+# invitation carries the exact stage so the guest loads the same cutscene,
+# minigame or boss stage as the sender.
+IMPACT_STAGE_FIRST: int = 0x21C
+IMPACT_STAGE_LAST: int = 0x224
+IMPACT_INTRO_STAGE: int = 0x239
+
+
+def impact_stage_valid(stage: int) -> bool:
+    return (type(stage) is int and
+            (IMPACT_STAGE_FIRST <= stage <= IMPACT_STAGE_LAST or
+             stage == IMPACT_INTRO_STAGE))
 BOSS_ARENA_ROOMS: "dict[int, int]" = {
     CONGO_ARENA: CONGO_ROOM,
     2: 0x49,  # Dharumanyo
     3: 0x71,  # Tsurami
     4: 0x155,  # Control Machine (Koryuta dragon flight)
+    KASHIWAGI_ARENA: 0x220,  # Kashiwagi (first giant-robot Impact boss)
 }
 ARENA_METADATA_WAIT_MS: int = 5000
 ANIMATION_RESTART_DELTA_100: int = 50
@@ -2187,7 +2202,7 @@ def send_tsurami_hit(sequence: int, amount: int, target: int = 0) -> bool:
 def _reset_boss_invitations() -> None:
     """Called with the roster lock during connection teardown/setup."""
     global _arena_local_state, _arena_sequence
-    _arena_local_state = ("", 0, 0)
+    _arena_local_state = ("", 0, 0, 0, 0, 0)
     _arena_sequence = 0
     _arena_events.clear()
     _arena_seen.clear()
@@ -2203,22 +2218,40 @@ def _invalidate_confirmed_boss_invitation(cid: int) -> None:
         _arena_events.pop(cid, None)
 
 
-def set_boss_arena(arena: int, visit: int = 0) -> bool:
+def set_boss_arena(arena: int, visit: int = 0, stage: int = 0,
+                   field90: int = 0, field91: int = 0) -> bool:
     """Publish entry/exit edges supplied by the native loaded-room observer.
 
     Metadata refreshes and movement packets cannot generate an edge. Each
     entry supersedes that sender's previous arena; exits name the last arena
     published successfully. Failed sends retain the old state, so the next
-    frame retries the same sequence number.
+    frame retries the same sequence number. For the Impact arena ``stage`` is
+    the first native stage (0x21C..0x224) of the sequence and ``field90`` /
+    ``field91`` are the native load-from-start fields used to resume at the
+    cutscene start.
     """
     global _arena_local_state, _arena_sequence
     if (type(arena) is not int or (arena != 0 and arena not in BOSS_ARENA_ROOMS) or
             type(visit) is not int or not 0 <= visit <= _POSITION_SEQUENCE_MASK or
+            type(stage) is not int or not 0 <= stage <= 0xFFFF or
+            type(field90) is not int or not 0 <= field90 <= 0xFFFF or
+            type(field91) is not int or not 0 <= field91 <= _POSITION_SEQUENCE_MASK or
             not _connected or _client_id <= 0 or _interaction_session <= 0):
         return False
     if arena and not _local_save_loaded:
         return False
-    next_state = (_team_id, arena, visit if arena else 0)
+    if arena == KASHIWAGI_ARENA:
+        # Default to the first boss through a missing stage, so older callers
+        # still work; the native side always supplies the exact stage.
+        if stage == 0:
+            stage = BOSS_ARENA_ROOMS[KASHIWAGI_ARENA]
+        elif not impact_stage_valid(stage):
+            return False
+    else:
+        stage = 0
+        field90 = 0
+        field91 = 0
+    next_state = (_team_id, arena, visit if arena else 0, stage, field90, field91)
     if next_state == _arena_local_state:
         return True
     if arena == 0 and _arena_local_state[1] == 0:
@@ -2227,10 +2260,15 @@ def set_boss_arena(arena: int, visit: int = 0) -> bool:
     sequence = _arena_sequence + 1
     if sequence > _POSITION_SEQUENCE_MASK:
         return False
+    effective_arena = arena or _arena_local_state[1]
     packet = {"type": "MNSG_BOSS_ARENA", "clientId": _client_id,
-              "targetTeamId": _team_id, "arena": arena or _arena_local_state[1],
+              "targetTeamId": _team_id, "arena": effective_arena,
               "entered": arena != 0, "session": _interaction_session,
               "seq": sequence}
+    if effective_arena == KASHIWAGI_ARENA:
+        packet["stage"] = stage if arena else _arena_local_state[3]
+        packet["f90"] = field90 if arena else _arena_local_state[4]
+        packet["f91"] = field91 if arena else _arena_local_state[5]
     if not _send_raw(packet):
         return False
     _arena_sequence = sequence
@@ -2254,6 +2292,22 @@ def _receive_boss_arena(packet: dict) -> bool:
         if type(packet.get(key)) is not int or not 0 < packet[key] <= _POSITION_SEQUENCE_MASK:
             return False
     cid, session, sequence = (packet[key] for key in ("clientId", "session", "seq"))
+    stage = packet.get("stage", 0)
+    field90 = packet.get("f90", 0)
+    field91 = packet.get("f91", 0)
+    if packet["arena"] == KASHIWAGI_ARENA:
+        if "stage" not in packet:
+            stage = BOSS_ARENA_ROOMS[KASHIWAGI_ARENA]
+        elif not impact_stage_valid(stage):
+            return False
+        if (type(field90) is not int or not 0 <= field90 <= 0xFFFF or
+                type(field91) is not int or
+                not 0 <= field91 <= _POSITION_SEQUENCE_MASK):
+            return False
+    else:
+        stage = 0
+        field90 = 0
+        field91 = 0
     if cid == _client_id:
         return False
     with _player_states_lock:
@@ -2287,7 +2341,8 @@ def _receive_boss_arena(packet: dict) -> bool:
             return True
         _arena_events[cid] = {
             "cid": cid, "session": session, "seq": sequence,
-            "arena": packet["arena"], "team": _team_id,
+            "arena": packet["arena"], "stage": stage,
+            "field90": field90, "field91": field91, "team": _team_id,
             "entered": packet["entered"], "consumed": False,
             "confirmed": False, "received": int(time.monotonic() * 1000),
         }
@@ -2307,9 +2362,11 @@ def _boss_invitation_is_current(event: dict, now: int) -> bool:
     cid, session = event["cid"], event["session"]
     peer = _player_states.get(cid, {})
     known_session = peer.get("interactionSession") or _player_movement_order.get(cid, {}).get("interactionSession", 0)
+    expected_room = (event["stage"] if event["arena"] == KASHIWAGI_ARENA
+                     else BOSS_ARENA_ROOMS[event["arena"]])
     eligible = (peer.get("online", False) and peer.get("isSaveLoaded", False) and
                 peer.get("teamId") == _team_id and
-                peer.get("roomId") == BOSS_ARENA_ROOMS[event["arena"]] and
+                peer.get("roomId") == expected_room and
                 known_session == session and
                 session not in _retired_interaction_sessions.get(cid, ()))
     if eligible:
@@ -2335,9 +2392,14 @@ def get_boss_invitation_json() -> str:
         for event in sorted(_arena_events.values(), key=lambda e: e["received"]):
             if _boss_invitation_is_current(event, now):
                 name = _player_states[event["cid"]].get("name") or f'Player{event["cid"]}'
-                return json.dumps({"cid": event["cid"], "session": event["session"],
-                                   "seq": event["seq"], "arena": event["arena"],
-                                   "name": str(name)[:64]}, separators=(",", ":"), ensure_ascii=False)
+                payload = {"cid": event["cid"], "session": event["session"],
+                           "seq": event["seq"], "arena": event["arena"],
+                           "name": str(name)[:64]}
+                if event["arena"] == KASHIWAGI_ARENA:
+                    payload["stage"] = event["stage"]
+                    payload["f90"] = event["field90"]
+                    payload["f91"] = event["field91"]
+                return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
             if event["consumed"]:
                 _arena_events.pop(event["cid"], None)
     return ""

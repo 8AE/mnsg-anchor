@@ -303,14 +303,18 @@ int anchor_set_world_map_location(unsigned int room_id,
     return result;
 }
 
-int anchor_update_boss_arena(int arena, int visit)
+int anchor_update_boss_arena(int arena, int visit, int stage,
+                             unsigned int field90, unsigned int field91)
 {
     REPY_FN_SETUP;
     REPY_FN_SET_S32("arena", arena);
     REPY_FN_SET_S32("visit", visit);
+    REPY_FN_SET_S32("stage", stage);
+    REPY_FN_SET_U32("field90", field90);
+    REPY_FN_SET_U32("field91", field91);
     REPY_FN_EXEC_CACHE(anchor_update_boss_arena_code,
                       "import anchor_mnsg\n"
-                      "result = anchor_mnsg.set_boss_arena(arena, visit)\n");
+                      "result = anchor_mnsg.set_boss_arena(arena, visit, stage, field90, field91)\n");
     int result = (int)REPY_FN_GET_BOOL("result");
     REPY_FN_CLEANUP;
     return result;

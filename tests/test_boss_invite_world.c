@@ -21,8 +21,11 @@ static int s_saved, s_health, s_dialog_busy;
 static int s_destination_calls, s_step_calls;
 static short s_destination[7];
 static int s_last_field91;
+static int s_impact_calls, s_impact_index;
+static int s_impact_field90, s_impact_field91;
 
-/* Independently read from the USA native room/default-start tables. */
+/* Independently read from the USA native room/default-start tables. The
+ * Impact stage supplies its own start, so arena 5 carries a zero placeholder. */
 static const struct {
     int arena;
     unsigned short room;
@@ -32,7 +35,8 @@ static const struct {
     {1, 0x0016, "Congo's Arena", {60, -70, 171, 512, 16}},
     {2, 0x0049, "Dharumanyo's Arena", {145, -70, -99, 768, 16}},
     {3, 0x0071, "Tsurami's Arena", {0, -71, 318, 512, 16}},
-    {4, 0x0155, "Control Machine's Arena", {27, 239, 131, 0, 16}}
+    {4, 0x0155, "Control Machine's Arena", {27, 239, 131, 0, 16}},
+    {5, 0x0220, "Kashiwagi's Arena", {0, 0, 0, 0, 0}}
 };
 
 void anchor_boss_invite_world_begin_load(void);
@@ -59,9 +63,30 @@ void func_8000607C_6C7C(unsigned short room, short x, short y, short z,
     ++s_destination_calls;
 }
 
+void func_800061B0_6DB0(unsigned char index, unsigned short field90,
+                        unsigned int field91)
+{
+    (void)index;
+    (void)field90;
+    (void)field91;
+}
+
+void func_80006140_6D40(unsigned char index, unsigned short field90,
+                        unsigned int field91)
+{
+    /* Destination preparation must happen before changing the main step. */
+    assert(s_system.bytes[0x3add4] == 13);
+    assert(s_step_calls == 0 && s_destination_calls == 0);
+    s_impact_index = (int)index;
+    s_impact_field90 = (int)field90;
+    s_impact_field91 = (int)field91;
+    ++s_impact_calls;
+}
+
 void func_80003728_4328(unsigned char step)
 {
-    assert(s_destination_calls == 1);
+    assert((s_destination_calls == 1 && s_impact_calls == 0) ||
+           (s_destination_calls == 0 && s_impact_calls == 1));
     assert(step == 12);
     s_system.bytes[0x3add4] = step;
     ++s_step_calls;
@@ -70,6 +95,13 @@ void func_80003728_4328(unsigned char step)
 static void pointer_at(void *base, unsigned int offset, void *value)
 {
     memcpy((unsigned char *)base + offset, &value, sizeof(value));
+}
+
+/* Host fixtures are little-endian; the native stage is a big-endian halfword. */
+static void set_dest_stage(unsigned short stage)
+{
+    s_system.bytes[0x3afe0] = (unsigned char)(stage & 0xff);
+    s_system.bytes[0x3afe1] = (unsigned char)(stage >> 8);
 }
 
 static void ready(unsigned short room)
@@ -94,6 +126,10 @@ static void ready(unsigned short room)
     s_health = 5;
     s_dialog_busy = 0;
     s_destination_calls = s_step_calls = 0;
+    s_impact_calls = 0;
+    s_impact_index = -1;
+    s_impact_field90 = -1;
+    s_impact_field91 = -1;
     anchor_boss_invite_world_begin_load();
     assert(!anchor_boss_invite_world_can_prompt());
     anchor_boss_invite_world_finish_load();
@@ -104,10 +140,10 @@ static void check_gate(unsigned int offset, unsigned char value)
     ready(0x130);
     s_system.bytes[offset] = value;
     assert(!anchor_boss_invite_world_can_prompt());
-    for (int arena = 1; arena <= 4; ++arena)
+    for (int arena = 1; arena <= 5; ++arena)
         assert(!anchor_boss_invite_world_warp(arena));
     assert(!anchor_boss_invite_world_transfer_to(0x130, 123, -456, 789));
-    assert(s_destination_calls == 0 && s_step_calls == 0);
+    assert(s_destination_calls == 0 && s_step_calls == 0 && s_impact_calls == 0);
 }
 
 static void check_transfer_blocked(void)
@@ -236,32 +272,130 @@ int main(void)
         ready(arenas[i].room);
         assert(anchor_boss_invite_world_arena() == arena);
         assert(!anchor_boss_invite_world_warp(arena));
-        assert(!s_destination_calls);
+        assert(!s_destination_calls && !s_impact_calls);
         visit = anchor_boss_invite_world_visit();
         s_system.bytes[0x3ae20] = 3;
         assert(anchor_boss_invite_world_arena() == arena);
         assert(!anchor_boss_invite_world_can_prompt());
         ready(arenas[i].room);
-        assert(anchor_boss_invite_world_visit() != visit);
+        if (arena == ANCHOR_BOSS_ARENA_KASHIWAGI)
+            /* A same-stage Impact reload continues the sequence. */
+            assert(anchor_boss_invite_world_visit() == visit);
+        else
+            assert(anchor_boss_invite_world_visit() != visit);
 
         /* Accepting from another boss room uses the chosen destination. */
-        unsigned short source = arenas[(i + 1) % 4].room;
+        unsigned short source = arenas[(i + 1) % (sizeof(arenas) / sizeof(arenas[0]))].room;
         ready(source);
         assert(anchor_boss_invite_world_can_prompt());
         assert(anchor_boss_invite_world_warp(arena));
-        assert(s_destination_calls == 1 && s_step_calls == 1);
+        if (arena == ANCHOR_BOSS_ARENA_KASHIWAGI) {
+            /* The giant-robot stage uses the dedicated Impact entry and lets
+             * native transition data supply the spawn position. */
+            assert(s_impact_calls == 1 &&
+                   s_impact_index == (int)(ANCHOR_BOSS_ROOM_KASHIWAGI -
+                                           ANCHOR_BOSS_IMPACT_STAGE_FIRST));
+            assert(s_destination_calls == 0 && s_step_calls == 1);
+        } else {
+            assert(s_destination_calls == 1 && s_step_calls == 1);
+            assert(s_destination[0] == arenas[i].room);
+            assert(memcmp(&s_destination[1], arenas[i].start, sizeof(arenas[i].start)) == 0);
+            assert(s_destination[6] == 0 && s_last_field91 == 0);
+        }
         assert(D_800C7AB2 == source); /* Native loader owns current-room writes. */
-        assert(s_destination[0] == arenas[i].room);
-        assert(memcmp(&s_destination[1], arenas[i].start, sizeof(arenas[i].start)) == 0);
-        assert(s_destination[6] == 0 && s_last_field91 == 0);
         assert(!anchor_boss_invite_world_can_prompt());
         assert(!anchor_boss_invite_world_warp(arena));
-        assert(s_destination_calls == 1 && s_step_calls == 1);
+        assert(s_step_calls == 1 && s_impact_calls <= 1 && s_destination_calls <= 1);
     }
+
+    /* The Impact arena is announced from the loaded stage even when the
+     * on-foot player records are absent or the player is not "alive". */
+    ready(0x0220);
+    s_health = 0;
+    assert(anchor_boss_invite_world_arena() == ANCHOR_BOSS_ARENA_KASHIWAGI);
+    ready(0x0220);
+    D_801FC604_5B8514 = 0;
+    assert(anchor_boss_invite_world_arena() == ANCHOR_BOSS_ARENA_KASHIWAGI);
+    /* Some Impact stages do not pass through the ordinary stage loader, so a
+     * stale loaded-room token must not suppress the announcement. */
+    ready(0x0130);
+    D_800C7AB2 = ANCHOR_BOSS_ROOM_KASHIWAGI;
+    assert(anchor_boss_invite_world_arena() == ANCHOR_BOSS_ARENA_KASHIWAGI);
+
+    /* The dedicated Impact entry is observed directly, so the cutscene start
+     * announces the arena before the fight and without an ordinary room load. */
+    ready(0x0130);
+    set_dest_stage(ANCHOR_BOSS_ROOM_KASHIWAGI);
+    anchor_boss_invite_world_note_impact();
+    assert(anchor_boss_invite_world_arena() == ANCHOR_BOSS_ARENA_KASHIWAGI);
+    assert(anchor_boss_invite_world_stage() == ANCHOR_BOSS_ROOM_KASHIWAGI);
+    unsigned int impact_visit = anchor_boss_invite_world_visit();
+    assert(impact_visit != 0);
+    anchor_boss_invite_world_note_impact();
+    assert(anchor_boss_invite_world_visit() == impact_visit);
+
+    /* A later Impact stage keeps the sequence's first stage so an accepted
+     * invitation always replays the cutscene from its beginning. */
+    set_dest_stage(0x0222);
+    anchor_boss_invite_world_note_impact();
+    assert(anchor_boss_invite_world_arena() == ANCHOR_BOSS_ARENA_KASHIWAGI);
+    assert(anchor_boss_invite_world_stage() == ANCHOR_BOSS_ROOM_KASHIWAGI);
+    anchor_boss_invite_world_note_impact();
+    assert(anchor_boss_invite_world_stage() == ANCHOR_BOSS_ROOM_KASHIWAGI);
+    assert(anchor_boss_invite_world_visit() == impact_visit);
+
+    /* A fresh sequence records its own first stage and visit. */
+    ready(0x0130);
+    set_dest_stage(0x0222);
+    anchor_boss_invite_world_note_impact();
+    assert(anchor_boss_invite_world_stage() == 0x0222);
+    assert(anchor_boss_invite_world_visit() != impact_visit);
+
+    /* The Impact intro cutscene stage (Goemon enters Impact) is part of the
+     * same sequence and is announced from its own loaded room. */
+    ready(0x0130);
+    ready(ANCHOR_BOSS_IMPACT_INTRO_STAGE);
+    assert(anchor_boss_invite_world_arena() == ANCHOR_BOSS_ARENA_KASHIWAGI);
+    assert(anchor_boss_invite_world_stage() == ANCHOR_BOSS_IMPACT_INTRO_STAGE);
+
+    /* The native load-from-start fields are captured at the sequence start. */
+    ready(0x0130);
+    s_system.bytes[0x3ae3a] = 0x34;
+    s_system.bytes[0x3ae3b] = 0x12; /* field90 = 0x1234 */
+    s_system.bytes[0x3ae3c] = 0x78;
+    s_system.bytes[0x3ae3d] = 0x56;
+    s_system.bytes[0x3ae3e] = 0x34;
+    s_system.bytes[0x3ae3f] = 0x12; /* field91 = 0x12345678 */
+    set_dest_stage(0x0220);
+    anchor_boss_invite_world_note_impact();
+    assert(anchor_boss_invite_world_field90() == 0x1234);
+    assert(anchor_boss_invite_world_field91() == 0x12345678);
+
+    /* The guest is sent to the exact stage and load-from-start fields. */
+    ready(0x0130);
+    assert(anchor_boss_invite_world_warp_stage(0x0222, 0x1234, 0x12345678));
+    assert(s_impact_calls == 1 &&
+           s_impact_index == (int)(0x0222 - ANCHOR_BOSS_IMPACT_STAGE_FIRST));
+    assert(s_impact_field90 == 0x1234 && s_impact_field91 == 0x12345678);
+    assert(s_destination_calls == 0 && s_step_calls == 1);
+    ready(0x0130);
+    assert(!anchor_boss_invite_world_warp_stage(0x0100, 0, 0));
+    assert(!anchor_boss_invite_world_warp_stage(0x0225, 0, 0));
+    assert(!s_impact_calls && !s_destination_calls && !s_step_calls);
+
+    /* The guest is sent to the intro cutscene stage when the sequence began
+     * there, before the sender reached the minigame. */
+    ready(0x0130);
+    assert(anchor_boss_invite_world_warp_stage(ANCHOR_BOSS_IMPACT_INTRO_STAGE,
+                                               0, 0));
+    assert(s_impact_calls == 1 &&
+           s_impact_index == (int)(ANCHOR_BOSS_IMPACT_INTRO_STAGE -
+                                   ANCHOR_BOSS_IMPACT_STAGE_FIRST));
+    assert(s_destination_calls == 0 && s_step_calls == 1);
 
     ready(0x009d); /* Gourmet Submarine is not the dragon/Control Machine room. */
     assert(anchor_boss_invite_world_arena() == 0);
-    const int invalid_arenas[] = {-1, 0, 5, 0x155, 0x7fffffff};
+    const int invalid_arenas[] = {-1, 0, 6, 0x155, 0x7fffffff};
     for (unsigned int i = 0; i < sizeof(invalid_arenas) / sizeof(invalid_arenas[0]); ++i) {
         assert(anchor_boss_arena_room(invalid_arenas[i]) == -1);
         assert(!anchor_boss_arena_name(invalid_arenas[i]));

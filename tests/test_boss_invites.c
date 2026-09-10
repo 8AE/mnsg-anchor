@@ -8,8 +8,11 @@
 
 static int connected = 1, disabled, loaded = 1, current_arena, prompt_safe = 1;
 static int current_visit = 4, published_arena = -1, published_visit = -1;
+static int published_stage = -1, current_stage;
 static int current = 1, dialog_available = 1, modal, starts, cancels, dismissals;
 static int warps, warp_ready = 1, peeks, frees, destination_arena;
+static int stage_warps, warp_stage_value;
+static int published_f90, published_f91, warp_f90, warp_f91;
 static const char *packet;
 static char shown_name[257], shown_arena[64];
 static AnchorDialogResult choice = ANCHOR_DIALOG_PENDING;
@@ -18,14 +21,21 @@ static const char invite[] = "{\"cid\":2,\"session\":123,\"seq\":7,\"arena\":1,\
 int anchor_is_connected(void) { return connected; }
 int anchor_is_disabled(void) { return disabled; }
 int item_sync_save_is_loaded(void) { return loaded; }
-int anchor_update_boss_arena(int arena, int visit)
+int anchor_update_boss_arena(int arena, int visit, int stage,
+                             unsigned int field90, unsigned int field91)
 {
     published_arena = arena;
     published_visit = visit;
+    published_stage = stage;
+    published_f90 = (int)field90;
+    published_f91 = (int)field91;
     return connected;
 }
 int anchor_boss_invite_world_arena(void) { return current_arena; }
 unsigned int anchor_boss_invite_world_visit(void) { return (unsigned)current_visit; }
+unsigned int anchor_boss_invite_world_stage(void) { return (unsigned)current_stage; }
+unsigned int anchor_boss_invite_world_field90(void) { return 0; }
+unsigned int anchor_boss_invite_world_field91(void) { return 0; }
 int anchor_boss_invite_world_can_prompt(void) { return prompt_safe; }
 int anchor_boss_invite_world_warp(int arena)
 {
@@ -35,6 +45,20 @@ int anchor_boss_invite_world_warp(int arena)
     ++warps;
     destination_arena = arena;
     current_arena = arena;
+    return 1;
+}
+int anchor_boss_invite_world_warp_stage(unsigned int stage, unsigned int field90,
+                                        unsigned int field91)
+{
+    assert(!modal);
+    if (!warp_ready || !prompt_safe)
+        return 0;
+    ++stage_warps;
+    warp_stage_value = (int)stage;
+    warp_f90 = (int)field90;
+    warp_f91 = (int)field91;
+    destination_arena = 5;
+    current_arena = 5;
     return 1;
 }
 char *anchor_get_boss_invitation_json(void)
@@ -174,10 +198,10 @@ int main(void)
      * A player in one boss room can join a different boss's invitation. */
     static const char *arena_names[] = {
         "Congo's Arena", "Dharumanyo's Arena", "Tsurami's Arena",
-        "Control Machine's Arena"
+        "Control Machine's Arena", "Kashiwagi's Arena"
     };
     char arena_packet[160];
-    for (int arena = 1; arena <= 4; ++arena) {
+    for (int arena = 1; arena <= 5; ++arena) {
         snprintf(arena_packet, sizeof(arena_packet),
             "{\"cid\":2,\"session\":123,\"seq\":7,\"arena\":%d,\"name\":\"Ahmad\"}", arena);
         current_arena = arena == 1 ? 2 : 1;
@@ -211,6 +235,26 @@ int main(void)
         anchor_boss_invites_update();
         assert(warps == prior_warps + 1);
     }
+
+    /* An Impact invitation carries the first native stage and the native
+     * load-from-start fields so the guest resumes at the cutscene start. */
+    static const char impact_invite[] =
+        "{\"cid\":2,\"session\":123,\"seq\":7,\"arena\":5,\"stage\":546,"
+        "\"f90\":4660,\"f91\":43981,\"name\":\"Ahmad\"}";
+    current_arena = 0;
+    current = 1;
+    packet = impact_invite;
+    choice = ANCHOR_DIALOG_PENDING;
+    int prior_stage_warps = stage_warps;
+    anchor_boss_invites_update();
+    assert(modal && strcmp(shown_arena, "Kashiwagi's Arena") == 0);
+    choice = ANCHOR_DIALOG_YES;
+    anchor_boss_invites_update();
+    assert(!modal && stage_warps == prior_stage_warps + 1 &&
+           warp_stage_value == 546 && warp_f90 == 4660 && warp_f91 == 43981);
+    assert(published_stage == 0); /* The receiver's own stage is unrelated. */
+    assert(!packet);
+
     puts("boss invitation coordinator: deferred UI, Yes/No, cancellation and native warp ordering passed");
     return 0;
 }

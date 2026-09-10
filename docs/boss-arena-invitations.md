@@ -13,21 +13,38 @@ dragon-flight room. Congo's approach (`0x001A`) is separate from its arena.
 | 2 | Dharumanyo | `0x0049` (73) | `(145, -70, -99)` |
 | 3 | Tsurami | `0x0071` (113) | `(0, -71, 318)` |
 | 4 | Control Machine | `0x0155` (341) | `(27, 239, 131)` |
+| 5 | Kashiwagi (first Impact boss) | `0x0220` (544) | Impact stage default |
+
+The giant-robot Impact sequence occupies native stages `0x021C`–`0x0224`
+(`0x021C`–`0x021F` cutscene/high-speed minigames, `0x0220`–`0x0224` the five
+bosses, of which Kashiwagi is the first) plus the intro cutscene stage `0x0239`,
+where Goemon blows the triton shell and enters Impact. These stages are not
+ordinary rooms: the normal per-room actor metadata is absent and they are
+entered through the game's dedicated Impact-stage transition, the same entry the
+story and the consecutive-boss mode use. The invite is announced the moment the
+host enters the first stage of the sequence, which is `0x0239` when the intro
+plays, so it fires at the start of the Impact cutscene rather than only once the
+fight is running. The announcement carries that first stage and a guest that
+accepts loads it through the same entry, so they watch the cutscene from its
+beginning and continue into the fight even if the sender has already advanced.
+The stage's own default start is applied during the transition.
 
 The prompt uses the game's native patterned text window and Yes/No cursor.
 While it is open, the recipient's local world is paused: the player, enemies,
 remote players and projectiles stop moving. Networking and the dialog keep
 running. Selecting Yes or No resumes the world after the window closes; B
 also declines. Cancellation, including a sender leaving, releases the pause.
-Yes closes the dialog and asks the native room loader to move the recipient
-to the selected arena's normal entrance. No closes the dialog. The saved respawn position
+Yes closes the dialog and asks the native loader to move the recipient
+to the selected arena: the ordinary room loader for arenas 1-4 and the native
+Impact-stage entry for arena 5, at the exact stage carried by the invitation.
+No closes the dialog. The saved respawn position
 is preserved. An existing conversation, cutscene, pause, death or room load
 defers a pending invitation. A sender leaving the arena, disconnecting, or
 unloading their save invalidates their invitation, including one already on
 screen. Players already in the destination arena do not get
 invited to it; players in a different boss arena can still receive invitations.
 
-Update all participating clients to receive the three added bosses. Congo's
+Update all participating clients to receive the four added bosses. Congo's
 wire ID remains `1`; Congo-only builds ignore the other arena IDs. Invitations
 are live events, so they are not replayed to
 players who were offline when someone entered.
@@ -41,9 +58,14 @@ native visit, independently of movement and `ALL_CLIENT_STATE` refreshes:
 
 ```json
 {"type":"MNSG_BOSS_ARENA","clientId":2,"targetTeamId":"default","arena":1,"entered":true,"session":123,"seq":7}
+{"type":"MNSG_BOSS_ARENA","clientId":2,"targetTeamId":"default","arena":5,"stage":540,"f90":0,"f91":0,"entered":true,"session":123,"seq":8}
 ```
 
-Arena IDs use the fixed mapping above. `session` identifies the sender's live connection;
+Arena IDs use the fixed mapping above. `stage`, `f90` and `f91` are present only
+for arena 5: `stage` is the first native Impact stage (`0x021C`–`0x0224`) of the
+sequence and `f90`/`f91` are the native "load from start" fields recorded at the
+sequence's first entry. `session` identifies the
+sender's live connection;
 `seq` identifies an ordered event within that connection. No coordinates, save
 flags or text scripts are accepted from a network packet. The recipient uses
 roster metadata for the display name, confirms current team/room/session, and
@@ -54,12 +76,22 @@ period handles entry packets racing a roster update; a confirmed invitation
 can wait through a long conversation. Duplicate events cannot reopen a
 dismissed invitation. Queues grow with the roster, with one event per sender.
 
+For the ordinary arenas an entry is announced only when the loaded room
+matches, the system is in world gameplay and the local player task is alive.
+The Impact arena observes the dedicated native Impact entries instead: the first
+stage in `0x021C`–`0x0224` starts the sequence and announces arena 5, with no
+dependence on the ordinary loader or the on-foot player records. The sequence
+keeps that first stage so an accepted invitation always replays the cutscene
+from the beginning; it clears when an ordinary room load completes, which also
+emits the exit edge. This is why the invitation reaches teammates while the
+Impact cutscene is still playing.
+
 The save-sign recording and function trace identify a scenario script feeding
 the native text window and choice handler. The custom dialog supplies its own
 bounded text/choice script and completion callback without executing the
 sign's save operation. Native font limitations require a bounded display name
 and replacement of unsupported characters. The question and both choices
-remain visible. All four full arena names fit the native window: the longest
+remain visible. All five full arena names fit the native window: the longest
 arena line is 220 pixels wide, and the largest supported prompt uses 99 of
 the native window's 120 glyph records.
 
@@ -79,17 +111,23 @@ throws survive the modal's hit-authority epoch changes. Network expiration
 and native wall clocks retain their normal behavior; other clients continue
 playing independently.
 
-After Yes, the world adapter calls `func_8000607C_6C7C` with the native default
-entrance table entry, then `func_80003728_4328(12)`. That step's native loader
-consumes the prepared destination. It owns the current-room change and player
-initialization; the mod does not overwrite the current room or save spawn.
+After Yes, arenas 1-4 call `func_8000607C_6C7C` with the native default
+entrance table entry, then `func_80003728_4328(12)`. Arena 5 instead calls the
+generic native Impact-stage entry (`func_80006140_6D40`) with the index carried
+by the invitation (`stage - 0x021C`) and its carried load-from-start fields
+(`f90`/`f91`), followed by the same step change. That step's native loader
+consumes the prepared destination. It owns the current-room change, Impact
+battle setup and player initialization; the mod does not overwrite the current
+room or save spawn.
 
 ## Validation
 
 The automated tests cover serialized sender packets through the receiver,
 fixed routing and session identity, delayed metadata, reconnects, deduplication,
 same-room reloads, sender departures, queued dialogs, Yes/No/cancel behavior,
-and native destination preparation before changing engine steps. The pause
+and native destination preparation before changing engine steps. They also cover
+the Impact arena's announcement from the dedicated native entry (before any
+ordinary room load) and its accept warp. The pause
 checks cover frozen task subtrees, responsive choices, exactly one scenario
 update per frame, pause-mask ownership, cancellation, and projectile queue
 and lifecycle behavior across pause/resume. Native
@@ -99,9 +137,12 @@ against the USA game code/data. Release and debug packages use the same flow.
 In-game validation is left to the user. With two updated clients using the same
 Room ID but in different game rooms, enter each supported arena on one client and test No,
 then leave and re-enter to test Yes. For Control Machine, use the dragon-flight
-encounter. Also enter while the recipient is reading a sign:
+encounter; for Kashiwagi, trigger the first giant-robot Impact battle. Also
+enter while the recipient is reading a sign:
 the invitation should wait until that dialog closes. Check that an invitation
 closes if its sender leaves, and that a client using another Room ID receives none.
 While the invitation is open, check that nearby enemies and existing local
 and remote projectiles stop, the choice cursor still works, and No/B resumes
 the same scene. Yes should release the pause and load the named arena normally.
+The Impact arena still requires confirming that the guest's native Impact stage
+load announces and that the invite/accept cycle reaches the fight.

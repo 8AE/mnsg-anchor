@@ -14,7 +14,9 @@ static const BossArena s_arenas[] = {
     {ANCHOR_BOSS_ARENA_DHARUMANYO, ANCHOR_BOSS_ROOM_DHARUMANYO, "Dharumanyo's Arena"},
     {ANCHOR_BOSS_ARENA_TSURAMI, ANCHOR_BOSS_ROOM_TSURAMI, "Tsurami's Arena"},
     {ANCHOR_BOSS_ARENA_CONTROL_MACHINE, ANCHOR_BOSS_ROOM_CONTROL_MACHINE,
-     "Control Machine's Arena"}
+     "Control Machine's Arena"},
+    {ANCHOR_BOSS_ARENA_KASHIWAGI, ANCHOR_BOSS_ROOM_KASHIWAGI,
+     "Kashiwagi's Arena"}
 };
 
 static const BossArena *find_arena(int arena)
