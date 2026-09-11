@@ -4,6 +4,8 @@ import json
 import unittest
 from unittest import mock
 
+from test_boss_invitation_transport import load_client
+
 import anchor_impact
 
 
@@ -16,6 +18,41 @@ def state(encounter=1, stage=0x0220, fill=1):
 
 
 class ImpactStateSchemaTests(unittest.TestCase):
+    def test_update_client_state_includes_impact_metadata(self):
+        client = load_client(cid=2, session=101, team="blue", room=0x1D1)
+        self.addCleanup(client.disconnect)
+        client.set_local_room(0x1D1)
+        client._sock.sent.clear()
+        self.assertTrue(client.update_client_state("{}"))
+        payloads = [json.loads(raw[:-1]) for raw in client._sock.sent]
+        state = next(
+            p.get("state", {})
+            for p in payloads
+            if p.get("type") == "UPDATE_CLIENT_STATE"
+        )
+        self.assertIn(anchor_impact.METADATA_KEY, state)
+
+    def test_hit_authority_accepts_peer_without_matching_room(self):
+        # The boss-rush stage is not reported through room metadata, so the
+        # hit-authority gate must not reject peers on room mismatch.
+        transport = anchor_impact.ImpactTransport()
+        transport.set_stage(0x0260)
+        transport.local = (True, 1, False)
+        adv = transport.advertisement({"session": 202})
+        ctx = {
+            "cid": 2, "session": 101, "team": "t", "connected": True,
+            "loaded": True, "room": 0x01D1,
+            "players": {
+                3: {
+                    "online": True, "isSaveLoaded": False, "teamId": "t",
+                    "roomId": 0x01D1, "interactionSession": 202,
+                    "playerEpoch": 7,
+                    anchor_impact.METADATA_KEY: adv,
+                },
+            },
+        }
+        self.assertIsNotNone(transport._peer(ctx, 3, True))
+
     def test_exact_schema(self):
         value = state()
         self.assertIs(anchor_impact.validate_state(value), value)

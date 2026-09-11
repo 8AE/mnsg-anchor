@@ -17,20 +17,25 @@ mirrors that encounter so every participant fights the same robot.
 
 ## What is synchronised
 
-The elected authority publishes one checkpoint containing:
+The elected authority publishes one checkpoint containing the five battle-state
+words:
 
-* the **boss** — the live `file_13` AI callback (so the current attack/neutral
-  phase matches), the model task-object position, rotation and scale, the
-  animation frame, the native timer and the collider extents;
 * the **boss health** at battle-state `+0x60`;
+* the **player/mech Ryo ammunition** at battle-state `+0x64`;
 * the **player/mech health** at battle-state `+0x68`;
-* the **player/mech Ryo ammunition** at battle-state `+0x64`.
+* the **combat-pause** byte at `+0x2C0`;
+* the per-encounter **battle clock** at `+0x2C8`.
 
-Followers freeze the boss AI and adopt each accepted checkpoint, so the boss
-moves, animates and phases identically on every screen while the local
-collision and rendering passes still run. Follower attacks on the boss are
-reported as HP deltas and applied only by the authority, keeping one canonical
-health pool.
+The checkpoint also carries the encounter selector and the live Impact stage
+(`0x021C`–`0x023C` in story mode, `0x0260` in the title-menu boss rush), so
+checkpoints from a different giant-robot encounter are rejected on both sides
+of the bridge.
+
+Follow-up hits are reported as HP deltas and applied only by the authority,
+keeping one canonical health pool. Followers keep running their own boss AI
+(spawn, introduction and attacks) while adopting the authority's health and
+ammunition; the boss's own transform/phase mirroring is intentionally deferred
+so the multi-frame introduction is never frozen.
 
 ## Native evidence
 
@@ -66,14 +71,17 @@ bit `0x2` at `+0x68`.
 `py/anchor_impact.py` uses the transient, team-scoped `MNSG_IMPACT` protocol
 with protocol version `1`. The transport room tracks the live Impact stage, so
 peers on a different giant-robot encounter never exchange checkpoints. The
-checkpoint payload is `{"k":<encounter>,"s":<stage>,"r":[21 words]}`, where
-float fields cross the bridge as IEEE-754 bit patterns and the root callback is
-validated against `file_13`'s own executable range before it is installed.
+checkpoint payload is `{"k":<encounter>,"s":<stage>,"r":[5 words]}`; the five
+words are plain integers, so no pointer or float ever crosses the bridge.
 
 Election, checkpoint coalescing, keepalive, lease expiry, hit retry and
 acknowledgement reuse the shared `anchor_boss_transport.py` core used by
-Congo, Dharumanyo and Tsurami. Hot packets are never placed in Anchor's durable
-queue.
+Congo, Dharumanyo and Tsurami. Impact opts out of the save and ordinary-room
+requirements (`require_save=False`, `require_room=False`) because the boss rush
+runs from the title menu without either, and instead scopes checkpoints with
+`state_scope` on the checkpoint's own stage. The Impact advertisement is
+included in `UPDATE_CLIENT_STATE` so peers discover each other's readiness.
+Hot packets are never placed in Anchor's durable queue.
 
 ## Verification
 
@@ -87,9 +95,12 @@ queue.
 
 ## Known limitations (runtime validation still required)
 
-This change mirrors the boss, boss HP, mech HP and Ryo ammunition. It does
-**not** yet:
+This change mirrors the boss HP, mech HP and Ryo ammunition for all four Impact
+bosses, in both story stages and the title-menu boss rush. It does **not** yet:
 
+* mirror the boss's own transform/phase (followers run their own boss AI and
+  share only the health and ammunition pools), so the boss may move slightly
+  differently on each screen;
 * reconstruct the boss's attack projectiles, so followers see the boss phase
   and pose but not its travelling shots;
 * replicate the authority's mech transform, so each client still sees and

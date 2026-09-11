@@ -370,8 +370,11 @@ int anchor_impact_native_world_paused(void)
 {
     if (!anchor_impact_native_ready())
         return 0;
-    return s_paused ||
-           (ANCHOR_IMPACT_AI(s_task) & IMPACT_CALLBACK_DISABLED) != 0;
+    /* Deliberately exclude s_paused: it is a coordinator role flag, not a
+     * native pause. Feeding it back here would latch the encounter paused
+     * forever during election (s_paused includes !role), which silently
+     * disables hit delivery and checkpoint adoption. */
+    return (ANCHOR_IMPACT_AI(s_task) & IMPACT_CALLBACK_DISABLED) != 0;
 }
 
 RECOMP_HOOK("func_80034734_35334")

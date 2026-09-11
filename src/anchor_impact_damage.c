@@ -87,7 +87,9 @@ void anchor_impact_damage_set_context(int active, int owner, int paused,
 
 int anchor_impact_damage_is_shared(void)
 {
-    return s_active && ANCHOR_BOSS_IMPACT_STAGE_VALID(D_800C7AB2) &&
+    return s_active &&
+           (ANCHOR_BOSS_IMPACT_STAGE_VALID(D_800C7AB2) ||
+            D_800C7AB2 == 0x0260u) &&
            D_8020EED0_63A2B0 != 0;
 }
 
