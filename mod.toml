@@ -74,6 +74,7 @@ additional_files = [
     "py/anchor_congo.py",
     "py/anchor_dharumanyo.py",
     "py/anchor_tsurami.py",
+    "py/anchor_impact.py",
     "icons/thumb.png",
 ]
 

@@ -444,6 +444,49 @@ int anchor_send_dharumanyo_hit(int sequence)
     return result;
 }
 
+char *anchor_impact_update(int ready, unsigned int stage,
+                           unsigned int encounter, unsigned int visit,
+                           int paused, const char *state_json)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("ready", ready);
+    REPY_FN_SET_U32("stage", stage);
+    REPY_FN_SET_U32("encounter", encounter);
+    REPY_FN_SET_U32("visit", visit);
+    REPY_FN_SET_S32("paused", paused);
+    REPY_FN_SET_STR("state_json", state_json ? state_json : "null");
+    REPY_FN_EXEC_CACHE(anchor_impact_update_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.update_impact(ready, stage, encounter, visit, paused, state_json)\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_send_impact_hit(int sequence, int amount)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("sequence", sequence);
+    REPY_FN_SET_S32("amount", amount);
+    REPY_FN_EXEC_CACHE(anchor_send_impact_hit_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.send_impact_hit(sequence, amount)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+char *anchor_impact_debug(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_impact_debug_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.impact_debug()\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_set_position(int pos_x, int pos_y, int pos_z)
 {
     REPY_FN_SETUP;

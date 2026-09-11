@@ -71,7 +71,8 @@ class BossTransport:
 
     def __init__(self, *, packet_type, room, metadata_key, validate_state,
                  damage_amounts, version=1, include_wire_version=False,
-                 hit_target=False,
+                 hit_target=False, require_save=True, require_room=True,
+                 state_scope=None,
                  interval=INTERVAL, keepalive=KEEPALIVE, lease=LEASE,
                  discovery=DISCOVERY, retry=RETRY, hit_queue=HIT_QUEUE,
                  hits_per_frame=HITS_PER_FRAME, ack_rows=ACK_ROWS):
@@ -83,6 +84,15 @@ class BossTransport:
         self.version = version
         self.include_wire_version = include_wire_version
         self.hit_target = hit_target
+        # The Impact battle can be entered from the title menu (boss rush) with
+        # no save loaded, so its transport must not require one. Its stage is
+        # also not reported through the ordinary room metadata, so it scopes by
+        # the checkpoint's own stage/encounter instead of roomId.
+        self.require_save = require_save
+        self.require_room = require_room
+        # Optional predicate on a validated state value; used to reject a
+        # checkpoint that belongs to a different sub-scope (Impact stage).
+        self.state_scope = state_scope
         self.interval = interval
         self.keepalive = keepalive
         self.lease = lease
@@ -162,15 +172,18 @@ class BossTransport:
 
     def _peer(self, ctx, cid, require_local_room=False):
         p = ctx["players"].get(cid)
-        if not p or not p.get("online", False) or not p.get("isSaveLoaded", False):
+        if (not p or not p.get("online", False) or
+                (self.require_save and not p.get("isSaveLoaded", False))):
             return None
         m = self._metadata(p.get(self.metadata_key))
         if (not m or not m[1] or p.get("teamId") != ctx["team"] or
-                p.get("roomId") != self.room or
+                (self.require_room and p.get("roomId") != self.room) or
                 p.get("interactionSession") != m[5] or
                 m[2] <= self.unavailable.get((cid, m[5]), 0)):
             return None
-        if require_local_room and (not self.local[0] or ctx["room"] != self.room):
+        if require_local_room and (
+                not self.local[0] or
+                (self.require_room and ctx["room"] != self.room)):
             return None
         return m
 
@@ -190,9 +203,11 @@ class BossTransport:
             m = self._metadata(p.get(self.metadata_key))
             if not m:
                 continue
-            if (p.get("online", False) and p.get("isSaveLoaded", False) and
+            if (p.get("online", False) and
+                    (not self.require_save or p.get("isSaveLoaded", False)) and
                     p.get("teamId") == ctx["team"] and
-                    p.get("roomId") == self.room and m[1]):
+                    (not self.require_room or p.get("roomId") == self.room) and
+                    m[1]):
                 current[cid] = (cid, m[5], m[2])
         for cid, identity in self.members.items():
             if current.get(cid) != identity:
@@ -387,8 +402,10 @@ class BossTransport:
             return True
         value = self.validate_state(packet.get("d"))
         rows = packet.get("a", [])
-        if (value is None or not isinstance(rows, list) or
-                len(rows) > self.ack_rows):
+        if (value is None or
+                (self.state_scope is not None and
+                 not self.state_scope(value)) or
+                not isinstance(rows, list) or len(rows) > self.ack_rows):
             return False
         acks = dict(previous["acks"]) if previous else {}
         for row in rows:
@@ -543,7 +560,8 @@ class BossTransport:
     def update(self, ctx, ready, visit, paused, supplied, now):
         self._scope(ctx)
         ready = bool(ready and positive(visit) and ctx["connected"] and
-                     ctx["loaded"] and ctx["room"] == self.room and
+                     ctx["loaded"] and
+                     (not self.require_room or ctx["room"] == self.room) and
                      positive(ctx["cid"]))
         previous_ready, previous_visit, _ = self.local
         if ready != previous_ready or (ready and visit != previous_visit):

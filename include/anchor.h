@@ -234,6 +234,15 @@ extern "C"
                                   const char *state_json);
    int anchor_send_dharumanyo_hit(int sequence);
 
+   /* Shared giant-robot Impact battle (Kashiwagi, Thaisamba, Balberra,
+    * D'Etoile). `stage` is the live Impact stage and `encounter` the native
+    * selector 1..4; both scope the transport room. Free the result. */
+   char *anchor_impact_update(int ready, unsigned int stage,
+                              unsigned int encounter, unsigned int visit,
+                              int paused, const char *state_json);
+   int anchor_send_impact_hit(int sequence, int amount);
+   char *anchor_impact_debug(void);
+
    /**
     * @brief Broadcast the local player's world-space position to teammates.
     *

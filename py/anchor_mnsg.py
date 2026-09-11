@@ -83,6 +83,7 @@ from collections import deque
 import anchor_congo
 import anchor_dharumanyo
 import anchor_tsurami
+import anchor_impact
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -167,6 +168,9 @@ _arena_confirmed_sessions: "dict[int, int]" = {}
 _congo = anchor_congo.CongoTransport()
 _dharumanyo = anchor_dharumanyo.DharumanyoTransport()
 _tsurami = anchor_tsurami.TsuramiTransport()
+_impact = anchor_impact.ImpactTransport()
+_impact_encounter: int = 0
+_impact_debug_str: str = ""
 
 ###############################################################################
 # Constants
@@ -203,6 +207,7 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     anchor_congo.PACKET_TYPE: 8 * 1024,
     anchor_dharumanyo.PACKET_TYPE: 8 * 1024,
     anchor_tsurami.PACKET_TYPE: 8 * 1024,
+    anchor_impact.PACKET_TYPE: 8 * 1024,
 }
 PLAYER_HIT_MAX_AGE_MS: int = 500
 PLAYER_SOUND_MAX_AGE_MS: int = 500
@@ -606,6 +611,14 @@ def _merge_client_state(
         )
         if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
             state[anchor_tsurami.METADATA_KEY] = value
+    if anchor_impact.METADATA_KEY in payload:
+        value = anchor_impact.merge_metadata(
+            state.get(anchor_impact.METADATA_KEY),
+            payload[anchor_impact.METADATA_KEY],
+            state.get("interactionSession"),
+        )
+        if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
+            state[anchor_impact.METADATA_KEY] = value
     now_ms = int(time.monotonic() * 1000)
     if enforce_movement_order:
         # Sender monotonic timestamps are useful only for packet ordering; they
@@ -616,6 +629,7 @@ def _merge_client_state(
     _congo.observe(context)
     _dharumanyo.observe(context)
     _tsurami.observe(context)
+    _impact.observe(context)
     _invalidate_confirmed_boss_invitation(cid)
     _prune_projectile_spawns(now_ms)
     return True
@@ -709,6 +723,14 @@ def _replace_all_client_states(states: list) -> None:
             if (tsurami and
                     tsurami[5] not in _retired_interaction_sessions.get(cid, ())):
                 merged[anchor_tsurami.METADATA_KEY] = tsurami
+            impact = anchor_impact.merge_metadata(
+                previous.get(anchor_impact.METADATA_KEY),
+                client_state.get(anchor_impact.METADATA_KEY),
+                merged.get("interactionSession"),
+            )
+            if (impact and
+                    impact[5] not in _retired_interaction_sessions.get(cid, ())):
+                merged[anchor_impact.METADATA_KEY] = impact
             new_players[cid] = merged
         for cid, previous in previous_players.items():
             replacement = new_players.get(cid, {})
@@ -724,6 +746,7 @@ def _replace_all_client_states(states: list) -> None:
         _congo.observe(context)
         _dharumanyo.observe(context)
         _tsurami.observe(context)
+        _impact.observe(context)
         for cid in list(_arena_events):
             _invalidate_confirmed_boss_invitation(cid)
         now_ms = int(time.monotonic() * 1000)
@@ -1037,6 +1060,11 @@ def _recv_loop(sock: socket.socket) -> None:
                         )
                     continue
 
+                if ptype == anchor_impact.PACKET_TYPE:
+                    with _player_states_lock:
+                        _impact.receive(_boss_context(), packet, time.monotonic())
+                    continue
+
                 if ptype == "MNSG_PROJECTILES":
                     # Retired continuous-visual protocol: never replay these
                     # old packets through the durable item/event queue.
@@ -1135,6 +1163,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _congo.reset()
         _dharumanyo.reset()
         _tsurami.reset()
+        _impact.reset()
 
 
 ###############################################################################
@@ -1224,6 +1253,7 @@ def connect(
         _congo.reset()
         _dharumanyo.reset()
         _tsurami.reset()
+        _impact.reset()
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -1274,6 +1304,7 @@ def connect(
             anchor_tsurami.METADATA_KEY: _tsurami.advertisement(
                 _boss_context()
             ),
+            anchor_impact.METADATA_KEY: _impact.advertisement(_boss_context()),
         },
         "roomState": {},
     }
@@ -1994,6 +2025,7 @@ def update_client_state(state_json: str) -> bool:
             _dharumanyo.advertisement(context)
         )
         state[anchor_tsurami.METADATA_KEY] = _tsurami.advertisement(context)
+        state[anchor_impact.METADATA_KEY] = _impact.advertisement(context)
 
     sent = _send_raw({
         "type": "UPDATE_CLIENT_STATE",
@@ -2212,6 +2244,81 @@ def send_tsurami_hit(sequence: int, amount: int, target: int = 0) -> bool:
         return _tsurami.send_hit(
             _boss_context(), sequence, amount, time.monotonic(), target
         )
+
+
+def update_impact(ready: int, stage: int, encounter: int, visit: int,
+                  paused: int, state_json: str = "") -> str:
+    """Publish previous-frame Impact battle state and return hit work.
+
+    The transport room tracks the live Impact stage so peers on a different
+    giant-robot encounter never exchange checkpoints. The Impact battle has no
+    save dependency, so it is reported as loaded even from the title-menu boss
+    rush.
+    """
+    global _impact_encounter
+    if not isinstance(visit, int) or visit <= 0:
+        # Modes that never pass through the ordinary room loader report 0; the
+        # coordinator requires a positive encounter visit.
+        visit = 1
+    # The boss rush keeps one stage while the selected boss changes, so reset
+    # the election whenever the encounter selector advances to a new boss.
+    if encounter and encounter != _impact_encounter:
+        _impact.reset()
+        _impact_encounter = encounter
+    _impact.set_stage(stage)
+    supplied = None
+    if (isinstance(state_json, str) and
+            len(state_json.encode("utf-8")) <= anchor_impact.MAX_STATE_BYTES):
+        try:
+            supplied = json.loads(state_json) if state_json else None
+        except (ValueError, RecursionError):
+            pass
+    with _player_states_lock:
+        context = _boss_context()
+        context["loaded"] = True
+        status, packets = _impact.update(
+            context, ready, visit, paused, supplied, time.monotonic()
+        )
+        dirty = _impact.advertisement_dirty
+        _impact.advertisement_dirty = False
+    if dirty and _connected:
+        if not update_client_state("{}"):
+            with _player_states_lock:
+                _impact.advertisement_dirty = True
+    for packet in packets:
+        sent = _send_raw(packet)
+        with _player_states_lock:
+            _impact.packet_send_result(packet, sent)
+    global _impact_debug_str
+    _impact_debug_str = json.dumps({
+        "cid": context.get("cid", 0),
+        "conn": int(bool(context.get("connected"))),
+        "loaded": int(bool(context.get("loaded"))),
+        "room": context.get("room", -1),
+        "selfRoom": _impact.room,
+        "visit": visit,
+        "ready": int(bool(ready)),
+        "role": status.get("role", -1),
+        "e": status.get("encounter", []),
+    }, separators=(",", ":"))
+    return json.dumps(status, separators=(",", ":"), allow_nan=False)
+
+
+def send_impact_hit(sequence: int, amount: int) -> bool:
+    """Queue one physical Impact hit; retries keep its identity until acked."""
+    with _player_states_lock:
+        return _impact.send_hit(
+            _boss_context(), sequence, amount, time.monotonic()
+        )
+
+
+def impact_debug() -> str:
+    """Last Impact readiness snapshot, for bridging into the native log.
+
+    Returned as a ready-to-print line (no printf ``%`` escapes) because the
+    native side forwards it verbatim.
+    """
+    return "[Impact] dbg " + (_impact_debug_str or "{}") + "\n"
 
 
 def _reset_boss_invitations() -> None:
