@@ -243,6 +243,21 @@ extern "C"
    int anchor_send_impact_hit(int sequence, int amount);
    char *anchor_impact_debug(void);
 
+   /* Transient Impact presentation exchange. `sample_json` is
+    * {"c":[visible, XYZ float bits, RX/RY/RZ u16],
+    *  "a":[[eventSequence, kind, six event words], ...]}.
+    * The result is {"accepted":<last local event accepted>,
+    *                 "c":[[clientId, session, packetSeq, visible, six words], ...],
+    *                 "a":[[clientId, session, eventSequence, kind, six words], ...]}.
+    * Cursor rows are a complete latest-value roster; attack rows apply no
+    * damage and never enter the durable event queue. Free the result. */
+   char *anchor_impact_players_update(int ready, unsigned int stage,
+                                      unsigned int encounter, unsigned int visit,
+                                      const char *sample_json);
+   char *anchor_impact_visuals_update(int ready, unsigned int stage,
+                                      unsigned int encounter, unsigned int visit,
+                                      const char *sample_json);
+
    /**
     * @brief Broadcast the local player's world-space position to teammates.
     *

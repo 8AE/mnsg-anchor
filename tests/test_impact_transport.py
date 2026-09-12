@@ -85,7 +85,8 @@ class ImpactStateSchemaTests(unittest.TestCase):
                 self.assertIsNone(anchor_impact.validate_state(value))
 
     def test_metadata_version_and_stage_room(self):
-        advertisement = [1, 1, 1, 0, 1, 101, 0, 0, 0, 0, 0, 0, 0, 1]
+        advertisement = [anchor_impact.VERSION, 1, 1, 0, 1, 101,
+                         0, 0, 0, 0, 0, 0, 0, 1, 0x220, 1]
         self.assertEqual(anchor_impact.metadata(advertisement), advertisement)
         transport = anchor_impact.ImpactTransport()
         self.assertEqual(transport.room, anchor_impact.ROOM)
@@ -117,7 +118,7 @@ class ImpactElectionTests(unittest.TestCase):
     def _seed(self, transport, cid, session):
         return {"cid": cid, "session": session, "team": "t",
                 "connected": True, "loaded": True, "room": self.ROOM,
-                "players": {}}
+                "players": {cid: {"playerEpoch": 1}}}
 
     def _advertisement(self, transport, cid, session):
         return transport.advertisement(self._seed(transport, cid, session))
@@ -129,6 +130,7 @@ class ImpactElectionTests(unittest.TestCase):
     def _context(self, transport, cid, session, peer_cid, peer_session,
                  peer_adv):
         players = {
+            cid: {"playerEpoch": 1, "interactionSession": session},
             peer_cid: {
                 "online": True, "isSaveLoaded": True, "teamId": "t",
                 "roomId": self.ORDINARY_ROOM,
@@ -177,6 +179,7 @@ class ImpactElectionTests(unittest.TestCase):
             "clientId": 2, "targetTeamId": "t", "session": 101,
             "op": "s", "e": [2, 101, 1], "term": 1,
             "visit": 1, "q": 1, "p": 0, "d": state(), "a": [],
+            "s": self.ROOM, "k": 1,
         }
         self.assertFalse(self.b.receive(ctx_b, packet, self.now))
 
@@ -188,7 +191,7 @@ class ImpactElectionTests(unittest.TestCase):
             self.assertEqual(packet["type"], anchor_impact.PACKET_TYPE)
             self.assertEqual(packet["v"], anchor_impact.VERSION)
             self.assertLessEqual(
-                len(json.dumps(packet, separators=(",", ":")).encode()),
+                len(json.dumps(packet, separators=(",", ":")).encode()) + 1,
                 8 * 1024,
             )
 

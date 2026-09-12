@@ -84,6 +84,7 @@ import anchor_congo
 import anchor_dharumanyo
 import anchor_tsurami
 import anchor_impact
+import anchor_impact_visual
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -169,7 +170,8 @@ _congo = anchor_congo.CongoTransport()
 _dharumanyo = anchor_dharumanyo.DharumanyoTransport()
 _tsurami = anchor_tsurami.TsuramiTransport()
 _impact = anchor_impact.ImpactTransport()
-_impact_encounter: int = 0
+_impact_players = anchor_impact.ImpactPlayerTransport()
+_impact_visuals = anchor_impact_visual.ImpactVisualTransport()
 _impact_debug_str: str = ""
 
 ###############################################################################
@@ -208,6 +210,8 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     anchor_dharumanyo.PACKET_TYPE: 8 * 1024,
     anchor_tsurami.PACKET_TYPE: 8 * 1024,
     anchor_impact.PACKET_TYPE: 8 * 1024,
+    anchor_impact.PLAYER_PACKET_TYPE: anchor_impact.PLAYER_PACKET_BYTES,
+    anchor_impact_visual.PACKET_TYPE: anchor_impact_visual.PACKET_BYTES,
 }
 PLAYER_HIT_MAX_AGE_MS: int = 500
 PLAYER_SOUND_MAX_AGE_MS: int = 500
@@ -630,6 +634,7 @@ def _merge_client_state(
     _dharumanyo.observe(context)
     _tsurami.observe(context)
     _impact.observe(context)
+    _impact_players.observe(context)
     _invalidate_confirmed_boss_invitation(cid)
     _prune_projectile_spawns(now_ms)
     return True
@@ -747,6 +752,7 @@ def _replace_all_client_states(states: list) -> None:
         _dharumanyo.observe(context)
         _tsurami.observe(context)
         _impact.observe(context)
+        _impact_players.observe(context)
         for cid in list(_arena_events):
             _invalidate_confirmed_boss_invitation(cid)
         now_ms = int(time.monotonic() * 1000)
@@ -1065,6 +1071,17 @@ def _recv_loop(sock: socket.socket) -> None:
                         _impact.receive(_boss_context(), packet, time.monotonic())
                     continue
 
+                if ptype == anchor_impact_visual.PACKET_TYPE:
+                    with _player_states_lock:
+                        _impact_visuals.receive(_boss_context(), _impact, packet, time.monotonic())
+                    continue
+
+                if ptype == anchor_impact.PLAYER_PACKET_TYPE:
+                    with _player_states_lock:
+                        _impact_players.receive(
+                            _boss_context(), packet, time.monotonic())
+                    continue
+
                 if ptype == "MNSG_PROJECTILES":
                     # Retired continuous-visual protocol: never replay these
                     # old packets through the durable item/event queue.
@@ -1164,6 +1181,8 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _dharumanyo.reset()
         _tsurami.reset()
         _impact.reset()
+        _impact_players.reset()
+        _impact_visuals.reset()
 
 
 ###############################################################################
@@ -1254,6 +1273,8 @@ def connect(
         _dharumanyo.reset()
         _tsurami.reset()
         _impact.reset()
+        _impact_players.reset()
+        _impact_visuals.reset()
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -2255,17 +2276,10 @@ def update_impact(ready: int, stage: int, encounter: int, visit: int,
     save dependency, so it is reported as loaded even from the title-menu boss
     rush.
     """
-    global _impact_encounter
-    if not isinstance(visit, int) or visit <= 0:
-        # Modes that never pass through the ordinary room loader report 0; the
-        # coordinator requires a positive encounter visit.
-        visit = 1
-    # The boss rush keeps one stage while the selected boss changes, so reset
-    # the election whenever the encounter selector advances to a new boss.
-    if encounter and encounter != _impact_encounter:
-        _impact.reset()
-        _impact_encounter = encounter
-    _impact.set_stage(stage)
+    if type(visit) is not int or visit <= 0:
+        # Native Impact binding supplies its own visit in title-menu boss rush.
+        # Inventing one here could revive packets from a previous battle.
+        ready, visit = 0, 0
     supplied = None
     if (isinstance(state_json, str) and
             len(state_json.encode("utf-8")) <= anchor_impact.MAX_STATE_BYTES):
@@ -2274,6 +2288,7 @@ def update_impact(ready: int, stage: int, encounter: int, visit: int,
         except (ValueError, RecursionError):
             pass
     with _player_states_lock:
+        _impact.set_encounter(stage, encounter)
         context = _boss_context()
         context["loaded"] = True
         status, packets = _impact.update(
@@ -2301,6 +2316,52 @@ def update_impact(ready: int, stage: int, encounter: int, visit: int,
         "role": status.get("role", -1),
         "e": status.get("encounter", []),
     }, separators=(",", ":"))
+    return json.dumps(status, separators=(",", ":"), allow_nan=False)
+
+
+def update_impact_players(ready: int, stage: int, encounter: int, visit: int,
+                          sample_json: str = "") -> str:
+    """Exchange native cursor poses, visual Ryo shots and shared mech input.
+
+    Input c is [visible, position XYZ float bits, rotation XYZ u16]. Event
+    kind 1 carries six position/velocity float words; kind 2 carries held,
+    pressed, cursor RX/RY, intended owner and authority term. The owner alone
+    executes kind 2 through the native interpreter. Received kind 1 objects
+    have no gameplay collision. Both channels are transient and encounter-
+    scoped. Call after update_impact so owner/term and visit are current.
+    """
+    supplied = None
+    if (isinstance(sample_json, str) and
+            len(sample_json.encode("utf-8")) <= 4096):
+        try:
+            supplied = json.loads(sample_json) if sample_json else None
+        except (ValueError, RecursionError):
+            pass
+    with _player_states_lock:
+        context = _boss_context()
+        status, packets = _impact_players.update(
+            context, ready, stage, encounter, visit, supplied, time.monotonic())
+    for packet in packets:
+        sent = _send_raw(packet)
+        with _player_states_lock:
+            _impact_players.packet_send_result(packet, sent)
+    return json.dumps(status, separators=(",", ":"), allow_nan=False)
+
+
+def update_impact_visuals(ready: int, stage: int, encounter: int, visit: int,
+                          sample_json: str = "") -> str:
+    supplied = None
+    if isinstance(sample_json, str) and len(sample_json.encode()) < 22000:
+        try:
+            supplied = json.loads(sample_json)
+        except (ValueError, RecursionError):
+            pass
+    with _player_states_lock:
+        status, packets = _impact_visuals.update(
+            _boss_context(), _impact, ready, stage, encounter, visit, supplied, time.monotonic())
+    for packet in packets:
+        if not _send_raw(packet):
+            break  # Never queue partial or obsolete render frames.
     return json.dumps(status, separators=(",", ":"), allow_nan=False)
 
 

@@ -36,6 +36,7 @@
  */
 
 #include "anchor_player_models.h"
+#include "anchor_impact_native.h"
 #include "anchor_dialog.h"
 #include "anchor_remote_model_pool.h"
 #include "anchor_remote_animation.h"
@@ -1358,6 +1359,7 @@ int anchor_player_models_peek_scripted(void)
 void anchor_player_models_get_drive(int *x, int *z)
 {
     (void)anchor_player_models_get_epoch();
+
     *x = s_interaction_tick - s_drive_tick <= 1u ? s_drive_x : 0;
     *z = s_interaction_tick - s_drive_tick <= 1u ? s_drive_z : 0;
 }
@@ -1953,6 +1955,9 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
     int i;
     ++s_interaction_tick;
     (void)anchor_player_models_get_epoch();
+
+    if (anchor_impact_native_root_live())
+        count = 0; /* Impact participants use their cockpit cursors. */
 
     if (!is_linked_task(render_parent_task))
     {

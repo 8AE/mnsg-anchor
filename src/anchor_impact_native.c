@@ -1,6 +1,8 @@
 #include "anchor_impact_native.h"
+#include "anchor_impact_visuals.h"
 #include "anchor_boss_arenas.h"
 #include "anchor_boss_invite_world.h"
+#include "anchor_remote_model_pool.h"
 
 #ifndef ANCHOR_IMPACT_NATIVE_HOST_TEST
 #include "modding.h"
@@ -16,7 +18,10 @@
 extern unsigned short D_800C7AB2;
 extern unsigned char *D_8015C5C8_15D1C8;
 extern void *D_8020EED0_63A2B0;
+extern void *D_8020EF30_63A310;
+extern void *D_8020EF40_63A320;
 extern void *D_8016DAB4_16E6B4;
+extern void func_801D2EE4_5FE2C4(void *object, const void *clip);
 
 extern void func_801E4800_60FBE0(void *task);
 extern void func_801EF2E0_61A6C0(void *task);
@@ -59,6 +64,11 @@ static int s_owner;
 static int s_paused;
 static int s_pending_valid;
 static AnchorImpactNativeSnapshot s_pending;
+static AnchorImpactNativeSnapshot s_view;
+static int s_view_valid;
+static const unsigned short s_mech_offsets[ANCHOR_IMPACT_MECH_OBJECTS] = {
+    0x1C, 0x20, 0x28, 0x44, 0x48, 0x4C, 0x50, 0x54, 0x58, 0x5C
+};
 
 #ifndef ANCHOR_IMPACT_READ_U8
 #define ANCHOR_IMPACT_READ_U8(p, o) \
@@ -113,8 +123,29 @@ static int pointer_valid(const void *pointer)
 #else
     unsigned int address = (unsigned int)(unsigned long)pointer;
     return (address & 3u) == 0 &&
-           address >= 0x80001000u && address < 0x80800000u;
+           ((address >= 0x80001000u && address < 0x80800000u) ||
+            anchor_remote_model_pool_contains(pointer));
 #endif
+}
+
+static unsigned int float_bits(float value)
+{
+    union { float f; unsigned int u; } bits;
+    bits.f = value;
+    return bits.u;
+}
+
+static float bits_float(unsigned int value)
+{
+    union { float f; unsigned int u; } bits;
+    bits.u = value;
+    return bits.f;
+}
+
+/* Bit-pattern finiteness; float compares are unreliable under -ffast-math. */
+static int finite_word(unsigned int value)
+{
+    return (value & 0x7f800000u) != 0x7f800000u;
 }
 
 static unsigned int current_encounter(void)
@@ -141,6 +172,21 @@ static int task_id_valid(unsigned int id)
            id == IMPACT_ID_BALBERRA || id == IMPACT_ID_DETOILE;
 }
 
+/* Encounter selector 1..4 maps to one root task ID each. A live root whose ID
+ * does not belong to the bound encounter is a different boss and must not be
+ * adopted. */
+static unsigned int encounter_task_id(unsigned int encounter)
+{
+    switch (encounter)
+    {
+    case 1u: return IMPACT_ID_KASHIWAGI;
+    case 2u: return IMPACT_ID_THAISAMBA;
+    case 3u: return IMPACT_ID_BALBERRA;
+    case 4u: return IMPACT_ID_DETOILE;
+    default: return 0;
+    }
+}
+
 static int bound_live(void)
 {
     void *state;
@@ -160,16 +206,15 @@ static int bound_live(void)
     if (ANCHOR_IMPACT_READ_PTR(state, IMPACT_STATE_ROOT) != s_task)
         return 0;
     id = ANCHOR_IMPACT_READ_U16(s_task, 0x5C);
-    if (!task_id_valid(id))
+    if (!task_id_valid(id) || id != encounter_task_id(s_encounter))
         return 0;
     if (ANCHOR_IMPACT_READ_U32(s_task, 0x68) & IMPACT_REMOVE_PENDING)
         return 0;
+    /* Always re-resolve the model object. It is recreated across phases and a
+     * freed-but-in-range stale pointer must never receive transform writes. */
+    s_object = ANCHOR_IMPACT_READ_PTR(s_task, 0x18);
     if (!pointer_valid(s_object))
-    {
-        s_object = ANCHOR_IMPACT_READ_PTR(s_task, 0x18);
-        if (!pointer_valid(s_object))
-            s_object = ANCHOR_IMPACT_READ_PTR(state, IMPACT_STATE_MODEL);
-    }
+        s_object = ANCHOR_IMPACT_READ_PTR(state, IMPACT_STATE_MODEL);
     s_state = state;
     s_id = id;
     s_stage = D_800C7AB2;
@@ -184,6 +229,11 @@ int anchor_impact_native_root_live(void)
 int anchor_impact_native_ready(void)
 {
     return s_active && bound_live();
+}
+
+int anchor_impact_native_is_owner(void)
+{
+    return s_active && s_owner && !s_paused && bound_live();
 }
 
 int anchor_impact_native_snapshot_ready(void)
@@ -225,12 +275,16 @@ void anchor_impact_native_reset(void)
     s_owner = 0;
     s_paused = 0;
     s_pending_valid = 0;
+    s_view_valid = 0;
 }
 
 void anchor_impact_native_set_role(int active, int owner, int paused)
 {
     if (!active)
+    {
         s_pending_valid = 0;
+        s_view_valid = 0;
+    }
     s_active = !!active;
     s_owner = !!owner;
     s_paused = !!paused;
@@ -250,6 +304,7 @@ int anchor_impact_native_bind(void *task, unsigned int encounter)
     s_encounter = encounter;
     s_stage = D_800C7AB2;
     s_bound = 1;
+    anchor_impact_catalog_init();
 #ifndef ANCHOR_IMPACT_NATIVE_HOST_TEST
     recomp_printf("[Impact] bind encounter=%u stage=%u task=%u\n",
                   encounter, (unsigned int)D_800C7AB2,
@@ -273,6 +328,7 @@ IMPACT_BIND_HOOK("func_801FAEB0_626290", 4)
 static int snapshot_valid(const AnchorImpactNativeSnapshot *snapshot)
 {
     const unsigned int *r;
+    unsigned int i, j;
     if (!snapshot)
         return 0;
     r = snapshot->root;
@@ -281,20 +337,120 @@ static int snapshot_valid(const AnchorImpactNativeSnapshot *snapshot)
         snapshot->stage != (unsigned int)D_800C7AB2 ||
         !stage_is_impact(snapshot->stage))
         return 0;
-    /* Only the shared health/ammunition words are published. Keep the bounds
-     * generous: the values are signed 32-bit on the wire. */
+    /* Validate the complete checkpoint before any native writes. Hidden or
+     * zero-scale intro models remain valid; NaN/Inf and unknown IDs do not. */
     if (r[IMP_BOSS_HP] > 1000000u || r[IMP_MECH_HP] > 1000000u ||
         r[IMP_AMMO] > 1000000u)
         return 0;
+    if (!finite_word(r[IMP_POS_X]) || !finite_word(r[IMP_POS_Y]) ||
+        !finite_word(r[IMP_POS_Z]) || !finite_word(r[IMP_SCALE_X]) ||
+        !finite_word(r[IMP_SCALE_Y]) || !finite_word(r[IMP_SCALE_Z]) ||
+        !finite_word(r[IMP_FRAME]))
+        return 0;
+    if (r[IMP_ROT_X] > 65535u || r[IMP_ROT_Y] > 65535u || r[IMP_ROT_Z] > 65535u)
+        return 0;
+    if ((r[IMP_PHASE] && !anchor_impact_phase_callback(s_encounter, r[IMP_PHASE])) ||
+        (r[IMP_CLIP] && !anchor_impact_clip_data(s_encounter, r[IMP_CLIP])) ||
+        r[IMP_COLLIDER_X] > 65535u || r[IMP_COLLIDER_Y] > 65535u ||
+        r[IMP_COLLIDER_Z] > 65535u || r[IMP_MODEL_FLAGS] > 1u ||
+        r[IMP_MODE] > 15u || r[IMP_PAUSE] > 255u ||
+        r[IMP_MECH_MASK] >= (1u << ANCHOR_IMPACT_MECH_OBJECTS))
+        return 0;
+    for (i = 0; i < 3; ++i)
+        if (!finite_word(r[IMP_PRIVATE + i])) return 0;
+    for (i = 0; i < ANCHOR_IMPACT_MECH_OBJECTS; ++i)
+    {
+        const unsigned int *p = &r[IMP_MECH_POSES + i * ANCHOR_IMPACT_POSE_WORDS];
+        if (!(r[IMP_MECH_MASK] & (1u << i))) continue;
+        for (j = 0; j < 10; ++j)
+            if (j >= 3 && j < 6 ? p[j] > 65535u : !finite_word(p[j])) return 0;
+        if (p[10] > 1u) return 0;
+    }
+    for (i = 0; i < 6; ++i)
+        if (!finite_word(r[IMP_CAMERA + i])) return 0;
+    if (r[IMP_CAMERA + 6] > 65535u) return 0;
+    if (r[IMP_AUX_KIND] > 2 ||
+        (r[IMP_AUX_KIND] == 1 && (s_encounter != 2 || r[IMP_AUX_DATA] > 65535u ||
+         r[IMP_AUX_DATA+2] > 255u || r[IMP_AUX_DATA+3] || r[IMP_AUX_DATA+4])) ||
+        (r[IMP_AUX_KIND] == 2 && (s_encounter < 3 ||
+         (r[IMP_AUX_DATA+3]&255u) || (r[IMP_AUX_DATA+4]&255u))) || r[IMP_AUX_DATA+5]) return 0;
     return 1;
+}
+
+/* These auxiliary fields are native scalars. Never transfer the task-pointer
+ * lists at EF30+0 or EF40+0/+14..+814. Their ownership stays with the local
+ * native graph. The byte lists are initialized explicitly by FUN_802099A8. */
+static void capture_aux(unsigned int *r)
+{
+    unsigned int i;
+    void *aux;
+    for (i = 0; i < 7; ++i) r[IMP_AUX_KIND+i] = 0;
+    if (s_encounter == 2 && pointer_valid(D_8020EF30_63A310)) {
+        aux = D_8020EF30_63A310; r[IMP_AUX_KIND] = 1;
+        r[IMP_AUX_DATA] = ANCHOR_IMPACT_READ_U16(aux,4);
+        r[IMP_AUX_DATA+1] = ANCHOR_IMPACT_READ_U32(aux,8);
+        r[IMP_AUX_DATA+2] = ANCHOR_IMPACT_READ_U8(aux,0xC);
+    } else if (s_encounter >= 3 && pointer_valid(D_8020EF40_63A320)) {
+        aux = D_8020EF40_63A320; r[IMP_AUX_KIND] = 2;
+        for (i = 0; i < 15; ++i)
+            r[IMP_AUX_DATA+i/4] |= (unsigned int)ANCHOR_IMPACT_READ_U8(aux,4+i) << (24-(i%4)*8);
+        for (i = 0; i < 3; ++i)
+            r[IMP_AUX_DATA+4] |= (unsigned int)ANCHOR_IMPACT_READ_U8(aux,0x815+i) << (24-i*8);
+    }
+}
+static void apply_aux(const unsigned int *r)
+{
+    unsigned int i;
+    void *aux;
+    if (r[IMP_AUX_KIND] == 1 && pointer_valid(D_8020EF30_63A310)) {
+        aux = D_8020EF30_63A310;
+        ANCHOR_IMPACT_WRITE_U16(aux,4,r[IMP_AUX_DATA]);
+        ANCHOR_IMPACT_WRITE_U32(aux,8,r[IMP_AUX_DATA+1]);
+        ANCHOR_IMPACT_WRITE_U8(aux,0xC,r[IMP_AUX_DATA+2]);
+    } else if (r[IMP_AUX_KIND] == 2 && pointer_valid(D_8020EF40_63A320)) {
+        aux = D_8020EF40_63A320;
+        for (i = 0; i < 15; ++i)
+            ANCHOR_IMPACT_WRITE_U8(aux,4+i,r[IMP_AUX_DATA+i/4] >> (24-(i%4)*8));
+        for (i = 0; i < 3; ++i)
+            ANCHOR_IMPACT_WRITE_U8(aux,0x815+i,r[IMP_AUX_DATA+4] >> (24-i*8));
+    }
+}
+
+static void capture_pose(const void *object, unsigned int *out)
+{
+    unsigned int i;
+    for (i = 0; i < 3; ++i)
+    {
+        out[i] = ANCHOR_IMPACT_READ_U32(object, 0x08 + i * 4);
+        out[3 + i] = ANCHOR_IMPACT_READ_U16(object, 0x14 + i * 2);
+        out[6 + i] = ANCHOR_IMPACT_READ_U32(object, 0x1C + i * 4);
+    }
+    out[9] = ANCHOR_IMPACT_READ_U32(object, 0x28);
+    out[10] = ANCHOR_IMPACT_READ_U8(object, 0x64) & 1u;
+}
+
+static void apply_pose(void *object, const unsigned int *in)
+{
+    unsigned int i;
+    for (i = 0; i < 3; ++i)
+    {
+        ANCHOR_IMPACT_WRITE_U32(object, 0x08 + i * 4, in[i]);
+        ANCHOR_IMPACT_WRITE_U16(object, 0x14 + i * 2, in[3 + i]);
+        ANCHOR_IMPACT_WRITE_U32(object, 0x1C + i * 4, in[6 + i]);
+    }
+    ANCHOR_IMPACT_WRITE_U32(object, 0x28, in[9]);
+    ANCHOR_IMPACT_WRITE_U8(object, 0x64,
+        (ANCHOR_IMPACT_READ_U8(object, 0x64) & ~1u) | in[10]);
 }
 
 int anchor_impact_native_capture(AnchorImpactNativeSnapshot *snapshot)
 {
     unsigned int *r;
+    unsigned int i;
     if (!snapshot || !bound_live())
         return 0;
     r = snapshot->root;
+    for (i = 0; i < ANCHOR_IMPACT_ROOT_WORDS; ++i) r[i] = 0;
     r[IMP_BOSS_HP] = (unsigned int)ANCHOR_IMPACT_READ_I32(
         s_state, IMPACT_STATE_HP);
     r[IMP_AMMO] = (unsigned int)ANCHOR_IMPACT_READ_I32(
@@ -303,22 +459,122 @@ int anchor_impact_native_capture(AnchorImpactNativeSnapshot *snapshot)
         s_state, IMPACT_STATE_MECH_HP);
     r[IMP_PAUSE] = ANCHOR_IMPACT_READ_U8(s_state, IMPACT_STATE_PAUSE);
     r[IMP_CLOCK] = ANCHOR_IMPACT_READ_U32(s_state, IMPACT_STATE_CLOCK);
+    r[IMP_POS_X] = float_bits(ANCHOR_IMPACT_READ_F32(s_object, 0x08));
+    r[IMP_POS_Y] = float_bits(ANCHOR_IMPACT_READ_F32(s_object, 0x0C));
+    r[IMP_POS_Z] = float_bits(ANCHOR_IMPACT_READ_F32(s_object, 0x10));
+    r[IMP_ROT_X] = ANCHOR_IMPACT_READ_U16(s_object, 0x14);
+    r[IMP_ROT_Y] = ANCHOR_IMPACT_READ_U16(s_object, 0x16);
+    r[IMP_ROT_Z] = ANCHOR_IMPACT_READ_U16(s_object, 0x18);
+    r[IMP_SCALE_X] = float_bits(ANCHOR_IMPACT_READ_F32(s_object, 0x1C));
+    r[IMP_SCALE_Y] = float_bits(ANCHOR_IMPACT_READ_F32(s_object, 0x20));
+    r[IMP_SCALE_Z] = float_bits(ANCHOR_IMPACT_READ_F32(s_object, 0x24));
+    r[IMP_FRAME] = float_bits(ANCHOR_IMPACT_READ_F32(s_object, 0x28));
+    r[IMP_PHASE] = anchor_impact_phase_id(s_encounter,
+        (unsigned int)ANCHOR_IMPACT_AI(s_task));
+    r[IMP_CLIP] = anchor_impact_clip_id(s_encounter,
+        ANCHOR_IMPACT_READ_U32(s_object, 0x2C),
+        ANCHOR_IMPACT_READ_U16(s_object, 0x34));
+    r[IMP_FLAGS] = ANCHOR_IMPACT_READ_U32(s_task, 0x64);
+    r[IMP_COLLIDER_X] = ANCHOR_IMPACT_READ_U16(s_task, 0x3C);
+    r[IMP_COLLIDER_Y] = ANCHOR_IMPACT_READ_U16(s_task, 0x3E);
+    r[IMP_COLLIDER_Z] = ANCHOR_IMPACT_READ_U16(s_task, 0x40);
+    r[IMP_MODEL_FLAGS] = ANCHOR_IMPACT_READ_U8(s_object, 0x64) & 1u;
+    r[IMP_MODE] = ANCHOR_IMPACT_READ_U8(s_object, 0x05);
+    for (i = 0; i < ANCHOR_IMPACT_PRIVATE_WORDS; ++i)
+        if (anchor_impact_private_used(s_encounter, i))
+            r[IMP_PRIVATE + i] = ANCHOR_IMPACT_READ_U32(s_task,
+                anchor_impact_private_offset(i));
+    for (i = 0; i < ANCHOR_IMPACT_MECH_OBJECTS; ++i)
+    {
+        const void *object = ANCHOR_IMPACT_READ_PTR(s_state, s_mech_offsets[i]);
+        if (!pointer_valid(object)) continue;
+        capture_pose(object, &r[IMP_MECH_POSES + i * ANCHOR_IMPACT_POSE_WORDS]);
+        r[IMP_MECH_MASK] |= 1u << i;
+    }
+    for (i = 0; i < 6; ++i)
+        r[IMP_CAMERA + i] = ANCHOR_IMPACT_READ_U32(s_state, 0xA0 + i * 4);
+    r[IMP_CAMERA + 6] = ANCHOR_IMPACT_READ_U16(s_state, 0xBA);
+    capture_aux(r);
     snapshot->encounter = s_encounter;
     snapshot->stage = s_stage;
     return snapshot_valid(snapshot);
 }
 
+/* Native simulation adopts phase/clip/motion at checkpoint boundaries. The
+ * presentation pass also restores this pose after the follower's update. */
+static void apply_transform(const AnchorImpactNativeSnapshot *snapshot)
+{
+    const unsigned int *r = snapshot->root;
+    if (!pointer_valid(s_object))
+        return;
+    ANCHOR_IMPACT_WRITE_F32(s_object, 0x08, bits_float(r[IMP_POS_X]));
+    ANCHOR_IMPACT_WRITE_F32(s_object, 0x0C, bits_float(r[IMP_POS_Y]));
+    ANCHOR_IMPACT_WRITE_F32(s_object, 0x10, bits_float(r[IMP_POS_Z]));
+    ANCHOR_IMPACT_WRITE_U16(s_object, 0x14, (unsigned short)r[IMP_ROT_X]);
+    ANCHOR_IMPACT_WRITE_U16(s_object, 0x16, (unsigned short)r[IMP_ROT_Y]);
+    ANCHOR_IMPACT_WRITE_U16(s_object, 0x18, (unsigned short)r[IMP_ROT_Z]);
+    ANCHOR_IMPACT_WRITE_F32(s_object, 0x1C, bits_float(r[IMP_SCALE_X]));
+    ANCHOR_IMPACT_WRITE_F32(s_object, 0x20, bits_float(r[IMP_SCALE_Y]));
+    ANCHOR_IMPACT_WRITE_F32(s_object, 0x24, bits_float(r[IMP_SCALE_Z]));
+    ANCHOR_IMPACT_WRITE_F32(s_object, 0x28, bits_float(r[IMP_FRAME]));
+    ANCHOR_IMPACT_WRITE_U8(s_object, 0x64,
+        (ANCHOR_IMPACT_READ_U8(s_object, 0x64) & ~1u) | r[IMP_MODEL_FLAGS]);
+    ANCHOR_IMPACT_WRITE_U8(s_object, 0x05, r[IMP_MODE]);
+}
+
 static void apply_root(const AnchorImpactNativeSnapshot *snapshot)
 {
     const unsigned int *r = snapshot->root;
+    const void *clip;
+    unsigned int i, callback;
     ANCHOR_IMPACT_WRITE_I32(s_state, IMPACT_STATE_HP, (int)r[IMP_BOSS_HP]);
     ANCHOR_IMPACT_WRITE_I32(s_state, IMPACT_STATE_AMMO, (int)r[IMP_AMMO]);
     ANCHOR_IMPACT_WRITE_I32(s_state, IMPACT_STATE_MECH_HP,
                            (int)r[IMP_MECH_HP]);
-    /* Deliberately do not replace the boss AI callback, transform or combat
-     * pause here. Followers keep running their own spawn/introduction/attack
-     * AI; the authority owns the shared health and ammunition. This avoids
-     * freezing or suppressing the boss's multi-frame introduction. */
+    /* Balberra keeps the actual HP in root+AC. FUN_8020407C republishes it
+     * to shared+60 every update; changing only the HUD pool is undone. */
+    if (s_encounter == 3u)
+        ANCHOR_IMPACT_WRITE_I32(s_task, 0xAC, (int)r[IMP_BOSS_HP]);
+    /* Let each native introduction finish creating its task graph. An early
+     * phase jump could otherwise enter an action before its child exists. */
+    if (r[IMP_PAUSE] || ANCHOR_IMPACT_READ_U8(s_state, IMPACT_STATE_PAUSE))
+        return;
+    apply_aux(r);
+    ANCHOR_IMPACT_WRITE_U32(s_state, IMPACT_STATE_CLOCK, r[IMP_CLOCK]);
+    clip = anchor_impact_clip_data(s_encounter, r[IMP_CLIP]);
+    if (clip) func_801D2EE4_5FE2C4(s_object, clip);
+    callback = anchor_impact_phase_callback(s_encounter, r[IMP_PHASE]);
+    if (callback)
+    {
+        ANCHOR_IMPACT_SET_AI(s_task, callback |
+            ((unsigned int)ANCHOR_IMPACT_AI(s_task) & IMPACT_CALLBACK_DISABLED));
+        for (i = 0; i < ANCHOR_IMPACT_PRIVATE_WORDS; ++i)
+            if (anchor_impact_private_used(s_encounter, i))
+                ANCHOR_IMPACT_WRITE_U32(s_task, anchor_impact_private_offset(i),
+                                       r[IMP_PRIVATE + i]);
+        ANCHOR_IMPACT_WRITE_U32(s_task, 0x64, r[IMP_FLAGS]);
+        ANCHOR_IMPACT_WRITE_U16(s_task, 0x3C, r[IMP_COLLIDER_X]);
+        ANCHOR_IMPACT_WRITE_U16(s_task, 0x3E, r[IMP_COLLIDER_Y]);
+        ANCHOR_IMPACT_WRITE_U16(s_task, 0x40, r[IMP_COLLIDER_Z]);
+    }
+    apply_transform(snapshot);
+}
+
+static void apply_shared_view(const AnchorImpactNativeSnapshot *snapshot)
+{
+    unsigned int i;
+    const unsigned int *r = snapshot->root;
+    if (r[IMP_PAUSE] || ANCHOR_IMPACT_READ_U8(s_state, IMPACT_STATE_PAUSE)) return;
+    apply_transform(snapshot);
+    for (i = 0; i < ANCHOR_IMPACT_MECH_OBJECTS; ++i)
+    {
+        void *object = ANCHOR_IMPACT_READ_PTR(s_state, s_mech_offsets[i]);
+        if (pointer_valid(object) && (r[IMP_MECH_MASK] & (1u << i)))
+            apply_pose(object, &r[IMP_MECH_POSES + i * ANCHOR_IMPACT_POSE_WORDS]);
+    }
+    for (i = 0; i < 6; ++i)
+        ANCHOR_IMPACT_WRITE_U32(s_state, 0xA0 + i * 4, r[IMP_CAMERA + i]);
+    ANCHOR_IMPACT_WRITE_U16(s_state, 0xBA, r[IMP_CAMERA + 6]);
 }
 
 int anchor_impact_native_apply(const AnchorImpactNativeSnapshot *snapshot)
@@ -380,16 +636,25 @@ int anchor_impact_native_world_paused(void)
 RECOMP_HOOK("func_80034734_35334")
 void anchor_impact_native_scheduler_begin(void)
 {
+    anchor_impact_visuals_begin_frame();
     if (!s_active)
         return;
     if (s_pending_valid && bound_live())
     {
         apply_root(&s_pending);
+        s_view = s_pending;
+        s_view_valid = 1;
         s_pending_valid = 0;
     }
-    /* This implementation deliberately never freezes the boss AI. Holding it
-     * races the boss's multi-frame spawn/introduction (and any transient
-     * scheduler pause mask), and a failed restore would strand the AI as a
-     * no-op. Followers keep running their own AI; the authority owns the
-     * shared health, ammunition and clock. */
+    /* Keep the native graph alive through introductions and transitions.
+     * Combat callbacks use the allowlisted phase and native scalar state
+     * adopted above; no foreign pointers enter the scheduler. */
+}
+
+RECOMP_HOOK_RETURN("func_80034734_35334")
+void anchor_impact_native_scheduler_end(void)
+{
+    if (s_active && !s_owner && s_view_valid && !s_paused && bound_live())
+        apply_shared_view(&s_view);
+    anchor_impact_visuals_render();
 }

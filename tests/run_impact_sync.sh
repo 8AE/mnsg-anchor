@@ -11,4 +11,14 @@ fi
 "$HOST_COMPILER" "${TEST_FLAGS[@]}" tests/test_impact_codec.c \
     src/utils/anchor_impact_codec.c -o "$TEST_DIR/codec"
 "$TEST_DIR/codec"
-PYTHONPATH=py python3 -m unittest discover -s tests -p 'test_impact_transport.py'
+for module in native damage; do
+    "$HOST_COMPILER" "${TEST_FLAGS[@]}" "tests/test_impact_${module}.c" -o "$TEST_DIR/$module"
+    "$TEST_DIR/$module"
+done
+"$HOST_COMPILER" "${TEST_FLAGS[@]}" tests/test_impact_players_native.c \
+    src/utils/anchor_impact_players_codec.c -o "$TEST_DIR/players"
+"$TEST_DIR/players"
+"$HOST_COMPILER" "${TEST_FLAGS[@]}" tests/test_impact_visuals_native.c \
+    src/utils/anchor_impact_visual_codec.c -o "$TEST_DIR/visuals"
+"$TEST_DIR/visuals"
+PYTHONPATH=py python3 -m unittest discover -s tests -p 'test_impact*.py'

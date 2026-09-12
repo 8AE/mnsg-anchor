@@ -15,6 +15,8 @@ extern void recomp_free(void *);
 #include "anchor_impact_sync.h"
 #include "anchor_impact_native.h"
 #include "anchor_impact_damage.h"
+#include "anchor_impact_players.h"
+#include "anchor_impact_visuals.h"
 #include "anchor_dialog.h"
 #include "anchor_player_models.h"
 #include "item_sync.h"
@@ -51,6 +53,7 @@ static void clear_context(void)
     s_pending_epoch = 0;
     anchor_impact_native_set_role(0, 0, 0);
     anchor_impact_damage_set_context(0, 0, 0, 0);
+    anchor_impact_players_set_authority(0, 0);
 }
 
 static int encounter_changed(const AnchorImpactStatus *status)
@@ -66,8 +69,9 @@ void anchor_impact_sync_frame(void)
     char *json;
     const char *state = "null";
     unsigned int stage, encounter, visit;
-    int active, paused, ready, changed, needs_state, owner, epoch, i;
+    int active, paused, world_paused, ready, changed, needs_state, owner, epoch, i;
 
+    anchor_impact_visuals_begin_frame();
     anchor_impact_native_tick();
     encounter = anchor_impact_native_encounter();
     stage = anchor_impact_native_stage();
@@ -96,17 +100,21 @@ void anchor_impact_sync_frame(void)
         clear_context();
         s_visit = 0;
         s_active = 0;
+        anchor_impact_players_reset();
+        anchor_impact_visuals_tick(0);
         return;
     }
     s_active = 1;
     paused = local_world_paused();
+    world_paused = paused;
     visit = anchor_impact_native_visit();
     if (visit != s_visit)
     {
         clear_context();
         s_visit = visit;
+        anchor_impact_players_reset();
     }
-    epoch = anchor_player_models_get_epoch();
+    epoch = (int)visit;
     if (s_pending_hit.sequence && s_pending_epoch != epoch)
         s_pending_hit.sequence = 0;
 
@@ -150,6 +158,8 @@ void anchor_impact_sync_frame(void)
         s_can_publish = 0;
         anchor_impact_native_set_role(1, 0, 1);
         anchor_impact_damage_set_context(1, 0, 1, s_context);
+        anchor_impact_players_tick(0);
+        anchor_impact_visuals_tick(0);
         return;
     }
     recomp_free(json);
@@ -180,6 +190,8 @@ void anchor_impact_sync_frame(void)
         s_can_publish = 0;
         anchor_impact_native_set_role(1, 0, 1);
         anchor_impact_damage_set_context(1, 0, 1, s_context);
+        anchor_impact_players_tick(0);
+        anchor_impact_visuals_tick(0);
         return;
     }
     if (changed)
@@ -206,6 +218,9 @@ void anchor_impact_sync_frame(void)
     paused = paused || s_status.paused || !s_role;
     anchor_impact_native_set_role(1, owner, paused);
     anchor_impact_damage_set_context(1, owner, paused, s_context);
+    anchor_impact_players_set_authority((unsigned int)s_status.owner, s_status.term);
+    anchor_impact_players_tick(active && !world_paused && !s_status.paused);
+    anchor_impact_visuals_tick(active && !paused);
 
     if (!owner || paused)
         return;
