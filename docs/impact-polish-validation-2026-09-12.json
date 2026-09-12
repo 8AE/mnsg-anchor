@@ -1,0 +1,76 @@
+{
+  "date": "2026-09-12",
+  "branch": "impact_syncing",
+  "base_commit": "60164ce4ac1b301138ba991d1504b2597ba8ae0f",
+  "protocol": 4,
+  "checkpoint_words": 165,
+  "changes": [
+    "Independent local camera and FOV",
+    "Gold remote reticles with native TEXEL0 alpha",
+    "150 ms boss/attack render interpolation, stable generation handles",
+    "Three-tick remote cursor and shared mech smoothing; native poses restored before AI and on promotion"
+  ],
+  "python": {
+    "run": 264,
+    "skipped": 1,
+    "result": "pass"
+  },
+  "focused_impact_python": 34,
+  "native_regressions": {
+    "undefined_behavior_sanitizer": "pass",
+    "groups": 5,
+    "cases": [
+      "local camera and aim untouched",
+      "mech interpolation and native restoration",
+      "cursor mesh, color combiner and shortest-arc interpolation",
+      "identity stable across insertion and renewed after removal",
+      "atomic frames, jitter, gaps, despawn, teleport and owner reset",
+      "unchanged damage authority"
+    ]
+  },
+  "local_anchor": {
+    "revision": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "listener": "127.0.0.1:43393",
+    "clients": 3,
+    "render_pages": 4,
+    "render_objects": 64,
+    "frame_bytes": 6759,
+    "sender_excluded": true,
+    "team_isolated": true,
+    "cursor_and_controls": true,
+    "server_stopped": true
+  },
+  "packages": [
+    {
+      "file": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 457530,
+      "sha256": "e168857f00ddd3a311abf1168b0a89211cc39d99f9dc4ac7b993af3f4c915cc4",
+      "integrity": "pass",
+      "embedded_source_match": "pass",
+      "isolated_import": "pass"
+    },
+    {
+      "file": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 458047,
+      "sha256": "0b5658c979ca1ea18184ed73ef411ecf46b7991f1094eac698f8031603562aa9",
+      "integrity": "pass",
+      "embedded_source_match": "pass",
+      "isolated_import": "pass"
+    }
+  ],
+  "documentation": {
+    "local_build": "pass",
+    "tests": 29,
+    "site_validation_errors": 0,
+    "published": false
+  },
+  "live_game": {
+    "recording_reviewed": "Screen Recording 2026-09-12 at 16.45.44.mov",
+    "updated_build_two_client_session": "not run"
+  },
+  "limits": [
+    "Visual interpolation adds 150 ms display delay; local input and authoritative HP are not delayed.",
+    "Both participants need protocol-v4 build.",
+    "Cursor tint and camera changes have native-state/GBI tests but no new live GPU session."
+  ]
+}

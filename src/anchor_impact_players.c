@@ -15,6 +15,7 @@
 #include "anchor_impact_native.h"
 #include "anchor_remote_model_pool.h"
 #include "utils/anchor_impact_players_codec.h"
+#include "utils/anchor_impact_smoothing.h"
 
 #ifdef ANCHOR_IMPACT_PLAYERS_HOST_TEST
 #define RECOMP_HOOK(name)
@@ -91,6 +92,7 @@ typedef struct ImpactCursorSlot
     void *task;
     void *object;
     unsigned int cid, session;
+    AnchorImpactSmoothPose smooth;
     int active, seen;
     float position[3];
     unsigned short rotation[3];
@@ -261,7 +263,19 @@ static void cursor_render(ImpactCursorSlot *slot)
     IP_WRITE_U16(slot->object, 0x16, slot->rotation[1]);
     IP_WRITE_U16(slot->object, 0x18, slot->rotation[2]);
     IP_WRITE_U8(slot->object, 0x05, IP_CURSOR_MODE);
-    /* Preserve the native cyan/red vertex colors and texture transparency. */
+    /* The stock combiner is TEXEL0 RGB/alpha (FCFFFFFF FFFCF279).
+     * Replace RGB only; the texture alpha still cuts out the native reticle.
+     * The retained task's D0..EF block fits exactly four GBI commands. */
+    IP_WRITE_U32(slot->task, 0xD0, 0x06000000u);
+    IP_WRITE_U32(slot->task, 0xD4, (unsigned int)(unsigned long)D_8020A728_635B08);
+    IP_WRITE_U32(slot->task, 0xD8, 0xFA000000u);
+    IP_WRITE_U32(slot->task, 0xDC, 0xFFCC40FFu); /* gold; local stays cyan/red */
+    IP_WRITE_U32(slot->task, 0xE0, 0xFCFFFFFFu);
+    IP_WRITE_U32(slot->task, 0xE4, 0xFFFDF2F9u); /* RGB=PRIMITIVE, alpha=TEXEL0 */
+    IP_WRITE_U32(slot->task, 0xE8, 0xB8000000u);
+    IP_WRITE_U32(slot->task, 0xEC, 0);
+    IP_WRITE_U32(slot->object, 0x30,
+        (unsigned int)(unsigned long)((unsigned char *)slot->task + 0xD0) | 0x60000000u);
     show_object(slot->object);
 }
 
@@ -375,7 +389,16 @@ static void impact_cursor_update(void *task, void *object)
     {
         if (s_cursors[index].task != task)
             continue;
-        cursor_render(&s_cursors[index]);
+        {
+            unsigned int i;
+            ImpactCursorSlot *slot = &s_cursors[index];
+            impact_pose_step(&slot->smooth);
+            for (i = 0; i < 3; ++i) {
+                slot->position[i] = impact_pose_float(slot->smooth.current[i]);
+                slot->rotation[i] = (unsigned short)slot->smooth.current[3+i];
+            }
+            cursor_render(slot);
+        }
         return;
     }
 }
@@ -399,6 +422,7 @@ static void release_cursor(ImpactCursorSlot *slot)
     refresh_handle(&slot->task, &slot->object, impact_cursor_update);
     slot->cid = slot->session = 0;
     slot->active = slot->seen = 0;
+    slot->smooth.valid = 0;
 }
 
 static void release_shot(ImpactShotSlot *slot)
@@ -685,15 +709,21 @@ static void apply_cursors(const AnchorImpactPlayerStatus *status)
         }
         if (!slot)
             continue;
+        {
+            unsigned int i, pose[11] = {0};
+            if (slot->cid != row[0] || slot->session != row[1] || !slot->active)
+                slot->smooth.valid = 0;
+            for (i = 0; i < 3; ++i) { pose[i] = row[4+i]; pose[3+i] = row[7+i]; }
+            pose[10] = row[3] != 1;
+            impact_pose_offer(&slot->smooth, pose);
+            for (i = 0; i < 3; ++i) {
+                slot->position[i] = impact_pose_float(slot->smooth.current[i]);
+                slot->rotation[i] = (unsigned short)slot->smooth.current[3+i];
+            }
+        }
         slot->cid = row[0];
         slot->session = row[1];
         slot->active = row[3] == 1u;
-        slot->position[0] = bits_float(row[4]);
-        slot->position[1] = bits_float(row[5]);
-        slot->position[2] = bits_float(row[6]);
-        slot->rotation[0] = (unsigned short)row[7];
-        slot->rotation[1] = (unsigned short)row[8];
-        slot->rotation[2] = (unsigned short)row[9];
         slot->seen = 1;
         if ((slot->active && cursor_ensure(slot)) || slot->object)
             cursor_render(slot);

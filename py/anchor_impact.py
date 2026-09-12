@@ -18,7 +18,7 @@ from anchor_boss_transport import (
     positive,
 )
 
-VERSION = 3
+VERSION = 4
 # The transport room is the live Impact stage; ordinary roomId is unrelated in
 # title-menu boss rush. Every advertisement and operation also names the boss.
 ROOM = 0x0220
@@ -29,7 +29,7 @@ MAX_STATE_BYTES = 4096
 # Battle boss HP at +0x60, player/mech Ryo ammo at +0x64, mech HP at +0x68,
 # combat pause at +0x2C0, per-encounter clock at +0x2C8, plus the root model
 # transform/animation mirrored for visible alignment.
-ROOT_WORDS = 172
+ROOT_WORDS = 165
 DAMAGE_AMOUNTS = tuple(range(1, 256))
 
 IMPACT_ENCOUNTER_MIN = 1

@@ -84,9 +84,21 @@ static void setup(void) {
     TP(D_80167FC0_168BC0+8,4) = (void *)(uintptr_t)0x80210000;
 }
 int main(void) {
-    unsigned int i, bad[29], bases[6];
+    unsigned int i, bad[29], bases[6], original_id, inserted_id;
     setup(); owner = 1; anchor_impact_visuals_tick(1);
     assert(sent.count == 1 && sent.rows[0][1] == 1 && sent.rows[0][17] == recipe.file);
+    original_id = sent.rows[0][0];
+    /* Inserting a model ahead of the boss must not relabel the boss. */
+    memcpy(overflow_models[0],model,sizeof(model));
+    TP(overflow_models[0],0) = model; TP(boss,0x18) = overflow_models[0];
+    anchor_impact_visuals_tick(1);
+    assert(sent.count == 2 && sent.rows[1][0] == original_id);
+    inserted_id = sent.rows[0][0];
+    TP(boss,0x18) = model; anchor_impact_visuals_tick(1);
+    assert(sent.count == 1 && sent.rows[0][0] == original_id);
+    TP(boss,0x18) = overflow_models[0]; anchor_impact_visuals_tick(1);
+    assert(sent.rows[0][0] != inserted_id && sent.rows[1][0] == original_id);
+    TP(boss,0x18) = model; anchor_impact_visuals_tick(1);
     TU32(model,0x2C) = 0x48009999; s_capture.count = 0;
     assert(!walk(0)); /* never replace a visible unsupported boss with an empty frame */
     TU32(model,0x2C) = recipe.model;
@@ -136,6 +148,9 @@ int main(void) {
     frame = sent; frame.count = 2; memcpy(frame.rows[1],frame.rows[0],sizeof(frame.rows[0]));
     assert(anchor_impact_visual_encode(&frame,received_json,sizeof(received_json)));
     assert(!anchor_impact_visual_decode(received_json,&frame)); /* duplicate slot */
+    frame.count = 2; frame.rows[1][0] += 64; /* new generation cannot alias an occupied slot */
+    assert(anchor_impact_visual_encode(&frame,received_json,sizeof(received_json)));
+    assert(!anchor_impact_visual_decode(received_json,&frame));
     puts("Impact native render, texture bounds, alpha and retained lifetime tests passed");
     return 0;
 }

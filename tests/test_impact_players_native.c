@@ -77,6 +77,26 @@ int main(void) {
     retained = s_cursors[0].object;
     assert(IP_READ_U8(retained, 5) == 9 && TU16(retained, 0x16) == 600);
     assert(TF32(retained, 8) == 2 && !(IP_READ_U8(retained, 0x64) & 1));
+    /* Tint uses the real mesh and preserves TEXEL0 alpha in both cycles. */
+    assert(TU32(s_cursors[0].task, 0xDC) == 0xFFCC40FF);
+    assert(((TU32(s_cursors[0].task, 0xE4) >> 15) & 7) == 3);
+    assert(((TU32(s_cursors[0].task, 0xE4) >> 6) & 7) == 3);
+    assert(((TU32(s_cursors[0].task, 0xE4) >> 9) & 7) == 1);
+    assert((TU32(s_cursors[0].task, 0xE4) & 7) == 1);
+    assert(TU32(s_cursors[0].task, 0xE8) == 0xB8000000);
+    assert(TU32(local_object, 0x30) == 0); /* local material untouched */
+    /* New cursor samples move on native ticks; repeated samples do not restart
+     * interpolation. Crossing 1024 follows the short arc. */
+    status.cursors[0][4] = float_bits(14);
+    status.cursors[0][7] = 24;
+    apply_cursors(&status); assert(TF32(retained, 8) == 2);
+    impact_cursor_update(s_cursors[0].task, retained);
+    assert(TF32(retained, 8) == 6 && TU16(retained, 0x14) == 1016);
+    apply_cursors(&status);
+    impact_cursor_update(s_cursors[0].task, retained);
+    assert(TF32(retained, 8) == 10 && TU16(retained, 0x14) == 8);
+    impact_cursor_update(s_cursors[0].task, retained);
+    assert(TF32(retained, 8) == 14 && TU16(retained, 0x14) == 24);
     /* Pause and returning peer reuse one retained object, with no hidden leak. */
     for (i = 0; i < 50; ++i) {
         anchor_impact_players_reset(); assert(IP_READ_U8(retained, 0x64) & 1);

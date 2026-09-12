@@ -36,7 +36,7 @@ static int integer(Input *in, unsigned int *out)
 int anchor_impact_visual_row_valid(const unsigned int *r)
 {
     unsigned int i;
-    if (!r[0] || r[0] > 64 || !r[1] || r[1] > 121 || r[2] > 38 ||
+    if (!r[0] || !r[1] || r[1] > 121 || r[2] > 38 ||
         r[3] > 2 || (r[3] && !r[2]) || r[5] > 15 || (r[6] & ~0x3FF01u)) return 0;
     for (i = 7; i <= 16; ++i) {
         if (i >= 10 && i <= 12) { if (r[i] > 65535) return 0; }
@@ -63,7 +63,8 @@ int anchor_impact_visual_decode(const char *json, AnchorImpactVisualFrame *frame
             for (j = 0; j < ANCHOR_IMPACT_VISUAL_WORDS; ++j)
                 if ((j && !take(&in, ',')) || !integer(&in, &frame->rows[row][j])) return 0;
             if (!take(&in, ']') || !anchor_impact_visual_row_valid(frame->rows[row])) return 0;
-            for (i = 0; i < row; ++i) if (frame->rows[i][0] == frame->rows[row][0]) return 0;
+            for (i = 0; i < row; ++i) if (((frame->rows[i][0]-1) & 63u) ==
+                ((frame->rows[row][0]-1) & 63u)) return 0;
             ++frame->count; spaces(&in);
             if (in.p < in.end && *in.p == ']') break;
         }

@@ -2,9 +2,9 @@
 
 This branch implements a shared mech with independent native reticles, owner-executed
 controls, boss checkpoints and an owner-only stream of native render objects.
-Automated checks cover the native bridge and three real TCP clients. A new live
-battle has **not** been verified; this is not a certification of complete four-boss
-multiplayer behavior.
+The user's September 12 two-player test confirmed the reticles and exposed a
+shared camera and stepped remote movement. The refinements below have automated
+coverage; they have not yet been observed in a fresh live game session.
 
 ## Corrections from the recordings and native code
 
@@ -21,9 +21,11 @@ reticles. The first native cursor is constructed in `func_801CCA5C_5F7E3C`:
 | Render mode | `9` |
 | Aim | Native X/Y rotations, maintained by `func_801CCF74_5F8354` |
 
-Each remote participant gets a retained copy of that mesh, preserving the native
-cyan/red appearance and transparency. Cursors can overlap when players aim at the
-same point. There are no additional per-player tint or name labels in this change.
+Each remote participant gets a gold (`#FFCC40`) copy of that mesh, while the local
+reticle keeps its native cyan/red colors. The material overrides RGB but preserves
+TEXEL0 alpha in both combiner cycles, keeping the native transparent silhouette.
+Remote cursor movement settles over three native ticks; local aiming is unchanged.
+Cursors can overlap when players aim at the same point.
 Tasks are retained across pauses and hidden when inactive; stale task handles are
 rejected using native links, object ownership and callback identity.
 
@@ -45,12 +47,12 @@ evidence; historical instructions in the previous handoff are not current reques
 is the halfword at system `+0x3ADF4`. Valid native stages are `0x21C..0x223`,
 `0x239..0x23C`, and title-menu boss-rush stage `0x260`.
 
-The version-3 checkpoint contains **172 u32 words**, including:
+The version-4 checkpoint contains **165 u32 words**, including:
 
 - Boss HP, shared ammunition, mech HP, combat pause and battle clock.
 - Boss root pose, animation clip ID, phase callback ID, collision dimensions,
   render flags and an explicit per-boss mask of scalar task fields.
-- Ten cockpit/mech object poses and the shared camera position, target and FOV.
+- Ten cockpit/mech object poses. Camera position, target and FOV are not sent.
 - Thaisamba's auxiliary angle, countdown and bubble gate; Balberra/D'Etoile's
   auxiliary attack flags. Native pointer lists in these blocks remain local.
 
@@ -58,8 +60,9 @@ Callbacks, clips and asset recipes use fixed IDs resolved against the locally
 loaded USA overlay. No foreign task pointer, object pointer or callback address is
 accepted from the network. Phase and private-state adoption waits until both
 native introductions have cleared the combat-pause gate. Root/auxiliary state is
-applied before the native scheduler; camera and visible mech poses are reapplied
-after its update.
+applied before the native scheduler. Each player's native camera follows their own
+aim. Visible mech poses settle over three native ticks after the update; the local
+simulation pose is restored before the next AI/collision update and on promotion.
 
 All participants can submit combat buttons through `func_801D7670_602A50`. The
 owner merges held buttons and once-only press edges and executes the native
@@ -88,13 +91,21 @@ at `+0x1BC`, outside that source subtree.
 
 [impact-visual-recipes.json](impact-visual-recipes.json) records 121 model/file
 recipes and 38 material IDs from native constructors, clip records and bounded
-missile/body tables. Each 29-word row carries a slot ID, recipe/material IDs,
+missile/body tables. Each 29-word row carries a generation-and-slot handle, recipe/material IDs,
 primitive/environment color, renderer tags, mode, visibility, pose/frame and six
 file-relative segment bindings. Bindings must resolve within resident native
 assets; animated texture offsets and color alpha are preserved. Unknown recipes,
 unsupported bindings and unloaded assets do not become arbitrary native pointers.
 
-A follower uses only complete owner frames. Native matching objects are hidden
+A follower uses only complete owner frames. Six bounded snapshots supply a
+150 ms interpolation buffer for position, scale, wrapped native angles and forward
+animation frames. Completed packets still arrive at 8 Hz; rendering advances each
+native tick without increasing traffic. Native task/object lifetimes keep stable
+handles when traversal order changes. Spawn, despawn, asset changes and teleports
+snap; packet gaps hold the latest pose, then expire at 750 ms. No attack path is
+extrapolated. Pause, owner/session/visit changes and reconnect clear history.
+
+Native matching objects are hidden
 for rendering and restored before the next native update/capture. Replica tasks
 have no native AI or collision callbacks. When the authoritative graph is active,
 the old ballistic Ryo replay is hidden to avoid a second visual for the same shot.
@@ -102,6 +113,9 @@ On expiry, pause, owner change or unavailable assets, replicas are hidden and th
 native presentation is restored. Pools retain live tasks rather than allocating
 again on every pause. Traversal and object counts are bounded; overflow falls
 back to native presentation instead of publishing or hiding a partial graph.
+
+Both players need this build: protocol v4 removes seven camera words and uses
+generation handles. Older Impact packets are rejected rather than misread.
 
 ## Network contract
 
@@ -141,19 +155,19 @@ format; all participants need the updated package. `mod.toml` includes both
   native cursor recipe, input arbitration, shot capture, texture bounds, alpha,
   render visibility restoration, retained allocation over 50 pause cycles,
   plus Python transport/election/paging regressions.
-- Full Python suite: 259 tests run, one skipped; all executed tests passed.
+- Full Python suite: 264 tests run, one skipped; all executed tests passed.
 - `tools/test_impact_anchor_local.py --port 43393`: three real TCP clients against
   disposable loopback Anchor revision `bf7b43c10b19428ceba54772c7bae3abca44a345`;
   four-page/64-object delivery, sender exclusion, cross-team isolation, cursor
   and control transport. The temporary server changes only its listener address.
 - Release/debug MIPS builds and package import/integrity checks are recorded in
-  [impact-validation-2026-09-12.json](impact-validation-2026-09-12.json). Static packet audit reports zero errors/warnings, but only
+  [impact-polish-validation-2026-09-12.json](impact-polish-validation-2026-09-12.json). Static packet audit reports zero errors/warnings, but only
   inventories literal sends; the channel-specific tests cover generic sends.
 
-Live game automation was attempted with isolated temporary profiles. Computer Use
-returned **“Computer Use was not approved to use Goemon64Recompiled”** before any
-new battle could be driven. No new live two-client visual result is claimed, and
-no manual test is assigned to the user. Their normal game profile was unchanged.
+The supplied 16:45 recording is the user's two-player test of the preceding build.
+The independent-camera, tint and interpolation refinements above have not had a
+fresh live game run. The earlier automation restriction and baseline checks remain
+recorded in [impact-validation-2026-09-12.json](impact-validation-2026-09-12.json).
 
 Followers still maintain local native graphs for introductions, scene flow and
 future authority takeover. Checkpoints cover root/auxiliary scalar state; they do

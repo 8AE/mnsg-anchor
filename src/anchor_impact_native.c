@@ -1,4 +1,5 @@
 #include "anchor_impact_native.h"
+#include "utils/anchor_impact_smoothing.h"
 #include "anchor_impact_visuals.h"
 #include "anchor_boss_arenas.h"
 #include "anchor_boss_invite_world.h"
@@ -66,6 +67,13 @@ static int s_pending_valid;
 static AnchorImpactNativeSnapshot s_pending;
 static AnchorImpactNativeSnapshot s_view;
 static int s_view_valid;
+static struct MechPresentation {
+    AnchorImpactSmoothPose smooth;
+    void *object;
+    unsigned int model, file, saved[11];
+    int restore;
+} s_mech_view[ANCHOR_IMPACT_MECH_OBJECTS];
+static void restore_mech_presentation(int reset);
 static const unsigned short s_mech_offsets[ANCHOR_IMPACT_MECH_OBJECTS] = {
     0x1C, 0x20, 0x28, 0x44, 0x48, 0x4C, 0x50, 0x54, 0x58, 0x5C
 };
@@ -264,6 +272,7 @@ unsigned int anchor_impact_native_stage(void)
 
 void anchor_impact_native_reset(void)
 {
+    restore_mech_presentation(1);
     s_state = 0;
     s_task = 0;
     s_object = 0;
@@ -280,6 +289,7 @@ void anchor_impact_native_reset(void)
 
 void anchor_impact_native_set_role(int active, int owner, int paused)
 {
+    if (!active || owner || paused) restore_mech_presentation(1);
     if (!active)
     {
         s_pending_valid = 0;
@@ -366,9 +376,6 @@ static int snapshot_valid(const AnchorImpactNativeSnapshot *snapshot)
             if (j >= 3 && j < 6 ? p[j] > 65535u : !finite_word(p[j])) return 0;
         if (p[10] > 1u) return 0;
     }
-    for (i = 0; i < 6; ++i)
-        if (!finite_word(r[IMP_CAMERA + i])) return 0;
-    if (r[IMP_CAMERA + 6] > 65535u) return 0;
     if (r[IMP_AUX_KIND] > 2 ||
         (r[IMP_AUX_KIND] == 1 && (s_encounter != 2 || r[IMP_AUX_DATA] > 65535u ||
          r[IMP_AUX_DATA+2] > 255u || r[IMP_AUX_DATA+3] || r[IMP_AUX_DATA+4])) ||
@@ -443,6 +450,24 @@ static void apply_pose(void *object, const unsigned int *in)
         (ANCHOR_IMPACT_READ_U8(object, 0x64) & ~1u) | in[10]);
 }
 
+/* Restore the local native pose before AI/collision work; interpolated poses
+ * are display output and must never feed back into gameplay or promotion. */
+static void restore_mech_presentation(int reset)
+{
+    unsigned int i;
+    int live = s_bound && bound_live();
+    for (i = 0; i < ANCHOR_IMPACT_MECH_OBJECTS; ++i) {
+        struct MechPresentation *v = &s_mech_view[i];
+        if (v->restore && live && pointer_valid(v->object) &&
+            ANCHOR_IMPACT_READ_PTR(s_state, s_mech_offsets[i]) == v->object &&
+            ANCHOR_IMPACT_READ_U32(v->object, 0x2C) == v->model &&
+            ANCHOR_IMPACT_READ_U16(v->object, 0x34) == v->file)
+            apply_pose(v->object, v->saved);
+        v->restore = 0;
+        if (reset) { v->object = 0; v->smooth.valid = 0; }
+    }
+}
+
 int anchor_impact_native_capture(AnchorImpactNativeSnapshot *snapshot)
 {
     unsigned int *r;
@@ -488,12 +513,16 @@ int anchor_impact_native_capture(AnchorImpactNativeSnapshot *snapshot)
     {
         const void *object = ANCHOR_IMPACT_READ_PTR(s_state, s_mech_offsets[i]);
         if (!pointer_valid(object)) continue;
-        capture_pose(object, &r[IMP_MECH_POSES + i * ANCHOR_IMPACT_POSE_WORDS]);
+        const struct MechPresentation *v = &s_mech_view[i];
+        unsigned int *pose = &r[IMP_MECH_POSES + i * ANCHOR_IMPACT_POSE_WORDS];
+        if (v->restore && v->object == object &&
+            ANCHOR_IMPACT_READ_U32(object, 0x2C) == v->model &&
+            ANCHOR_IMPACT_READ_U16(object, 0x34) == v->file) {
+            unsigned int j;
+            for (j = 0; j < ANCHOR_IMPACT_POSE_WORDS; ++j) pose[j] = v->saved[j];
+        } else capture_pose(object, pose);
         r[IMP_MECH_MASK] |= 1u << i;
     }
-    for (i = 0; i < 6; ++i)
-        r[IMP_CAMERA + i] = ANCHOR_IMPACT_READ_U32(s_state, 0xA0 + i * 4);
-    r[IMP_CAMERA + 6] = ANCHOR_IMPACT_READ_U16(s_state, 0xBA);
     capture_aux(r);
     snapshot->encounter = s_encounter;
     snapshot->stage = s_stage;
@@ -569,12 +598,21 @@ static void apply_shared_view(const AnchorImpactNativeSnapshot *snapshot)
     for (i = 0; i < ANCHOR_IMPACT_MECH_OBJECTS; ++i)
     {
         void *object = ANCHOR_IMPACT_READ_PTR(s_state, s_mech_offsets[i]);
-        if (pointer_valid(object) && (r[IMP_MECH_MASK] & (1u << i)))
-            apply_pose(object, &r[IMP_MECH_POSES + i * ANCHOR_IMPACT_POSE_WORDS]);
+        struct MechPresentation *v = &s_mech_view[i];
+        if (pointer_valid(object) && (r[IMP_MECH_MASK] & (1u << i))) {
+            unsigned int model = ANCHOR_IMPACT_READ_U32(object, 0x2C);
+            unsigned int file = ANCHOR_IMPACT_READ_U16(object, 0x34);
+            if (v->object != object || v->model != model || v->file != file)
+                v->smooth.valid = 0;
+            v->object = object; v->model = model; v->file = file;
+            if (!v->restore) capture_pose(object, v->saved);
+            v->restore = 1;
+            impact_pose_offer(&v->smooth, &r[IMP_MECH_POSES + i * ANCHOR_IMPACT_POSE_WORDS]);
+            impact_pose_step(&v->smooth);
+            apply_pose(object, v->smooth.current);
+        } else v->smooth.valid = 0;
     }
-    for (i = 0; i < 6; ++i)
-        ANCHOR_IMPACT_WRITE_U32(s_state, 0xA0 + i * 4, r[IMP_CAMERA + i]);
-    ANCHOR_IMPACT_WRITE_U16(s_state, 0xBA, r[IMP_CAMERA + 6]);
+    /* FUN_801CC10C derives this client's camera from its own aim. */
 }
 
 int anchor_impact_native_apply(const AnchorImpactNativeSnapshot *snapshot)
@@ -637,6 +675,7 @@ RECOMP_HOOK("func_80034734_35334")
 void anchor_impact_native_scheduler_begin(void)
 {
     anchor_impact_visuals_begin_frame();
+    restore_mech_presentation(0);
     if (!s_active)
         return;
     if (s_pending_valid && bound_live())

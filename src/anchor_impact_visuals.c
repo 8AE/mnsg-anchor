@@ -36,6 +36,32 @@ typedef struct HiddenObject {
     unsigned char flags;
 } HiddenObject;
 static VisualSlot s_slots[ANCHOR_IMPACT_VISUAL_MAX];
+/* A traversal index is not an actor identity: inserting a new projectile can
+ * move every later row. Keep a generation and pool index across captures. */
+typedef struct SourceSlot {
+    void *task, *object;
+    unsigned int generation;
+    int seen;
+} SourceSlot;
+static SourceSlot s_sources[ANCHOR_IMPACT_VISUAL_MAX];
+static unsigned int s_generation;
+static unsigned int source_id(void *task, void *object)
+{
+    unsigned int i, free_slot = ANCHOR_IMPACT_VISUAL_MAX;
+    for (i = 0; i < ANCHOR_IMPACT_VISUAL_MAX; ++i) {
+        SourceSlot *s = &s_sources[i];
+        if (s->task == task && s->object == object) {
+            s->seen = 1; return (s->generation << 6) + i + 1;
+        }
+        if (!s->task && free_slot == ANCHOR_IMPACT_VISUAL_MAX) free_slot = i;
+    }
+    if (free_slot == ANCHOR_IMPACT_VISUAL_MAX) return 0;
+    /* Reserve the last generation to keep even slot 63 nonzero. */
+    if (++s_generation >= 0x3FFFFFFu) s_generation = 1;
+    s_sources[free_slot] = (SourceSlot){task, object, s_generation, 1};
+    return (s_generation << 6) + free_slot + 1;
+}
+
 static HiddenObject s_hidden[ANCHOR_IMPACT_VISUAL_MAX];
 static unsigned int s_hidden_count, s_stage, s_boss, s_visit;
 static void *s_manager;
@@ -195,7 +221,8 @@ static int walk(int hide)
                 IV_U8(object,0x64) |= 1;
             } else {
                 if (s_capture.count == ANCHOR_IMPACT_VISUAL_MAX) return 0;
-                row[0] = s_capture.count+1;
+                row[0] = source_id(task,object);
+                if (!row[0]) return 0;
                 for (i = 0; i < ANCHOR_IMPACT_VISUAL_WORDS; ++i)
                     s_capture.rows[s_capture.count][i] = row[i];
                 ++s_capture.count;
@@ -225,7 +252,7 @@ static int resolve(const unsigned int *r, unsigned int *bases)
 }
 static int render_row(const unsigned int *r)
 {
-    VisualSlot *slot = &s_slots[r[0]-1];
+    VisualSlot *slot = &s_slots[(r[0]-1)&63u];
     const AnchorImpactVisualRecipe *recipe = anchor_impact_visual_recipe(r[1]);
     unsigned int i, bases[6], mat, rgba = r[4];
     void *object;
@@ -287,15 +314,22 @@ void anchor_impact_visuals_tick(int active)
     anchor_impact_visuals_begin_frame(); hide_slots(); s_ready = 0;
     if (manager != s_manager) {
         for (i = 0; i < ANCHOR_IMPACT_VISUAL_MAX; ++i) s_slots[i].task = s_slots[i].object = 0;
+        for (i = 0; i < ANCHOR_IMPACT_VISUAL_MAX; ++i) s_sources[i].task = 0;
         s_manager = manager;
     }
+    if (!active || stage != s_stage || boss != s_boss || visit != s_visit ||
+        !anchor_impact_native_is_owner())
+        for (i = 0; i < ANCHOR_IMPACT_VISUAL_MAX; ++i) s_sources[i].task = 0;
     s_stage = stage; s_boss = boss; s_visit = visit;
     active = active && linked(manager) && anchor_impact_native_root_live();
     if (active) {
         anchor_impact_visual_catalog_init();
         if (anchor_impact_native_is_owner()) {
             s_capture.count = 0;
+            for (i = 0; i < ANCHOR_IMPACT_VISUAL_MAX; ++i) s_sources[i].seen = 0;
             if (walk(0) && anchor_impact_visual_encode(&s_capture,s_json,sizeof(s_json))) sample = s_json;
+            for (i = 0; i < ANCHOR_IMPACT_VISUAL_MAX; ++i)
+                if (!s_sources[i].seen) s_sources[i].task = 0;
         }
     }
     reply = anchor_impact_visuals_update(active,stage,boss,visit,sample);

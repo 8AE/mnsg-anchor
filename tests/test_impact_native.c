@@ -57,9 +57,9 @@ static void setup(void) {
 }
 int main(void) {
     AnchorImpactNativeSnapshot snapshot, bad;
-    unsigned int before, fallback;
+    unsigned int before, fallback, before_clip;
     setup();
-    assert(ANCHOR_IMPACT_ROOT_WORDS == 172);
+    assert(ANCHOR_IMPACT_ROOT_WORDS == 165);
     assert(anchor_impact_native_capture(&snapshot));
     assert(snapshot.root[IMP_PHASE] == 1 && snapshot.root[IMP_CLIP] == 1);
     assert(snapshot.root[IMP_MECH_MASK] == 1);
@@ -69,8 +69,6 @@ int main(void) {
     bad = snapshot; bad.root[IMP_PHASE] = 99;
     assert(!anchor_impact_native_apply(&bad));
     bad = snapshot; bad.root[IMP_MECH_POSES] = 0x7FC00000;
-    assert(!anchor_impact_native_apply(&bad));
-    bad = snapshot; bad.root[IMP_CAMERA] = 0x7F800000;
     assert(!anchor_impact_native_apply(&bad));
     bad = snapshot; bad.encounter = 2;
     assert(!anchor_impact_native_apply(&bad));
@@ -85,16 +83,35 @@ int main(void) {
     assert(TU32(state, 0x60) == 1800 && TU32(task, 0x0C) == 0x801E493C);
     assert(TF32(task, 0x70) == 3 && TF32(object, 0x28) == 12);
     assert(TF32(object, 0x08) == 50 && clip_calls == 1);
-    /* The shared camera and cockpit survive the follower's frame update. */
-    TF32(hand, 0x08) = 0; TF32(state, 0xA0) = 0;
+    /* Shared hands survive the update, but local aim/camera/FOV stay local. */
+    TF32(hand, 0x08) = 0;
+    for (before = 0; before < 6; ++before) TF32(state, 0xA0 + before*4) = 100 + before;
+    TF32(state, 4) = -50; TF32(state, 8) = 15; TU16(state, 0xBA) = 1234;
     anchor_impact_native_scheduler_end();
-    assert(TF32(hand, 0x08) == 24 && TF32(state, 0xA0) == 12);
-    anchor_impact_native_set_role(1, 1, 0); TF32(hand, 0x08) = 5;
+    assert(TF32(hand, 0x08) == 24);
+    for (before = 0; before < 6; ++before) assert(TF32(state, 0xA0 + before*4) == 100 + before);
+    assert(TF32(state, 4) == -50 && TF32(state, 8) == 15 && TU16(state, 0xBA) == 1234);
+    /* A new shared hand pose settles in three render ticks. The native pose
+     * is restored before the next simulation, so smoothing cannot affect hits. */
+    snapshot.root[IMP_MECH_POSES] = impact_pose_bits(36);
+    assert(anchor_impact_native_apply(&snapshot)); anchor_impact_native_scheduler_begin();
+    assert(TF32(hand, 0x08) == 0);
+    TF32(hand, 0x08) = 7;
+    anchor_impact_native_scheduler_end(); assert(TF32(hand, 0x08) == 28);
+    assert(anchor_impact_native_capture(&bad));
+    assert(impact_pose_float(bad.root[IMP_MECH_POSES]) == 7);
+    anchor_impact_native_scheduler_begin(); assert(TF32(hand, 0x08) == 7);
+    anchor_impact_native_scheduler_end(); assert(TF32(hand, 0x08) == 32);
+    anchor_impact_native_scheduler_begin();
+    anchor_impact_native_scheduler_end(); assert(TF32(hand, 0x08) == 36);
+    anchor_impact_native_set_role(1, 1, 0);
+    assert(TF32(hand, 0x08) == 7 && !s_mech_view[0].smooth.valid);
+    TF32(hand, 0x08) = 5;
     anchor_impact_native_scheduler_end(); assert(TF32(hand, 0x08) == 5);
     /* Do not jump out of a native intro before its graph has been created. */
-    state[0x2C0] = 1; before = TU32(task, 0x0C); snapshot.root[IMP_BOSS_HP] = 1700;
+    state[0x2C0] = 1; before = TU32(task, 0x0C); before_clip = clip_calls; snapshot.root[IMP_BOSS_HP] = 1700;
     assert(anchor_impact_native_apply(&snapshot)); anchor_impact_native_scheduler_begin();
-    assert(TU32(state, 0x60) == 1700 && TU32(task, 0x0C) == before && clip_calls == 1);
+    assert(TU32(state, 0x60) == 1700 && TU32(task, 0x0C) == before && clip_calls == before_clip);
     /* A replaced root cannot receive a queued checkpoint or cached view. */
     TP(state, 0x1D8) = hand; assert(!anchor_impact_native_root_live());
     assert(!anchor_impact_native_apply(&snapshot));

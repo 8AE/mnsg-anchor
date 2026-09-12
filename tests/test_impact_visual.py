@@ -110,6 +110,82 @@ class ImpactVisualTests(unittest.TestCase):
         self.b["connected"] = False
         self.assertIsNone(self.view(10.4))
 
+    def receive_sample(self, now, x=0, angle=0, handle=65, frame=0):
+        row = rows(1)[0]
+        row[0] = handle
+        row[6] = 0
+        row[7:10] = [visual._bits(x), 0, 0]
+        row[10:13] = [angle, 0x8000, 0]
+        row[13:16] = [visual._bits(1)] * 3
+        row[16] = visual._bits(frame)
+        for packet in self.send(now, [row]):
+            self.assertTrue(self.rx.receive(self.b, self.guest, packet, now))
+        return row
+
+    def test_render_interpolates_every_tick_with_shortest_arc(self):
+        first = self.receive_sample(10, 0, 1000, frame=2)
+        self.assertEqual(self.view(10), [first])  # no startup blank frame
+        self.receive_sample(10.125, 12, 24, frame=8)
+        positions = []
+        for now in (10.15, 10.175, 10.2, 10.225, 10.25, 10.275):
+            row = self.view(now)[0]
+            positions.append(visual._float(row[7]))
+            self.assertEqual(row[11], 0x8000)
+            self.assertTrue(visual.rows_valid([row]))
+        for actual, expected in zip(positions, (0, 2.4, 4.8, 7.2, 9.6, 12)):
+            self.assertAlmostEqual(actual, expected, places=4)
+        middle = self.view(10.2125)[0]
+        self.assertEqual(middle[10], 0)
+        self.assertAlmostEqual(visual._float(middle[16]), 5)
+        self.assertEqual(visual._float(self.rx.latest[0][7]), 12)  # never mutate receipt
+
+    def test_spawn_despawn_reuse_teleport_and_animation_reset(self):
+        self.receive_sample(10, 0, frame=30)
+        self.receive_sample(10.125, 6, frame=1)
+        self.assertEqual(visual._float(self.view(10.2)[0][16]), 1)
+        born = self.receive_sample(10.25, 60, handle=129)
+        self.assertEqual(self.view(10.25), [born])  # same slot, different lifetime
+        jumped = self.receive_sample(10.375, 1500, handle=129)
+        self.assertEqual(self.view(10.45), [jumped])
+        for packet in self.send(10.5, []): self.rx.receive(self.b, self.guest, packet, 10.5)
+        self.assertEqual(self.view(10.5), [])  # no ghost attacks in delay buffer
+        resumed = self.receive_sample(11, 1, handle=193)
+        self.assertEqual(self.view(11), [resumed])
+        self.assertEqual(len(self.rx.history), 1)
+
+    def test_jitter_gaps_hold_latest_then_expire_and_history_is_bounded(self):
+        for n, now in enumerate((10, 10.14, 10.30, 10.43, 10.58, 10.72, 10.89, 11.02)):
+            self.receive_sample(now, n * 10)
+        self.assertEqual(len(self.rx.history), 6)
+        self.assertEqual(visual._float(self.view(11.5)[0][7]), 70)  # no extrapolation
+        self.assertIsNone(self.view(11.8))
+        self.guest.term += 1
+        self.assertIsNone(self.view(11.8))
+        self.assertEqual(len(self.rx.history), 0)
+
+    def test_animated_texture_offsets_do_not_disable_motion_smoothing(self):
+        a = self.receive_sample(10, 0)
+        b = list(a); b[7] = visual._bits(12); b[20] -= 64
+        out = visual.blend_row(a, b, .5)
+        self.assertEqual(visual._float(out[7]), 6)
+        self.assertEqual(out[20], a[20])  # texture stays on the buffered frame
+        b[19] -= 1  # changing the asset file is a discontinuity
+        self.assertEqual(visual.blend_row(a, b, .5), b)
+
+    def test_generation_handles_keep_slot_and_wire_bounds(self):
+        sample = rows()
+        for i, row in enumerate(sample): row[0] = (0x3FFFFFE << 6) + i + 1
+        self.assertTrue(visual.rows_valid(sample))
+        packets = self.send(sample=sample)
+        self.assertEqual(len(packets), 4)
+        for packet in packets:
+            self.assertLessEqual(len(json.dumps(packet, separators=(",", ":")).encode())+1,
+                                 visual.PACKET_BYTES)
+            self.assertTrue(self.rx.receive(self.b, self.guest, packet, 10))
+        self.assertEqual(self.view(), sample)
+        sample[1][0] = sample[0][0] - 64  # distinct ID, same pool slot is invalid
+        self.assertFalse(visual.rows_valid(sample))
+
     def test_no_render_traffic_without_an_eligible_peer(self):
         self.a["players"] = {1:self.a["players"][1]}
         self.assertEqual(self.send(),[])
