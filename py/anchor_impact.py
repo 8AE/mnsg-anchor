@@ -1,8 +1,8 @@
 """Shared giant-robot Impact-battle snapshot and transient coordinator.
 
-All four Impact bosses (Kashiwagi, Thaisamba, Balberra, D'Etoile) share the
-dedicated file_13 battle-state block, so a single transport with a room set to
-the live Impact stage serves every encounter. The native codec validates the
+All four Impact bosses share the dedicated file_13 battle-state block.
+Kashiwagi and Taisamba 2 have complete sync profiles; the later bosses remain
+native-only until their graph/lifecycle handling is implemented. The native codec validates the
 meaning of every word, including float bit patterns and the overlay callback.
 Python never accepts arbitrary object fields or pointers.
 """
@@ -18,7 +18,7 @@ from anchor_boss_transport import (
     positive,
 )
 
-VERSION = 6
+VERSION = 7
 # The transport room is the live Impact stage; ordinary roomId is unrelated in
 # title-menu boss rush. Every advertisement and operation also names the boss.
 ROOM = 0x0220
@@ -29,23 +29,31 @@ MAX_STATE_BYTES = 4096
 # Battle boss HP at +0x60, player/mech Ryo ammo at +0x64, mech HP at +0x68,
 # combat pause at +0x2C0, per-encounter clock at +0x2C8, plus the root model
 # transform/animation mirrored for visible alignment.
-ROOT_WORDS = 165
+ROOT_WORDS = 197
 DAMAGE_AMOUNTS = tuple(range(1, 256))
 
 IMPACT_ENCOUNTER_MIN = 1
 IMPACT_ENCOUNTER_MAX = 4
 IMPACT_STAGE_MIN = 0x021C
 IMPACT_STAGE_MAX = 0x0223
-# The title-menu "Consecutive Fighting! Large Boss" mode plays all four bosses
-# in this dedicated stage.
+# The title-menu "Consecutive Fighting! Large Boss" mode advances one stage
+# per boss, from Kashiwagi (0x260) through D'Etoile (0x263).
 IMPACT_BOSS_RUSH_STAGE = 0x0260
+IMPACT_BOSS_RUSH_LAST = 0x0263
 
 
 def _impact_stage(stage):
     return (type(stage) is int and
             ((IMPACT_STAGE_MIN <= stage <= IMPACT_STAGE_MAX) or
              0x0239 <= stage <= 0x023C or
-             stage == IMPACT_BOSS_RUSH_STAGE))
+             IMPACT_BOSS_RUSH_STAGE <= stage <= IMPACT_BOSS_RUSH_LAST))
+
+
+def sync_supported(stage, boss):
+    """Native stage recognition is broader than completed sync support."""
+    return (_impact_stage(stage) and type(boss) is int and boss in (1, 2) and
+            (not IMPACT_BOSS_RUSH_STAGE <= stage <= IMPACT_BOSS_RUSH_LAST or
+             boss == stage - IMPACT_BOSS_RUSH_STAGE + 1))
 
 
 def _u32(word):
@@ -210,7 +218,7 @@ class ImpactTransport(BossTransport):
             self._host_ctx(ctx), sequence, amount, now, target)
 
     def update(self, ctx, ready, visit, paused, supplied, now):
-        ready = bool(ready and _impact_stage(self.room) and 1 <= self.encounter <= 4)
+        ready = bool(ready and sync_supported(self.room, self.encounter))
         if not isinstance(supplied, dict) or not self._state_scope(supplied):
             supplied = None
         return super().update(self._host_ctx(ctx, visit if ready else 0),
@@ -399,8 +407,7 @@ class ImpactPlayerTransport:
     def update(self, ctx, ready, stage, boss, visit, sample, now):
         active = bool(ready and ctx["connected"] and positive(ctx["cid"]) and
                       positive(ctx["session"]) and positive(visit) and
-                      _impact_stage(stage) and
-                      type(boss) is int and 1 <= boss <= 4)
+                      sync_supported(stage, boss))
         scope = (ctx["session"], ctx["team"], stage, boss) if active else None
         if scope != self.scope or active and visit != self.visit:
             self.reset()

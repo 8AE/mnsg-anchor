@@ -22,8 +22,8 @@
  * Thaisamba, Balberra, D'Etoile). Their intro cutscene stages are 0x0239..0x023C
  * and their high-speed minigames 0x021C..0x021F. All are joined through the
  * dedicated native Impact-stage transition rather than the ordinary room
- * loader. Stage 0x0224 is an unused fifth slot and the boss rush mode uses its
- * own stage 0x0260, so neither is treated as an Impact arena. */
+ * loader. Stage 0x0224 is an unused fifth slot. Boss rush uses 0x0260..0x0263,
+ * which are separate battle scopes and do not support these invitations. */
 #define ANCHOR_BOSS_ROOM_KASHIWAGI 0x0220u
 #define ANCHOR_BOSS_ROOM_THAISAMBA 0x0221u
 #define ANCHOR_BOSS_ROOM_BALBERRA 0x0222u

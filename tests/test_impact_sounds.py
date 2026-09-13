@@ -57,6 +57,21 @@ class ImpactSoundTests(unittest.TestCase):
         self.assertEqual(self.view(),"00000000")
         self.assertEqual(len(self.rx.queue),0)
 
+    def test_taisamba_voice_whirlwind_and_intro_cues(self):
+        for ctx in (self.a,self.b):
+            for player in ctx["players"].values():
+                player["mnsgImpact"][14] = 0x261
+                player["mnsgImpact"][15] = 2
+        self.rx.update(self.b,self.guest,1,0x261,2,1,"",10)
+        sample = "000000020000004a0000027900000130"
+        packet = self.tx.update(self.a,self.host,1,0x261,2,1,sample,10)[1][0]
+        self.assertTrue(self.rx.receive(self.b,self.guest,packet,10))
+        self.assertEqual(self.rx.update(self.b,self.guest,1,0x261,2,1,"",10)[0],sample)
+        packet = self.tx.update(self.a,self.host,1,0x261,2,1,"0000000000008130",10.05)[1][0]
+        self.assertTrue(self.rx.receive(self.b,self.guest,packet,10.05))
+        self.assertEqual(self.rx.update(self.b,self.guest,1,0x261,2,1,"",10.05)[0],"0000000000008130")
+        self.assertFalse(sound.command_valid(0x4A,1))
+
     def test_bounded_rate_size_queue_and_no_solo_traffic(self):
         packets=[]
         for tick in range(300):

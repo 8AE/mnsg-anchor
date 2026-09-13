@@ -8,6 +8,7 @@
 #include "utils/anchor_impact_catalog.h"
 #define ANCHOR_IMPACT_MECH_OBJECTS 10
 #define ANCHOR_IMPACT_POSE_WORDS 11
+#define ANCHOR_IMPACT_BOSS_WORDS 32
 
 enum AnchorImpactRootField
 {
@@ -39,7 +40,8 @@ enum AnchorImpactRootField
     /* Camera position, target, FOV and aim remain entirely local. */
     IMP_AUX_KIND = IMP_MECH_POSES + ANCHOR_IMPACT_MECH_OBJECTS * ANCHOR_IMPACT_POSE_WORDS,
     IMP_AUX_DATA,
-    ANCHOR_IMPACT_ROOT_WORDS = IMP_AUX_DATA + 6
+    IMP_BOSS_DATA = IMP_AUX_DATA + 6,
+    ANCHOR_IMPACT_ROOT_WORDS = IMP_BOSS_DATA + ANCHOR_IMPACT_BOSS_WORDS
 };
 
 typedef struct AnchorImpactNativeSnapshot

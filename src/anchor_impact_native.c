@@ -1,7 +1,8 @@
 #include "anchor_impact_native.h"
+#include "anchor_impact_boss.h"
 #include "utils/anchor_impact_smoothing.h"
 #include "anchor_impact_visuals.h"
-#include "anchor_boss_arenas.h"
+#include "utils/anchor_impact_stage.h"
 #include "anchor_boss_invite_world.h"
 #include "anchor_remote_model_pool.h"
 
@@ -15,17 +16,14 @@
 
 /* Dedicated file_13 Impact-battle overlay (USA). The shared battle-state
  * pointer is D_8020EED0_63A2B0; the encounter selector is system+0x3ADF4.
- * All four bosses (1 Kashiwagi, 2 Thaisamba, 3 Balberra, 4 D'Etoile) reuse it. */
+ * All four bosses (1 Kashiwagi, 2 Taisamba 2, 3 Balberra, 4 D'Etoile) reuse it. */
 extern unsigned short D_800C7AB2;
 extern unsigned char *D_8015C5C8_15D1C8;
 extern void *D_8020EED0_63A2B0;
-extern void *D_8020EF30_63A310;
 extern void *D_8020EF40_63A320;
 extern void *D_8016DAB4_16E6B4;
 extern void func_801D2EE4_5FE2C4(void *object, const void *clip);
 
-extern void func_801E4800_60FBE0(void *task);
-extern void func_801EF2E0_61A6C0(void *task);
 extern void func_80200200_62B5E0(void *task);
 extern void func_801FAEB0_626290(void *task);
 
@@ -44,11 +42,6 @@ extern void func_801FAEB0_626290(void *task);
 #define IMPACT_CODE_BASE 0x801CB460u
 #define IMPACT_CODE_END 0x8020EED0u
 #define IMPACT_REMOVE_PENDING 0x00000002u
-
-#define IMPACT_ID_KASHIWAGI 0x50u
-#define IMPACT_ID_THAISAMBA 0x5Au
-#define IMPACT_ID_BALBERRA 0x78u
-#define IMPACT_ID_DETOILE 0x64u
 
 static void *s_state;
 static void *s_task;
@@ -163,36 +156,13 @@ static unsigned int current_encounter(void)
     return ANCHOR_IMPACT_READ_U16(D_8015C5C8_15D1C8, IMPACT_ENCOUNTER_OFFSET);
 }
 
-/* Stages that run a live Impact battle: the story intro/minigame/boss stages
- * and the dedicated title-menu boss-rush stage 0x0260, which plays all four
- * bosses in sequence. */
-#define IMPACT_BOSS_RUSH_STAGE 0x0260u
-
-static int stage_is_impact(unsigned int stage)
-{
-    return ANCHOR_BOSS_IMPACT_STAGE_VALID(stage) ||
-           stage == IMPACT_BOSS_RUSH_STAGE;
-}
-
-static int task_id_valid(unsigned int id)
-{
-    return id == IMPACT_ID_KASHIWAGI || id == IMPACT_ID_THAISAMBA ||
-           id == IMPACT_ID_BALBERRA || id == IMPACT_ID_DETOILE;
-}
-
-/* Encounter selector 1..4 maps to one root task ID each. A live root whose ID
- * does not belong to the bound encounter is a different boss and must not be
- * adopted. */
+/* A callback catalog alone does not provide the boss-specific graph and
+ * lifecycle handling needed for synchronization. Only complete profiles can
+ * activate the shared mech; later bosses keep their native gameplay. */
 static unsigned int encounter_task_id(unsigned int encounter)
 {
-    switch (encounter)
-    {
-    case 1u: return IMPACT_ID_KASHIWAGI;
-    case 2u: return IMPACT_ID_THAISAMBA;
-    case 3u: return IMPACT_ID_BALBERRA;
-    case 4u: return IMPACT_ID_DETOILE;
-    default: return 0;
-    }
+    const AnchorImpactBossProfile *profile = anchor_impact_boss_profile(encounter);
+    return profile ? profile->task_id : 0;
 }
 
 static int bound_live(void)
@@ -207,14 +177,14 @@ static int bound_live(void)
     /* The battle stage can change within one Impact sequence (intro cutscene
      * -> minigame -> boss), so always follow the current stage rather than a
      * value captured at bind time. */
-    if (!stage_is_impact(D_800C7AB2))
+    if (!anchor_impact_stage_matches(D_800C7AB2, s_encounter))
         return 0;
     if (current_encounter() != s_encounter)
         return 0;
     if (ANCHOR_IMPACT_READ_PTR(state, IMPACT_STATE_ROOT) != s_task)
         return 0;
     id = ANCHOR_IMPACT_READ_U16(s_task, 0x5C);
-    if (!task_id_valid(id) || id != encounter_task_id(s_encounter))
+    if (!id || id != encounter_task_id(s_encounter))
         return 0;
     if (ANCHOR_IMPACT_READ_U32(s_task, 0x68) & IMPACT_REMOVE_PENDING)
         return 0;
@@ -309,6 +279,14 @@ int anchor_impact_native_bind(void *task, unsigned int encounter)
     if (!pointer_valid(task) || encounter < 1u || encounter > 4u)
         return 0;
     anchor_impact_native_reset();
+    if (!encounter_task_id(encounter))
+    {
+#ifndef ANCHOR_IMPACT_NATIVE_HOST_TEST
+        recomp_printf("[Impact] native-only encounter=%u stage=%u (no sync profile)\n",
+                      encounter, (unsigned int)D_800C7AB2);
+#endif
+        return 0;
+    }
     s_visit_counter = s_visit_counter >= 0x7fffffffu ? 1u : s_visit_counter + 1u;
     s_task = task;
     s_encounter = encounter;
@@ -329,8 +307,6 @@ int anchor_impact_native_bind(void *task, unsigned int encounter)
     { \
         (void)anchor_impact_native_bind(task, encounter); \
     }
-IMPACT_BIND_HOOK("func_801E4800_60FBE0", 1)
-IMPACT_BIND_HOOK("func_801EF2E0_61A6C0", 2)
 IMPACT_BIND_HOOK("func_80200200_62B5E0", 3)
 IMPACT_BIND_HOOK("func_801FAEB0_626290", 4)
 #undef IMPACT_BIND_HOOK
@@ -345,7 +321,7 @@ static int snapshot_valid(const AnchorImpactNativeSnapshot *snapshot)
     if (snapshot->encounter != s_encounter || snapshot->encounter < 1u ||
         snapshot->encounter > 4u ||
         snapshot->stage != (unsigned int)D_800C7AB2 ||
-        !stage_is_impact(snapshot->stage))
+        !anchor_impact_stage_valid(snapshot->stage))
         return 0;
     /* Validate the complete checkpoint before any native writes. Hidden or
      * zero-scale intro models remain valid; NaN/Inf and unknown IDs do not. */
@@ -377,11 +353,9 @@ static int snapshot_valid(const AnchorImpactNativeSnapshot *snapshot)
         if (p[10] > 1u) return 0;
     }
     if (r[IMP_AUX_KIND] > 2 ||
-        (r[IMP_AUX_KIND] == 1 && (s_encounter != 2 || r[IMP_AUX_DATA] > 65535u ||
-         r[IMP_AUX_DATA+2] > 255u || r[IMP_AUX_DATA+3] || r[IMP_AUX_DATA+4])) ||
         (r[IMP_AUX_KIND] == 2 && (s_encounter < 3 ||
          (r[IMP_AUX_DATA+3]&255u) || (r[IMP_AUX_DATA+4]&255u))) || r[IMP_AUX_DATA+5]) return 0;
-    return 1;
+    return anchor_impact_boss_validate(s_encounter, r);
 }
 
 /* These auxiliary fields are native scalars. Never transfer the task-pointer
@@ -392,12 +366,7 @@ static void capture_aux(unsigned int *r)
     unsigned int i;
     void *aux;
     for (i = 0; i < 7; ++i) r[IMP_AUX_KIND+i] = 0;
-    if (s_encounter == 2 && pointer_valid(D_8020EF30_63A310)) {
-        aux = D_8020EF30_63A310; r[IMP_AUX_KIND] = 1;
-        r[IMP_AUX_DATA] = ANCHOR_IMPACT_READ_U16(aux,4);
-        r[IMP_AUX_DATA+1] = ANCHOR_IMPACT_READ_U32(aux,8);
-        r[IMP_AUX_DATA+2] = ANCHOR_IMPACT_READ_U8(aux,0xC);
-    } else if (s_encounter >= 3 && pointer_valid(D_8020EF40_63A320)) {
+    if (s_encounter >= 3 && pointer_valid(D_8020EF40_63A320)) {
         aux = D_8020EF40_63A320; r[IMP_AUX_KIND] = 2;
         for (i = 0; i < 15; ++i)
             r[IMP_AUX_DATA+i/4] |= (unsigned int)ANCHOR_IMPACT_READ_U8(aux,4+i) << (24-(i%4)*8);
@@ -409,12 +378,7 @@ static void apply_aux(const unsigned int *r)
 {
     unsigned int i;
     void *aux;
-    if (r[IMP_AUX_KIND] == 1 && pointer_valid(D_8020EF30_63A310)) {
-        aux = D_8020EF30_63A310;
-        ANCHOR_IMPACT_WRITE_U16(aux,4,r[IMP_AUX_DATA]);
-        ANCHOR_IMPACT_WRITE_U32(aux,8,r[IMP_AUX_DATA+1]);
-        ANCHOR_IMPACT_WRITE_U8(aux,0xC,r[IMP_AUX_DATA+2]);
-    } else if (r[IMP_AUX_KIND] == 2 && pointer_valid(D_8020EF40_63A320)) {
+    if (r[IMP_AUX_KIND] == 2 && pointer_valid(D_8020EF40_63A320)) {
         aux = D_8020EF40_63A320;
         for (i = 0; i < 15; ++i)
             ANCHOR_IMPACT_WRITE_U8(aux,4+i,r[IMP_AUX_DATA+i/4] >> (24-(i%4)*8));
@@ -524,6 +488,7 @@ int anchor_impact_native_capture(AnchorImpactNativeSnapshot *snapshot)
         r[IMP_MECH_MASK] |= 1u << i;
     }
     capture_aux(r);
+    anchor_impact_boss_capture(s_encounter, s_state, s_task, r);
     snapshot->encounter = s_encounter;
     snapshot->stage = s_stage;
     return snapshot_valid(snapshot);
@@ -564,11 +529,13 @@ static void apply_root(const AnchorImpactNativeSnapshot *snapshot)
      * to shared+60 every update; changing only the HUD pool is undone. */
     if (s_encounter == 3u)
         ANCHOR_IMPACT_WRITE_I32(s_task, 0xAC, (int)r[IMP_BOSS_HP]);
+    anchor_impact_boss_apply_lifecycle(s_encounter, s_state, r);
     /* Let each native introduction finish creating its task graph. An early
      * phase jump could otherwise enter an action before its child exists. */
     if (r[IMP_PAUSE] || ANCHOR_IMPACT_READ_U8(s_state, IMPACT_STATE_PAUSE))
         return;
     apply_aux(r);
+    anchor_impact_boss_apply(s_encounter, s_state, s_task, r);
     ANCHOR_IMPACT_WRITE_U32(s_state, IMPACT_STATE_CLOCK, r[IMP_CLOCK]);
     clip = anchor_impact_clip_data(s_encounter, r[IMP_CLIP]);
     if (clip) func_801D2EE4_5FE2C4(s_object, clip);
@@ -635,10 +602,14 @@ void anchor_impact_native_tick(void)
 #ifndef ANCHOR_IMPACT_NATIVE_HOST_TEST
     static unsigned int s_diag;
 #endif
-    if (!pointer_valid(state) || !stage_is_impact(D_800C7AB2))
-        return;
-    root = ANCHOR_IMPACT_READ_PTR(state, IMPACT_STATE_ROOT);
     encounter = current_encounter();
+    if (!pointer_valid(state) || !anchor_impact_stage_matches(D_800C7AB2, encounter) ||
+        !encounter_task_id(encounter))
+    {
+        if (s_bound) anchor_impact_native_reset();
+        return;
+    }
+    root = ANCHOR_IMPACT_READ_PTR(state, IMPACT_STATE_ROOT);
 #ifndef ANCHOR_IMPACT_NATIVE_HOST_TEST
     if ((++s_diag % 240u) == 0u)
         recomp_printf("[Impact] diag stage=%u sel=%u root=%u id=%u hp=%d mhp=%d ammo=%d bound=%d live=%d\n",
@@ -678,11 +649,16 @@ void anchor_impact_native_scheduler_begin(void)
     restore_mech_presentation(0);
     if (!s_active)
         return;
-    if (s_pending_valid && bound_live())
+    if (s_pending_valid)
     {
-        apply_root(&s_pending);
-        s_view = s_pending;
-        s_view_valid = 1;
+        /* A queued checkpoint can outlive a stage change between the frame
+         * bridge and this scheduler entry. Revalidate before any writes. */
+        if (bound_live() && snapshot_valid(&s_pending))
+        {
+            apply_root(&s_pending);
+            s_view = s_pending;
+            s_view_valid = 1;
+        }
         s_pending_valid = 0;
     }
     /* Keep the native graph alive through introductions and transitions.
@@ -693,6 +669,7 @@ void anchor_impact_native_scheduler_begin(void)
 RECOMP_HOOK_RETURN("func_80034734_35334")
 void anchor_impact_native_scheduler_end(void)
 {
-    if (s_active && !s_owner && s_view_valid && !s_paused && bound_live())
+    if (s_active && !s_owner && s_view_valid && !s_paused && bound_live() &&
+        s_view.stage == (unsigned int)D_800C7AB2 && s_view.encounter == s_encounter)
         apply_shared_view(&s_view);
 }

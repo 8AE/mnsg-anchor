@@ -11,6 +11,10 @@ fi
 "$HOST_COMPILER" "${TEST_FLAGS[@]}" tests/test_impact_codec.c \
     src/utils/anchor_impact_codec.c -o "$TEST_DIR/codec"
 "$TEST_DIR/codec"
+python3 tests/impact_boss_stubs.py > "$TEST_DIR/boss_stubs.c"
+"$HOST_COMPILER" "${TEST_FLAGS[@]}" tests/test_impact_bosses_native.c \
+    "$TEST_DIR/boss_stubs.c" -o "$TEST_DIR/bosses"
+"$TEST_DIR/bosses"
 for module in native damage sounds_native; do
     "$HOST_COMPILER" "${TEST_FLAGS[@]}" "tests/test_impact_${module}.c" -o "$TEST_DIR/$module"
     "$TEST_DIR/$module"
@@ -18,7 +22,12 @@ done
 "$HOST_COMPILER" "${TEST_FLAGS[@]}" tests/test_impact_players_native.c \
     src/utils/anchor_impact_players_codec.c -o "$TEST_DIR/players"
 "$TEST_DIR/players"
+"$TEST_DIR/players" 2
 "$HOST_COMPILER" "${TEST_FLAGS[@]}" tests/test_impact_visuals_native.c \
     src/utils/anchor_impact_visual_codec.c -o "$TEST_DIR/visuals"
 "$TEST_DIR/visuals"
+# Taisamba skinned root, returning weapon, and translucent whirlwind assets.
+for model in 18000E28 4800F5A0 4800FE90; do
+    "$TEST_DIR/visuals" "$model"
+done
 PYTHONPATH=py python3 -m unittest discover -s tests -p 'test_impact*.py'

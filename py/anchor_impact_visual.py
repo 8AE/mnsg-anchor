@@ -9,7 +9,7 @@ from collections import deque
 import json
 import struct
 
-from anchor_impact import VERSION, METADATA_KEY, metadata, _u32, _impact_stage
+from anchor_impact import VERSION, METADATA_KEY, metadata, _u32, sync_supported
 from anchor_boss_transport import positive
 
 PACKET_TYPE = "MNSG_IMPACT_VISUAL"
@@ -200,8 +200,8 @@ class ImpactVisualTransport:
 
     def update(self, ctx, battle, ready, stage, boss, visit, rows, now):
         active = (ready and ctx["connected"] and positive(ctx["cid"]) and
-                  positive(ctx["session"]) and positive(visit) and _impact_stage(stage) and
-                  type(boss) is int and 1 <= boss <= 4 and battle.role in (1, 2) and
+                  positive(ctx["session"]) and positive(visit) and sync_supported(stage, boss) and
+                  battle.role in (1, 2) and
                   not battle.paused and positive(battle.owner) and positive(battle.term))
         scope = (ctx["session"], ctx["team"], stage, boss, visit) if active else None
         auth = authority(battle) if active else None

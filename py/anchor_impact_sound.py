@@ -27,10 +27,14 @@ CUES = frozenset((
 ))
 
 
-def command_valid(command):
+TAISAMBA_CUES = frozenset((1,7,8,0x27,0x28,0x4A,0x4C,0x4D,0x60))
+
+def command_valid(command, encounter=0):
     # Verified combat cues, including the six global loop stops.
     return (_u32(command) and command & 0xFFFF != 0 and
-            (command & 0xFFFF in CUES or command & 0xFFFF in tuple(x | 0x8000 for x in LOOPS)) and
+            (command & 0xFFFF in CUES or
+             encounter == 2 and command & 0xFFFF in TAISAMBA_CUES or
+             command & 0xFFFF in tuple(x | 0x8000 for x in LOOPS)) and
             (command >> 16 & 255) < 128)
 
 
@@ -60,7 +64,7 @@ class ImpactSoundTransport:
                 tuple(packet["e"]) != encounter or type(packet.get("s")) is not int or type(packet.get("k")) is not int or
                 (packet["s"], packet["k"]) != g.scope[2:4] or not _u32(packet.get("l")) or packet["l"] & ~LOOP_MASK or
                 not isinstance(packet.get("r"), list) or len(packet["r"]) > MAX_COMMANDS or
-                not all(command_valid(c) for c in packet["r"]) or packet["q"] <= self.received_sequence):
+                not all(command_valid(c,packet["k"]) for c in packet["r"]) or packet["q"] <= self.received_sequence):
             return False
         try:
             if len(json.dumps(packet, separators=(",", ":"), allow_nan=False).encode())+1 > PACKET_BYTES:
@@ -90,7 +94,7 @@ class ImpactSoundTransport:
                  all(c in "0123456789abcdefABCDEF" for c in sample))
         words = [int(sample[i:i+8],16) for i in range(0,len(sample),8)] if valid else []
         if battle.role == 1:
-            if words and not words[0] & ~LOOP_MASK and all(command_valid(c) for c in words[1:]):
+            if words and not words[0] & ~LOOP_MASK and all(command_valid(c,boss) for c in words[1:]):
                 self.loops = words[0]
                 for c in words[1:]: self.queue.append((now,c))
             while self.queue and now-self.queue[0][0] >= TTL: self.queue.popleft()

@@ -7,6 +7,10 @@ from unittest import mock
 from test_boss_invitation_transport import load_client
 
 import anchor_impact
+import anchor_impact_visual
+import anchor_impact_sound
+from test_impact_players import sample as player_sample
+from test_impact_visual import rows as visual_rows
 
 
 def state(encounter=1, stage=0x0220, fill=1):
@@ -88,6 +92,7 @@ class ImpactStateSchemaTests(unittest.TestCase):
         advertisement = [anchor_impact.VERSION, 1, 1, 0, 1, 101,
                          0, 0, 0, 0, 0, 0, 0, 1, 0x220, 1]
         self.assertEqual(anchor_impact.metadata(advertisement), advertisement)
+        self.assertIsNone(anchor_impact.metadata([6] + advertisement[1:]))
         transport = anchor_impact.ImpactTransport()
         self.assertEqual(transport.room, anchor_impact.ROOM)
         transport.set_stage(0x0223)
@@ -96,6 +101,114 @@ class ImpactStateSchemaTests(unittest.TestCase):
         self.assertEqual(transport.room, anchor_impact.IMPACT_BOSS_RUSH_STAGE)
         transport.set_stage(0x1234)
         self.assertEqual(transport.room, anchor_impact.IMPACT_BOSS_RUSH_STAGE)
+
+    def test_taisamba_checkpoint_budget_and_old_layout_rejection(self):
+        checkpoint = state(2,0x221,0xFFFFFFFF)
+        self.assertIsNotNone(anchor_impact.validate_state(checkpoint))
+        self.assertLess(len(json.dumps(checkpoint,separators=(",", ":")).encode()),4096)
+        self.assertIsNone(anchor_impact.validate_state({**checkpoint,"r":checkpoint["r"][:165]}))
+
+
+class ImpactBossRushBridgeTests(unittest.TestCase):
+    def test_kashiwagi_to_taisamba_without_a_loaded_save(self):
+        clients = [load_client(2, 101), load_client(3, 202)]
+        for client in clients:
+            self.addCleanup(client.disconnect)
+            client.set_save_loaded(False)
+        now = 100.0
+        history = []
+
+        def tick(bosses):
+            nonlocal now
+            now += 0.05
+            results = []
+            for client, boss in zip(clients, bosses):
+                stage = 0x25F + boss
+                client._sock.sent.clear()
+                results.append(json.loads(client.update_impact(
+                    1, stage, boss, boss, 0, json.dumps(state(boss, stage)))))
+                client.update_impact_players(1, stage, boss, boss, json.dumps(player_sample()))
+                client.update_impact_visuals(1, stage, boss, boss, json.dumps(visual_rows(1)))
+                client.update_impact_sounds(1, stage, boss, boss, "0000001000000240")
+                for raw in client._sock.sent:
+                    self.assertTrue(raw.endswith(b"\0"))
+                    packet = json.loads(raw[:-1])
+                    history.append(packet)
+                    peer = clients[1] if client is clients[0] else clients[0]
+                    if packet["type"] == "UPDATE_CLIENT_STATE":
+                        peer._merge_client_state(client._client_id, packet["state"], True)
+                    elif packet["type"] == anchor_impact.PACKET_TYPE:
+                        peer._impact.receive(peer._boss_context(), packet, now)
+                    elif packet["type"] == anchor_impact.PLAYER_PACKET_TYPE:
+                        peer._impact_players.receive(peer._boss_context(), packet, now)
+                    elif packet["type"] == anchor_impact_visual.PACKET_TYPE:
+                        peer._impact_visuals.receive(peer._boss_context(), peer._impact, packet, now)
+                    elif packet["type"] == anchor_impact_sound.PACKET_TYPE:
+                        peer._impact_sounds.receive(peer._boss_context(), peer._impact, packet, now)
+            return results
+
+        with mock.patch("time.monotonic", side_effect=lambda: now):
+            for _ in range(20):
+                status = tick((1, 1))
+            self.assertEqual([s["role"] for s in status], [1, 2])
+            old_packet = next(p for p in reversed(history)
+                              if p["type"] == anchor_impact.PACKET_TYPE and p["op"] == "s")
+            # One client finishes the outro earlier. Stage and boss both change.
+            for _ in range(10):
+                tick((2, 1))
+            for _ in range(30):
+                status = tick((2, 2))
+            self.assertEqual([s["role"] for s in status], [1, 2])
+            for client, result in zip(clients, status):
+                self.assertFalse(client._local_save_loaded)
+                self.assertEqual(result["state"], state(2, 0x261))
+                self.assertFalse(client._impact.receive(client._boss_context(), old_packet, now))
+            self.assertTrue(any(p["type"] == anchor_impact.PACKET_TYPE and
+                                p["op"] == "s" and p["s"] == 0x261 and p["k"] == 2
+                                for p in history))
+            # Taisamba's outro hands off to Balberra, even if a stale/native
+            # caller reports ready. Neither client may elect or publish for
+            # a boss without a complete sync profile.
+            old_taisamba = next(p for p in reversed(history)
+                               if p["type"] == anchor_impact.PACKET_TYPE and p["op"] == "s")
+            follower = clients[1]
+            self.assertTrue(follower._impact_players.remote)
+            self.assertTrue(follower._impact_visuals.latest)
+            self.assertTrue(follower._impact_sounds.loops)
+            old_channels = {kind: next(p for p in reversed(history) if p["type"] == kind)
+                            for kind in (anchor_impact.PLAYER_PACKET_TYPE,
+                                         anchor_impact_visual.PACKET_TYPE, anchor_impact_sound.PACKET_TYPE)}
+            # A root-only inactive call must retire channels without needing
+            # another player/visual/sound bridge call on the old fight.
+            follower.update_impact(0, 0x262, 3, 0, 0, "null")
+            self.assertFalse(follower._impact_players.remote)
+            self.assertIsNone(follower._impact_visuals.latest)
+            self.assertFalse(follower._impact_sounds.loops or follower._impact_sounds.queue)
+            ctx = follower._boss_context()
+            self.assertFalse(follower._impact_players.receive(ctx, old_channels[anchor_impact.PLAYER_PACKET_TYPE], now))
+            self.assertFalse(follower._impact_visuals.receive(ctx, follower._impact, old_channels[anchor_impact_visual.PACKET_TYPE], now))
+            self.assertFalse(follower._impact_sounds.receive(ctx, follower._impact, old_channels[anchor_impact_sound.PACKET_TYPE], now))
+            for _ in range(10):
+                status = tick((3, 2))
+            self.assertEqual(status[0]["role"], 0)
+            for boss in (3, 4):
+                start = len(history)
+                for _ in range(20):
+                    status = tick((boss, boss))
+                self.assertEqual([s["role"] for s in status], [0, 0])
+                self.assertFalse(any(p["type"].startswith("MNSG_IMPACT")
+                                     for p in history[start:]))
+                for client in clients:
+                    self.assertFalse(client._impact.local[0])
+                    self.assertIsNone(client._impact_players.scope)
+                    self.assertIsNone(client._impact_visuals.scope)
+                    self.assertIsNone(client._impact_sounds.guard.scope)
+                    self.assertFalse(client._impact.receive(client._boss_context(), old_taisamba, now))
+            # Starting a new run still activates Kashiwagi and Taisamba.
+            for boss in (1, 2):
+                for _ in range(30):
+                    status = tick((boss, boss))
+                self.assertEqual([s["role"] for s in status], [1, 2])
 
 
 class ImpactElectionTests(unittest.TestCase):

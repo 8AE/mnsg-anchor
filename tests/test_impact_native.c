@@ -59,7 +59,7 @@ int main(void) {
     AnchorImpactNativeSnapshot snapshot, bad;
     unsigned int before, fallback, before_clip;
     setup();
-    assert(ANCHOR_IMPACT_ROOT_WORDS == 165);
+    assert(ANCHOR_IMPACT_ROOT_WORDS == 197);
     assert(anchor_impact_native_capture(&snapshot));
     assert(snapshot.root[IMP_PHASE] == 1 && snapshot.root[IMP_CLIP] == 1);
     assert(snapshot.root[IMP_MECH_MASK] == 1);
@@ -116,20 +116,29 @@ int main(void) {
     TP(state, 0x1D8) = hand; assert(!anchor_impact_native_root_live());
     assert(!anchor_impact_native_apply(&snapshot));
     anchor_impact_native_reset(); assert(!s_view_valid && !s_pending_valid);
-    setup(); TU16(system_data,0x3ADF4) = 3; TU16(task,0x5C) = 0x78;
-    assert(anchor_impact_native_bind(task,3));
-    anchor_impact_native_set_role(1,0,0);
+    /* Story stages can change while keeping the selector/root alive too. */
+    setup(); D_800C7AB2 = 0x220;
     assert(anchor_impact_native_capture(&snapshot));
-    snapshot.root[IMP_BOSS_HP] = 800; TU32(task,0xAC) = 1200;
+    snapshot.root[IMP_BOSS_HP] = 0;
+    assert(anchor_impact_native_apply(&snapshot));
+    D_800C7AB2 = 0x21C;
+    anchor_impact_native_scheduler_begin();
+    assert(TU32(state,0x60) == 2000 && !s_pending_valid);
+    setup(); TU16(system_data,0x3ADF4) = 3; TU16(task,0x5C) = 0x78;
+    assert(!anchor_impact_native_bind(task,3));
+    assert(!anchor_impact_native_capture(&snapshot));
+    /* Legacy auxiliary packing stays pointer-free, but does not enable a
+     * boss without a complete native profile. */
+    s_encounter = 3;
+    capture_aux(snapshot.root);
     snapshot.root[IMP_AUX_DATA] = 0x50010301;
     snapshot.root[IMP_AUX_DATA+4] = 0x01010100;
     TU32(auxiliary,0) = 0x81234560; TU32(auxiliary,0x14) = 0x81234570;
-    assert(anchor_impact_native_apply(&snapshot)); anchor_impact_native_scheduler_begin();
-    assert(TU32(task,0xAC) == 800 && TU32(state,0x60) == 800);
+    apply_aux(snapshot.root);
     assert(((unsigned char *)auxiliary)[4] == 0x50 && ((unsigned char *)auxiliary)[6] == 3);
     assert(((unsigned char *)auxiliary)[0x815] == 1);
     assert(TU32(auxiliary,0) == 0x81234560 && TU32(auxiliary,0x14) == 0x81234570);
-    assert(anchor_impact_native_capture(&bad));
+    capture_aux(bad.root);
     assert(bad.root[IMP_AUX_DATA] == snapshot.root[IMP_AUX_DATA]);
     bad.root[IMP_AUX_KIND] = 1; assert(!anchor_impact_native_apply(&bad));
     puts("Impact native checkpoint tests passed");
@@ -138,3 +147,13 @@ int main(void) {
 
 void anchor_impact_visuals_begin_frame(void) {}
 void anchor_impact_visuals_render(void) {}
+
+void anchor_impact_boss_capture(unsigned int e, void *s, void *t, unsigned int *r) {(void)e;(void)s;(void)t;(void)r;}
+int anchor_impact_boss_validate(unsigned int e, const unsigned int *r) {return r[IMP_AUX_KIND] != 1 || e == 2;}
+void anchor_impact_boss_apply(unsigned int e, void *s, void *t, const unsigned int *r) {(void)e;(void)s;(void)t;(void)r;}
+void anchor_impact_boss_apply_lifecycle(unsigned int e, void *s, const unsigned int *r) {(void)e;(void)s;(void)r;}
+
+const AnchorImpactBossProfile *anchor_impact_boss_profile(unsigned int e) {
+    static const AnchorImpactBossProfile profiles[] = {{.task_id=0x50},{.task_id=0x5A}};
+    return e >= 1 && e <= 2 ? &profiles[e-1] : 0;
+}

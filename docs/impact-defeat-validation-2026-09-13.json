@@ -1,0 +1,133 @@
+{
+  "date": "2026-09-13",
+  "branch": "impact_syncing",
+  "issue": "Both games crash after defeating Taisamba 2 in boss rush",
+  "runtime_evidence": [
+    {
+      "attachment": "b97db3bf-284e-4b37-8bb8-591c5f67b7db",
+      "taisamba_hp_zero_line": 1106,
+      "sync_inactive_line": 1169,
+      "balberra_bind_line": 1172,
+      "balberra_sync_active_line": 1193,
+      "last_callback_line": 1195
+    },
+    {
+      "attachment": "ba5710c6-6f49-4b87-a906-8a2bbd5869a0",
+      "taisamba_hp_zero_line": 1067,
+      "sync_inactive_line": 1135,
+      "balberra_bind_line": 1138,
+      "balberra_sync_active_line": 1159,
+      "last_callback_line": 1161
+    }
+  ],
+  "observed_boundary": "Taisamba outro finishes, then legacy sync activates for Balberra on stage 610 / 0x262. Last logged function on both clients is func_802003E0_62B7C0.",
+  "native_evidence": {
+    "program": "file_13_raw.bin",
+    "802003E0": "Waits for shared+2C1 == 1, then selects 80200434 and stores -1.0 at root+74. It does not itself identify the crashing instruction."
+  },
+  "diagnosis_limits": "No exception stack in either supplied log. Available macOS 17:23 reports belong to earlier launches. The crash itself was not reproduced by the assistant.",
+  "repairs": [
+    "Native binding/readiness requires a complete boss profile: Kashiwagi or Taisamba. Balberra and D'Etoile remain native-only.",
+    "A boss-rush stage must match its selector; the previous root is rejected as soon as the stage advances.",
+    "Queued native checkpoints are revalidated at scheduler application time and discarded after a stage change; cached presentation is also fenced.",
+    "Damage authority requires current native readiness, so outgoing follower/election flags cannot freeze the next native fight.",
+    "Python root, input and visual/sound channels reject unsupported sync scopes.",
+    "The root bridge retires all input/cursor, render and audio queues on scope change or exit, even without another player-channel call."
+  ],
+  "regression_before_fix": "New native test failed: queued Taisamba defeat overwrote next-stage HP (assert TU32(battle,0x60) == 1000).",
+  "checks": {
+    "ubsan_native_scenarios": 11,
+    "focused_python_passed": 45,
+    "full_python": {
+      "run": 275,
+      "passed": 274,
+      "skipped": 1
+    },
+    "transition_native": "Recycled root addresses, stage/selector mismatch, queued snapshots, unchanged next-boss HP/callbacks, profile retirement and re-entry.",
+    "transition_bridge": "Production Python bridges with recorded NUL-framed socket envelopes: staggered K/T/B/D handoffs, all channels populated before retirement, late-packet rejection, no traffic/election for later bosses, K/T re-entry.",
+    "release_debug_builds": "passed",
+    "build_warning": "Existing unused notif_ensure_init warning only",
+    "packet_audit": {
+      "literal_sends": 17,
+      "errors": 0,
+      "warnings": 0,
+      "scope": "py and src; dynamic Impact sends are covered by channel tests"
+    }
+  },
+  "loopback": [
+    {
+      "clients": 3,
+      "boss": 1,
+      "stage": 608,
+      "root_words": 197,
+      "checkpoint": true,
+      "render_pages": 4,
+      "render_objects": 64,
+      "frame_bytes": 6765,
+      "sender_excluded": true,
+      "team_isolated": true,
+      "cursor_and_controls": true,
+      "limbs_and_chain": true,
+      "hook_aim_and_ordered_mashes": true,
+      "audio_start_stop": true,
+      "audio_deduplicated": true
+    },
+    {
+      "clients": 3,
+      "boss": 2,
+      "stage": 609,
+      "root_words": 197,
+      "checkpoint": true,
+      "render_pages": 4,
+      "render_objects": 64,
+      "frame_bytes": 6768,
+      "sender_excluded": true,
+      "team_isolated": true,
+      "cursor_and_controls": true,
+      "limbs_and_chain": true,
+      "hook_aim_and_ordered_mashes": true,
+      "audio_start_stop": true,
+      "audio_deduplicated": true
+    },
+    {
+      "clients": 3,
+      "boss": 2,
+      "stage": 545,
+      "root_words": 197,
+      "checkpoint": true,
+      "render_pages": 4,
+      "render_objects": 64,
+      "frame_bytes": 6768,
+      "sender_excluded": true,
+      "team_isolated": true,
+      "cursor_and_controls": true,
+      "limbs_and_chain": true,
+      "hook_aim_and_ordered_mashes": true,
+      "audio_start_stop": true,
+      "audio_deduplicated": true
+    }
+  ],
+  "packages": [
+    {
+      "path": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 475034,
+      "sha256": "827a9693180cb11dc8c3bc9a3ed30fa985d23f15e6d6794389686dcb4d84b933",
+      "zip_valid": true,
+      "packaged_python_matches_source": true
+    },
+    {
+      "path": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 475127,
+      "sha256": "4d502082aa0b7beb16d98b338dd1966d0f92eff98e714e7db9a480f355385f24",
+      "zip_valid": true,
+      "packaged_python_matches_source": true
+    }
+  ],
+  "installed_debug": {
+    "path": "/Users/ahmad/Library/Application Support/Goemon64Recompiled/mods/debug_mnsg_multiplayer_anchor.nrm",
+    "sha256": "4d502082aa0b7beb16d98b338dd1966d0f92eff98e714e7db9a480f355385f24",
+    "previous_backup": "/tmp/impact-defeat-0913/debug_mnsg_multiplayer_anchor.before-fix.nrm"
+  },
+  "fresh_in_game_validation": false,
+  "limitations": "The tests verify the transition fixes and removal of unintended later-boss sync, not a fresh native two-game run or a conclusive crash-stack diagnosis. Both game processes need to restart with the updated package."
+}

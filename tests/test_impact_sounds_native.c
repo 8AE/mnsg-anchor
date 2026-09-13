@@ -70,3 +70,5 @@ int main(void) {
     puts("Impact native audio authority, loop repair, queue capacity and scope tests passed");
     return 0;
 }
+
+int anchor_impact_boss_sound_valid(unsigned int e, unsigned int cue) {(void)e;(void)cue;return 0;}

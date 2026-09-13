@@ -246,7 +246,8 @@ IMPACT_ARENA_FIRST: int = KASHIWAGI_ARENA
 IMPACT_ARENA_LAST: int = DETOILE_ARENA
 # Intro cutscene stages 0x239..0x23C, one per boss (0x239 = Kashiwagi).
 # Minigames 0x21C..0x21F and boss stages 0x220..0x223 follow the same order.
-# (Stage 0x0224 is an unused fifth slot; the boss rush mode uses stage 0x0260.)
+# Stage 0x0224 is an unused fifth slot. Boss rush uses 0x0260..0x0263;
+# those battle scopes are separate from the story invitation stages below.
 IMPACT_STAGE_FIRST: int = 0x21C
 IMPACT_STAGE_LAST: int = 0x223
 IMPACT_INTRO_FIRST: int = 0x239
@@ -2286,6 +2287,7 @@ def update_impact(ready: int, stage: int, encounter: int, visit: int,
     save dependency, so it is reported as loaded even from the title-menu boss
     rush.
     """
+    ready = bool(ready and anchor_impact.sync_supported(stage, encounter))
     if type(visit) is not int or visit <= 0:
         # Native Impact binding supplies its own visit in title-menu boss rush.
         # Inventing one here could revive packets from a previous battle.
@@ -2298,6 +2300,14 @@ def update_impact(ready: int, stage: int, encounter: int, visit: int,
         except (ValueError, RecursionError):
             pass
     with _player_states_lock:
+        if not ready or (stage, encounter, visit) != (
+                _impact.room, _impact.encounter, _impact.local[1]):
+            # Retire every channel at the root boundary. Native inactive
+            # frames do not call the player bridge, so waiting for its next
+            # tick would leave old cursor/input packets eligible for receipt.
+            _impact_players.reset()
+            _impact_visuals.reset()
+            _impact_sounds.reset()
         _impact.set_encounter(stage, encounter)
         context = _boss_context()
         context["loaded"] = True

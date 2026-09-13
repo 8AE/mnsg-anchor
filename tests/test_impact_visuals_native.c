@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "impact_test_pointers.h"
 #define ANCHOR_IMPACT_VISUAL_HOST_TEST
 #define IV_PTR(p,o) TP(p,o)
@@ -20,7 +21,8 @@ unsigned char D_80167FC0_168BC0[48*8];
 unsigned char D_8006D328_6DF28[16];
 void *D_8020EED0_63A2B0 = state;
 unsigned char *D_8015C5C8_15D1C8 = (unsigned char *)system_data;
-static const AnchorImpactVisualRecipe recipe = {0x48009AC0u,0x4A8};
+static unsigned int test_boss = 1;
+static AnchorImpactVisualRecipe recipe = {0x48009AC0u,0x4A8};
 void anchor_impact_visual_catalog_init(void) {}
 unsigned int anchor_impact_visual_recipe_id(unsigned int m, unsigned int f) {
     return m == recipe.model && f == recipe.file ? 1 : 0;
@@ -30,15 +32,15 @@ unsigned int anchor_impact_visual_material_id(unsigned int p) {
     return !p ? 0 : (p&~0x60000000u) == 0x80000004u ? 1 : 0xFFFFFFFFu;
 }
 void *anchor_impact_visual_material(unsigned int id) { return id == 1 ? (void *)(uintptr_t)0x80000004u : 0; }
-unsigned int anchor_impact_native_stage(void) { return 0x260; }
-unsigned int anchor_impact_native_encounter(void) { return 1; }
+unsigned int anchor_impact_native_stage(void) { return 0x25F + test_boss; }
+unsigned int anchor_impact_native_encounter(void) { return test_boss; }
 unsigned int anchor_impact_native_visit(void) { return 1; }
 int anchor_impact_native_is_owner(void) { return owner; }
 int anchor_impact_native_root_live(void) { return 1; }
 void anchor_impact_players_hide_shots(void) { ++shots_hidden; }
 char *anchor_impact_visuals_update(int active, unsigned int stage, unsigned int encounter,
                                   unsigned int visit, const char *sample) {
-    assert(stage == 0x260 && encounter == 1 && visit == 1);
+    assert(stage == 0x25F + test_boss && encounter == test_boss && visit == 1);
     if (owner && active) assert(anchor_impact_visual_decode(sample,&sent));
     return active && !owner ? received_json : "null";
 }
@@ -59,7 +61,7 @@ void *func_8000DBF0_E7F0(void *task, unsigned int m, unsigned int material,
     float x, float y, float z, short rx, short ry, short rz, float sx, float sy, float sz, short f, short f9) {
     unsigned int i = (unsigned int)((unsigned int *)task-tasks[0])/64;
     (void)material; (void)x; (void)y; (void)z; (void)rx; (void)ry; (void)rz; (void)sx; (void)sy; (void)sz;
-    assert(m == recipe.model && f == recipe.file && f9 == 0 && i < 64);
+    assert(m == recipe.model && (unsigned short)f == recipe.file && f9 == 0 && i < 64);
     TP(task,0x18) = models[i]; ((unsigned char *)models[i])[4] = 2;
     TU32(models[i],0x2C) = m; TU16(models[i],0x34) = f; return models[i];
 }
@@ -116,7 +118,8 @@ static void frame_draw(void) {
         assert(bucket_count[frame.rows[i][5]] > 0);
     }
 }
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc > 1) { test_boss = 2; recipe.model = (unsigned int)strtoul(argv[1],0,16); recipe.file = 0x4B2; }
     unsigned int i, bad[29], bases[6], original_id, inserted_id;
     setup(); owner = 1; anchor_impact_visuals_tick(1);
     assert(sent.count == 1 && sent.rows[0][1] == 1 && sent.rows[0][17] == recipe.file);

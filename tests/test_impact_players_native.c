@@ -14,14 +14,15 @@ static unsigned int allocations, constructions, last_model, last_material;
 static unsigned int arm_task[64], arm_object[64], hook_task[64], reel_task[64], reel_back[4];
 static float last_scale;
 static int owner = 1, ready = 1, resource_ready = 1;
+static unsigned int test_boss = 1;
 unsigned char D_8006D328_6DF28[16];
 unsigned char D_8020A728_635B08[16], D_8020A7D0_635BB0[16];
 void *D_8020EED0_63A2B0 = state;
 unsigned char *D_8015C5C8_15D1C8 = system_data;
 int anchor_impact_native_ready(void) { return ready; }
 int anchor_impact_native_is_owner(void) { return owner; }
-unsigned int anchor_impact_native_stage(void) { return 0x260; }
-unsigned int anchor_impact_native_encounter(void) { return 1; }
+unsigned int anchor_impact_native_stage(void) { return 0x25F + test_boss; }
+unsigned int anchor_impact_native_encounter(void) { return test_boss; }
 unsigned int anchor_impact_native_visit(void) { return 1; }
 void func_801DB200_6065E0(void) {}
 void *func_800141C4_14DC4(unsigned int f) { assert(f == 0x4A8); return resource_ready ? resource : 0; }
@@ -49,7 +50,7 @@ char *anchor_impact_players_update(int active, unsigned int stage, unsigned int 
                                     unsigned int visit, const char *sample) {
     const char *value = "{\"accepted\":0,\"c\":[],\"a\":[]}";
     char *out = malloc(strlen(value) + 1);
-    assert(active && stage == 0x260 && boss == 1 && visit == 1 && sample);
+    assert(active && stage == 0x25F + test_boss && boss == test_boss && visit == 1 && sample);
     strcpy(out, value); return out;
 }
 void recomp_free(void *p) { free(p); }
@@ -60,7 +61,8 @@ static void setup(void) {
     TU32(local_object, 0x2C) = IP_CURSOR_MODEL; TU16(local_object, 0x16) = 512;
     s_manager = manager;
 }
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc > 1) test_boss = (unsigned int)atoi(argv[1]);
     AnchorImpactPlayerStatus status = {0};
     unsigned int row[10] = {2, 200, 1, 2, 0x2000, 0x2000, 1000, 600, 1, 1};
     void *retained;
@@ -206,6 +208,11 @@ int main(void) {
     anchor_impact_attack_task_reset(hook_task); /* address reuse clears origin */
     anchor_impact_attack_task_begin(hook_task); assert(TU16(local_object,0x16) == 500);
     anchor_impact_attack_tasks_end();
+    /* Taisamba's grab/release readers borrow the initiating limb's source. */
+    anchor_impact_players_source_aim_begin(arm_task);
+    assert(TU16(local_object,0x14) == 990 && TU16(local_object,0x16) == 630);
+    anchor_impact_players_source_aim_end();
+    assert(TF32(state,4) == 13 && TF32(state,8) == 17);
     row[3] = 3; row[4] = 110; row[5] = 60; row[6] = row[7] = 0; receive_controls(row);
     TU16(system_data,0x3B07E) = 9; TU16(system_data,0x3B080) = 7;
     anchor_impact_fist_begin(arm_task,arm_object);
@@ -335,3 +342,5 @@ int main(void) {
     puts("Impact cursor, retained lifecycle, controls and shot capture tests passed");
     return 0;
 }
+
+int anchor_impact_boss_is_reel_callback(unsigned int c) {return c == 0x801E9624u || c == 0x801F5F0Cu || c == 0x801FED3Cu;}

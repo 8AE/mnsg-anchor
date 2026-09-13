@@ -30,10 +30,21 @@ def sample(visible=1, aim=None, attacks=()):
 
 class ImpactScopeTests(unittest.TestCase):
     def test_exact_native_stage_set(self):
-        for stage in [*range(0x21C, 0x224), *range(0x239, 0x23D), 0x260]:
+        for stage in [*range(0x21C, 0x224), *range(0x239, 0x23D), *range(0x260, 0x264)]:
             self.assertTrue(impact._impact_stage(stage), hex(stage))
-        for stage in [0, True, 0x21B, *range(0x224, 0x239), 0x23D, 0x261]:
+        for stage in [0, True, 0x21B, *range(0x224, 0x239), 0x23D, 0x25F, 0x264]:
             self.assertFalse(impact._impact_stage(stage), stage)
+
+    def test_only_complete_profiles_activate_on_their_native_rush_stage(self):
+        for stage, boss in [(0x220, 1), (0x221, 2), (0x260, 1), (0x261, 2)]:
+            self.assertTrue(impact.sync_supported(stage, boss))
+        for stage, boss in [(0x262, 3), (0x263, 4), (0x222, 3), (0x223, 4),
+                            (0x260, 2), (0x261, 1), (0x262, 2), (0x220, True)]:
+            self.assertFalse(impact.sync_supported(stage, boss))
+            status, packets = impact.ImpactPlayerTransport().update(
+                context(1), 1, stage, boss, 3, sample(), 100)
+            self.assertEqual(status, {"accepted": 0, "c": [], "a": []})
+            self.assertFalse(packets)
 
     def test_all_operations_and_election_require_stage_and_boss(self):
         transport = impact.ImpactTransport()

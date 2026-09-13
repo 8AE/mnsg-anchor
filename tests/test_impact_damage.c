@@ -7,9 +7,12 @@
 static unsigned int state[0xC0];
 unsigned short D_800C7AB2 = 0x260;
 void *D_8020EED0_63A2B0 = state;
+static int native_ready = 1;
+int anchor_impact_native_ready(void) { return native_ready; }
 int func_801D36CC_5FEAAC(void) { return 25; }
 void func_801D3894_5FEC74(void) {}
 int main(void) {
+    unsigned int stage;
     unsigned int boss[64] = {0}, hit_task[64] = {0};
     TP(boss,0x38) = hit_task;
     ((unsigned char *)hit_task)[0x4C] = 0x46;
@@ -30,6 +33,35 @@ int main(void) {
     assert(TU32(boss,0xB0) == 0);
     assert(!anchor_impact_damage_take_local_hit(&hit));
     assert(!anchor_impact_damage_apply(10));
+    /* Every native boss-rush stage must use the same health authority gate. */
+    for (stage = 0x260; stage <= 0x263; ++stage) {
+        D_800C7AB2 = stage;
+        state[0x60/4] = state[0x68/4] = 100;
+        anchor_impact_damage_set_context(1,0,0,stage);
+        assert(anchor_impact_damage_is_shared());
+        assert(func_801D3954_5FED34(25) == 100);
+        assert(func_801D38A4_5FEC84(25) == 100);
+        anchor_impact_damage_set_context(1,1,0,stage);
+        assert(anchor_impact_damage_apply(25) && state[0x60/4] == 75);
+        assert(func_801D38A4_5FEC84(25) == 75);
+    }
+    for (stage = 0x25F; stage <= 0x264; stage += 5) {
+        D_800C7AB2 = stage;
+        assert(!anchor_impact_damage_is_shared());
+        assert(!anchor_impact_damage_apply(25));
+    }
+    /* Binding the next, unsupported boss clears native readiness before
+     * the frame bridge gets a chance to retire its old follower role. */
+    D_800C7AB2 = 0x262; native_ready = 0;
+    anchor_impact_damage_set_context(1,0,1,2);
+    state[0x60/4] = state[0x68/4] = 100;
+    assert(!anchor_impact_damage_is_shared());
+    assert(func_801D3954_5FED34(25) == 75);
+    assert(func_801D38A4_5FEC84(25) == 75);
+    assert(func_8020451C_62F8FC(boss) == 0x46 && TU32(boss,0xAC) == 55);
+    native_ready = 1; TU32(boss,0xAC) = 80; TU32(boss,0xB0) = 0;
+    D_800C7AB2 = 0x260;
+    state[0x60/4] = 75; state[0x68/4] = 1;
     anchor_impact_damage_set_context(1, 1, 0, 1);
     assert(func_8020451C_62F8FC(boss) == 0x46 && TU32(boss,0xAC) == 55);
     assert(TU32(boss,0xB0) == 40);

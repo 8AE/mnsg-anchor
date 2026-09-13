@@ -13,6 +13,7 @@
 
 #include "anchor_impact_players.h"
 #include "anchor_impact_native.h"
+#include "anchor_impact_boss.h"
 #include "anchor_remote_model_pool.h"
 #include "utils/anchor_impact_players_codec.h"
 #include "utils/anchor_impact_smoothing.h"
@@ -521,7 +522,7 @@ static int reeling(void *task)
     if (!pointer_valid(D_8020EED0_63A2B0) || !linked(task) ||
         IP_READ_PTR(D_8020EED0_63A2B0,0x174) != task) return 0;
     callback = IP_READ_U32(task,0x0C) & ~0x00800000u;
-    return callback == 0x801E9624u || callback == 0x801F5F0Cu || callback == 0x801FED3Cu;
+    return anchor_impact_boss_is_reel_callback(callback);
 }
 
 static void receive_controls(const unsigned int *row)
@@ -954,8 +955,6 @@ static void reel_end(void)
 #define REEL_HOOK(name, symbol) \
     RECOMP_HOOK(symbol) void name##_begin(void *task) { reel_begin(task); } \
     RECOMP_HOOK_RETURN(symbol) void name##_end(void) { reel_end(); }
-REEL_HOOK(anchor_impact_kashiwagi_reel, "func_801E9624_614A04")
-REEL_HOOK(anchor_impact_thaisamba_reel, "func_801F5F0C_6212EC")
 REEL_HOOK(anchor_impact_balberra_reel, "func_801FED3C_62A11C")
 #undef REEL_HOOK
 static void *s_fist_system;
@@ -1361,3 +1360,8 @@ void anchor_impact_players_hide_shots(void)
     for (i = 0; i < IP_SHOT_MAX; ++i)
         hide_slot_object(s_shots[i].task, s_shots[i].object, impact_shot_update);
 }
+
+void anchor_impact_players_reel_begin(void *task) { reel_begin(task); }
+void anchor_impact_players_reel_end(void) { reel_end(); }
+void anchor_impact_players_source_aim_begin(void *attack) { anchor_impact_attack_task_begin(attack); }
+void anchor_impact_players_source_aim_end(void) { task_aim_restore(); }

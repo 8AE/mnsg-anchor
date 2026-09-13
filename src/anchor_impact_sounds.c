@@ -2,6 +2,8 @@
  * global loop stops. Replicas never replay native damage/AI to make sounds. */
 #include "anchor_impact_sounds.h"
 #include "anchor_impact_native.h"
+#include "anchor_impact_boss.h"
+#include "anchor_remote_model_pool.h"
 #ifndef ANCHOR_IMPACT_SOUNDS_HOST_TEST
 #include "modding.h"
 #include "anchor.h"
@@ -40,7 +42,8 @@ static int valid(void *p)
     return p != 0;
 #else
     unsigned int a = (unsigned int)(unsigned long)p;
-    return !(a&3u) && a >= 0x80001000u && a < 0x80800000u;
+    return !(a&3u) && ((a >= 0x80001000u && a < 0x80800000u) ||
+                       anchor_remote_model_pool_contains(p));
 #endif
 }
 static int battle_task(void)
@@ -70,7 +73,7 @@ static int sound_valid(unsigned int command)
     if (((command>>16)&255u) >= 128) return 0;
     if (id&0x8000u) return loop_index(id) >= 0;
     for (i = 0; i < sizeof(cues)/sizeof(cues[0]); ++i) if (id == cues[i]) return 1;
-    return 0;
+    return anchor_impact_boss_sound_valid(anchor_impact_native_encounter(),id);
 }
 static void track(unsigned int *mask, unsigned int id)
 {

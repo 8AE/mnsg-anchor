@@ -2,9 +2,10 @@
 
 This branch implements a shared mech with independent native reticles, owner-executed
 controls, boss checkpoints and an owner-only stream of native render objects.
-The user's September 12 two-player test confirmed the reticles and exposed a
-shared camera and stepped remote movement. The refinements below have automated
-coverage; they have not yet been observed in a fresh live game session.
+The user confirmed Kashiwagi and Taisamba 2 syncing on September 13, then reported
+both games crashing when boss rush advanced past Taisamba. The current transition
+repair and its limits are described in [the Taisamba implementation notes](impact-taisamba-sync.md).
+Balberra and D'Etoile remain native-only until complete sync profiles exist.
 
 ## Corrections from the recordings and native code
 
@@ -39,22 +40,27 @@ evidence; historical instructions in the previous handoff are not current reques
 | Selector | Boss | Root ID | Root initializer |
 | --- | --- | --- | --- |
 | 1 | Kashiwagi | `0x50` | `func_801E4800_60FBE0` |
-| 2 | Thaisamba | `0x5A` | `func_801EF2E0_61A6C0` |
+| 2 | Taisamba 2 | `0x5A` | `func_801EF2E0_61A6C0` |
 | 3 | Balberra | `0x78` | `func_80200200_62B5E0` |
 | 4 | D'Etoile | `0x64` | `func_801FAEB0_626290` |
 
 `D_8020EED0_63A2B0` is the dedicated file_13 battle-state pointer. The boss selector
 is the halfword at system `+0x3ADF4`. Valid native stages are `0x21C..0x223`,
-`0x239..0x23C`, and title-menu boss-rush stage `0x260`.
+`0x239..0x23C`, and title-menu boss-rush stages `0x260..0x263`.
+Recognizing a stage does not enable synchronization: only selectors 1 and 2 have
+complete profiles. In boss rush, the stage must also match the selector exactly
+(`0x260`/1 or `0x261`/2). The remaining catalog entries are dormant groundwork.
 
-The version-6 checkpoint contains **165 u32 words**, including:
+The version-7 checkpoint contains **197 u32 words**, including:
 
 - Boss HP, shared ammunition, mech HP, combat pause and battle clock.
 - Boss root pose, animation clip ID, phase callback ID, collision dimensions,
   render flags and an explicit per-boss mask of scalar task fields.
 - Ten cockpit/mech object poses. Camera position, target and FOV are not sent.
-- Thaisamba's auxiliary angle, countdown and bubble gate; Balberra/D'Etoile's
-  auxiliary attack flags. Native pointer lists in these blocks remain local.
+- Taisamba 2's arena origin/displacement, ascent gate, collision mode, hook meter,
+  latch and scalar attachment references (never task pointers).
+- Taisamba 2's auxiliary angle, countdown and bubble gate. Native pointer lists
+  in this block remain local. Legacy auxiliary packing for later bosses is inactive.
 
 Callbacks, clips and asset recipes use fixed IDs resolved against the locally
 loaded USA overlay. No foreign task pointer, object pointer or callback address is
@@ -141,13 +147,14 @@ native presentation is restored. Pools retain live tasks rather than allocating
 again on every pause. Traversal and object counts are bounded; overflow falls
 back to native presentation instead of publishing or hiding a partial graph.
 
-Both players need this build: protocol v6 includes all eight native grappling-chain
+Both players need this build. Protocol v7 adds Taisamba arena and attachment state;
+the shared implementation retains all eight native grappling-chain
 models, delayed hook launch aim and the separate boss reeling input readers.
 It retains protocol v5's guided-fist input, uppercut model and owner-driven audio,
 local cameras and generation handles. Older Impact packets are rejected.
 
 The September 13 follow-up also fixes unused native texture bindings and adds
-74 verified combat cues plus six loop-stop pairs. See the full recording/native
+74 verified combat cues plus six loop-stop pairs. Taisamba adds nine encounter-specific intro/victory cues. See the full recording/native
 audit and limitations in [impact-attacks-analysis-2026-09-13.md](impact-attacks-analysis-2026-09-13.md).
 
 ## Network contract
@@ -179,16 +186,21 @@ of measured server capacity. A representative 64-object localhost frame used
 6,759 bytes total over four pages. No public Anchor service was load-tested.
 
 The sound channel adds at most 30 KiB/s owner traffic, with the same team fan-out.
-All participants need protocol 6. `mod.toml` packages the coordinator, player,
+All participants need protocol 7. `mod.toml` packages the coordinator, player,
 visual and sound modules.
 
 ## Verification and remaining limits
 
 - `UBSAN=1 tests/run_impact_sync.sh`: production C codecs, native checkpoint
-  application, damage return semantics, Balberra HP and auxiliary fields,
+  application, damage return semantics, native Balberra HP fallback and legacy auxiliary packing,
   native cursor recipe, input arbitration, shot capture, texture bounds, alpha,
   render visibility restoration, retained allocation over 50 pause cycles,
   plus Python transport/election/paging regressions.
+- The post-Taisamba regression rejects queued defeat snapshots after a stage
+  change and leaves later native bosses untouched. Bridge tests run all four
+  channels through staggered `0x261` → `0x262` transitions, reject late packets,
+  and verify that a new Kashiwagi/Taisamba run can synchronize again. See
+  [impact-defeat-validation-2026-09-13.json](impact-defeat-validation-2026-09-13.json).
 - Full Python suite: 270 tests run, one skipped; all executed tests passed.
 - `tools/test_impact_anchor_local.py --port 43393`: three real TCP clients against
   disposable loopback Anchor revision `bf7b43c10b19428ceba54772c7bae3abca44a345`;
@@ -199,16 +211,16 @@ visual and sound modules.
   inventories literal sends; the channel-specific tests cover generic sends.
 
 The supplied 16:45 recording is the user's two-player test of the preceding build.
-The independent-camera, tint and interpolation refinements above have not had a
-fresh live game run. The earlier automation restriction and baseline checks remain
+The user subsequently confirmed the gameplay refinements. The post-Taisamba
+transition repair has not had a fresh live game run here. The earlier automation restriction and baseline checks remain
 recorded in [impact-validation-2026-09-12.json](impact-validation-2026-09-12.json).
 
 Followers still maintain local native graphs for introductions, scene flow and
 future authority takeover. Checkpoints cover root/auxiliary scalar state; they do
 not serialize every child's private AI state or reconstruct every in-flight
 collision actor during host migration. Unsupported render objects remain local,
-and a 64-object overflow falls back to local presentation. Sound timing, all four
-bosses' full attack coverage, late entry, defeat/scene transitions and exact
+and a 64-object overflow falls back to local presentation. Balberra and D'Etoile
+are not synchronized. Sound timing, late entry, the repaired defeat/scene transition and exact
 mid-attack host migration remain unverified in live gameplay. These limits must
 remain visible when describing the branch; automated build/transport success is
 not proof of complete boss synchronization.
