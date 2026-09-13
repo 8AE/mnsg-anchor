@@ -565,13 +565,13 @@ static const AnchorFlagEntry s_entries[] = {
     /* ── Dungeon Keys: Ghost Toys Castle ─────────────────────────────── */
     {0, "Keys: Ghost Toys Castle", 0},
     {"ky_s_gt_flwr", "Ghost Toys Ghost and Bean fight room Silver Key", 0},
-    {"ky_s_gt_crn", "Ghost Toys Picture floor room Gold Key", 0},
-    {"ky_s_gt_inv", "Festival Temple Boss Fight Boss Beaten", 0},
-    {"ky_s_gt_spin", "Festival Temple Miracle Item Received", 0},
+    {"ky_s_gt_crn", "Ghost Toys Picture floor room Silver Key", 0},
+    {"ky_s_gt_inv", "Ghost Toys Castle Silver Key", 0},
+    {"ky_s_gt_spin", "Ghost Toys Castle Silver Key", 0},
     {"ky_s_gt_dar", "Ghost Toys Flower Pot Room Silver Key", 0},
-    {"ky_g_gt_ff", "Ghost Toys Crane Game Room Silver Key", 0},
+    {"ky_g_gt_ff", "Ghost Toys Crane Game Room Gold Key", 0},
     {"ky_d_gt_sc", "GTC: Diamond (2F Spike Cannon)", 0},
-    {"ky_s_gt_bil", "Get Camera", 0},
+    {"ky_s_gt_bil", "Ghost Toys Castle Silver Key", 0},
 
     /* ── Dungeon Keys: Festival Temple Castle ────────────────────────── */
     {0, "Keys: Festival Temple", 0},
@@ -590,12 +590,12 @@ static const AnchorFlagEntry s_entries[] = {
 
     /* ── Dungeon Keys: Musical Castle ────────────────────────────────── */
     {0, "Keys: Musical Castle", 0},
-    {"ky_g_mc_fan", "Gorgeous Musical Castle Spinning Block Platforming Diamond Key", 0},
-    {"ky_s_mc_tall", "Gorgeous Musical Castle Raising Platform Diamond Key", 0},
-    {"ky_g_mc_hj", "Gorgeous Musical Castle Conveyor Belt Room Switch Hit", 0},
+    {"ky_g_mc_fan", "Gorgeous Musical Castle Spinning Block Platforming Gold Key", 0},
+    {"ky_s_mc_tall", "Gorgeous Musical Castle Raising Platform Silver Key", 0},
+    {"ky_g_mc_hj", "Gorgeous Musical Castle Gold Key", 0},
     {"ky_g_mc_mini", "MC: Gold (1F Mini)", 0},
-    {"ky_d_mc_cube", "Gorgeous Musical Castle Fan Room Gold Key", 0},
-    {"ky_d_mc2", "Gorgeous Musical Castle First Climb Silver Key", 0},
+    {"ky_d_mc_cube", "Gorgeous Musical Castle Fan Room Diamond Key", 0},
+    {"ky_d_mc2", "Gorgeous Musical Castle First Climb Diamond Key", 0},
 
     /* ── Silver Fortune Doll Pickups ────────────────────────────────── */
     {0, "Silver Fortune Dolls", 0},
@@ -867,6 +867,18 @@ const char *anchor_flag_catalog_find_display(const char *key)
     }
 
     return 0;
+}
+
+const char *anchor_flag_catalog_find_display_value(const char *key, int value)
+{
+    int i;
+    if (!key)
+        return 0;
+    for (i = 0; i < NUM_ENTRIES; ++i)
+        if (s_entries[i].key && s_entries[i].force_val == value &&
+            debug_text_equals(s_entries[i].key, key))
+            return s_entries[i].display;
+    return anchor_flag_catalog_find_display(key);
 }
 
 /* Sections whose checks are "important" for the notification filter: the

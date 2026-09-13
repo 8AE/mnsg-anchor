@@ -1,0 +1,210 @@
+{
+  "romSha256": "e40bee20508c2e29e651dca4e47504e40f908f0a2186e34a582784bf5a64be4c",
+  "nativeInitializer": "func_80218A54_5D3F24 copies definition+4/+8 into actor+D0/+D4",
+  "nativeKeyUpdate": "file_43 func_0800058C_6F3A6C reads actor+D1 color and sets actor+D4 pickup flag",
+  "keys": [
+    {
+      "key": "ky_s_oc_tile",
+      "flag": "0x010A",
+      "definitionRomAddress": "0x012A2080",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_s_oc_1f",
+      "flag": "0x010C",
+      "definitionRomAddress": "0x012A3450",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_g_oc_1f",
+      "flag": "0x010E",
+      "definitionRomAddress": "0x012A4570",
+      "nativeColor": 1,
+      "icon": "GOLD_KEY"
+    },
+    {
+      "key": "ky_s_oc_cp",
+      "flag": "0x0110",
+      "definitionRomAddress": "0x012A43B0",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_s_oc_crsh",
+      "flag": "0x0112",
+      "definitionRomAddress": "0x012A4A30",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_s_oc_2f",
+      "flag": "0x0114",
+      "definitionRomAddress": "0x012A5790",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_g_ft_hot",
+      "flag": "0x016E",
+      "definitionRomAddress": "0x012AAAE0",
+      "nativeColor": 1,
+      "icon": "GOLD_KEY"
+    },
+    {
+      "key": "ky_s_ft_ring",
+      "flag": "0x0171",
+      "definitionRomAddress": "0x012AC9A0",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_s_gs_baz",
+      "flag": "0x017B",
+      "definitionRomAddress": "0x012AE000",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_g_gs_jet",
+      "flag": "0x017D",
+      "definitionRomAddress": "0x012AE1E0",
+      "nativeColor": 1,
+      "icon": "GOLD_KEY"
+    },
+    {
+      "key": "ky_s_gs_lava",
+      "flag": "0x017F",
+      "definitionRomAddress": "0x012AE7C0",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_s_gs_uw",
+      "flag": "0x0181",
+      "definitionRomAddress": "0x012AF2D0",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_s_gs_swd",
+      "flag": "0x0183",
+      "definitionRomAddress": "0x012AFE30",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_d_gs_inv",
+      "flag": "0x0185",
+      "definitionRomAddress": "0x012AF710",
+      "nativeColor": 2,
+      "icon": "DIAMOND_KEY"
+    },
+    {
+      "key": "ky_s_gs_sus",
+      "flag": "0x0187",
+      "definitionRomAddress": "0x012B0760",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_g_mc_fan",
+      "flag": "0x0189",
+      "definitionRomAddress": "0x012B1DD0",
+      "nativeColor": 1,
+      "icon": "GOLD_KEY"
+    },
+    {
+      "key": "ky_s_mc_tall",
+      "flag": "0x018B",
+      "definitionRomAddress": "0x012B18F0",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_g_mc_hj",
+      "flag": "0x018C",
+      "definitionRomAddress": "0x012B2000",
+      "nativeColor": 1,
+      "icon": "GOLD_KEY"
+    },
+    {
+      "key": "ky_g_mc_mini",
+      "flag": "0x018F",
+      "definitionRomAddress": "0x012B2D40",
+      "nativeColor": 1,
+      "icon": "GOLD_KEY"
+    },
+    {
+      "key": "ky_d_mc_cube",
+      "flag": "0x0191",
+      "definitionRomAddress": "0x012B2B80",
+      "nativeColor": 2,
+      "icon": "DIAMOND_KEY"
+    },
+    {
+      "key": "ky_d_mc2",
+      "flag": "0x0193",
+      "definitionRomAddress": "0x012B4AA0",
+      "nativeColor": 2,
+      "icon": "DIAMOND_KEY"
+    },
+    {
+      "key": "ky_s_gt_flwr",
+      "flag": "0x01AD",
+      "definitionRomAddress": "0x012A7CB0",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_s_gt_crn",
+      "flag": "0x01AF",
+      "definitionRomAddress": "0x012A7070",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_s_gt_inv",
+      "flag": "0x01B1",
+      "definitionRomAddress": "0x012A8720",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_s_gt_spin",
+      "flag": "0x01B3",
+      "definitionRomAddress": "0x012A8BA0",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_s_gt_dar",
+      "flag": "0x01B5",
+      "definitionRomAddress": "0x012A90D0",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    },
+    {
+      "key": "ky_g_gt_ff",
+      "flag": "0x01B7",
+      "definitionRomAddress": "0x012A9510",
+      "nativeColor": 1,
+      "icon": "GOLD_KEY"
+    },
+    {
+      "key": "ky_d_gt_sc",
+      "flag": "0x01B9",
+      "definitionRomAddress": "0x012A9A80",
+      "nativeColor": 2,
+      "icon": "DIAMOND_KEY"
+    },
+    {
+      "key": "ky_s_gt_bil",
+      "flag": "0x01BB",
+      "definitionRomAddress": "0x012A9920",
+      "nativeColor": 0,
+      "icon": "SILVER_KEY"
+    }
+  ]
+}

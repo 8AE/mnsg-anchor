@@ -35,6 +35,7 @@
 #include "anchor_dialog.h"
 #include "anchor_runtime.h"
 #include "anchor_flag_catalog.h"
+#include "anchor_rom_icons.h"
 #include "boss_sync.h"
 #include "enemy_sync.h"
 #include "item_sync.h"
@@ -1243,18 +1244,19 @@ static void capture_caches(void)
    bottom-right corner upward.  Each card auto-dismisses after NOTIF_FRAMES
    game frames.  Slots are allocated round-robin; idle slots are preferred.
 
-   Each card is a single-line rectangle that shrink-wraps the check name.
+   Each card shrink-wraps its optional native icon and single-line check name.
    Its colours match the online player list panel.
 
    Card layout (each slot):
      ┌───────────────────────────────┐
-     │  Chain Pipe                   │  ← small, white
+     │  [icon]  Chain Pipe           │  ← small, white
      └───────────────────────────────┘
    ========================================================================= */
 
 #define NOTIF_SLOTS 8      /* max concurrent toasts             */
 #define NOTIF_FRAMES 300   /* display duration (~5 s @ 60 fps)  */
-#define NOTIF_SLOT_H 34.0f /* vertical spacing between slots    */
+#define NOTIF_SLOT_H 44.0f /* 24px icon + 14px padding + border + gap */
+#define NOTIF_ICON_SIZE 24.0f
 #define NOTIF_BOTTOM 16.0f /* bottom edge of slot 0             */
 #define NOTIF_RIGHT 16.0f  /* right edge of all cards           */
 
@@ -1266,6 +1268,12 @@ static const RecompuiColor C_NWHITE = {255, 255, 255, 255};
 static RecompuiContext s_notif_ctx = RECOMPUI_NULL_CONTEXT;
 static RecompuiResource s_notif_card[NOTIF_SLOTS];
 static RecompuiResource s_notif_name[NOTIF_SLOTS];
+static RecompuiResource s_notif_icon[NOTIF_SLOTS];
+static RecompuiTextureHandle s_notif_textures[ANCHOR_ICON_COUNT];
+/* Separate readiness flags: texture handle zero is a valid host handle. */
+static unsigned char s_notif_texture_loaded[ANCHOR_ICON_COUNT];
+static unsigned char s_notif_rgba[ANCHOR_ROM_ICON_MAX_RGBA32_SIZE]
+    __attribute__((aligned(8)));
 static int s_notif_timer[NOTIF_SLOTS];
 static int s_notif_next = 0;        /* round-robin write cursor */
 static int s_notif_ctx_visible = 0; /* 1 when context is currently shown */
@@ -1300,11 +1308,11 @@ static int flag_notification_hidden(const char *n)
     return 0;
 }
 
-static const char *get_flag_display_name(const char *n)
+static const char *get_flag_display_name(const char *n, int value)
 {
     if (flag_notification_hidden(n))
         return 0;
-    return anchor_flag_catalog_find_display(n);
+    return anchor_flag_catalog_find_display_value(n, value);
 }
 
 
@@ -1322,6 +1330,9 @@ static void item_notif_ensure_init(void)
     recompui_open_context(s_notif_ctx);
 
     RecompuiResource root = recompui_context_root(s_notif_ctx);
+    static unsigned char blank[4] = {0, 0, 0, 0};
+    s_notif_textures[ANCHOR_ICON_NONE] =
+        recompui_create_texture_rgba32(blank, 1, 1);
 
     for (i = 0; i < NOTIF_SLOTS; ++i)
     {
@@ -1331,7 +1342,7 @@ static void item_notif_ensure_init(void)
         recompui_set_right(card, NOTIF_RIGHT, UNIT_DP);
         recompui_set_bottom(card, NOTIF_BOTTOM + (float)i * NOTIF_SLOT_H, UNIT_DP);
         /* Absolute right edge with no left edge makes auto resolve as
-         * shrink-to-fit, so the rectangle is exactly as wide as its text. */
+         * shrink-to-fit around the visible icon and text. */
         recompui_set_width_auto(card);
         recompui_set_display(card, DISPLAY_NONE); /* hidden until needed */
         recompui_set_flex_direction(card, FLEX_DIRECTION_ROW);
@@ -1342,6 +1353,15 @@ static void item_notif_ensure_init(void)
         recompui_set_border_color(card, &C_NBORDER);
         recompui_set_padding(card, 7.0f, UNIT_DP);
         s_notif_card[i] = card;
+
+        /* Hidden icons take no layout space on ordinary text-only checks. */
+        s_notif_icon[i] = recompui_create_imageview(
+            s_notif_ctx, card, s_notif_textures[ANCHOR_ICON_NONE]);
+        recompui_set_width(s_notif_icon[i], NOTIF_ICON_SIZE, UNIT_DP);
+        recompui_set_height(s_notif_icon[i], NOTIF_ICON_SIZE, UNIT_DP);
+        recompui_set_flex_shrink(s_notif_icon[i], 0.0f);
+        recompui_set_margin_right(s_notif_icon[i], 8.0f, UNIT_DP);
+        recompui_set_display(s_notif_icon[i], DISPLAY_NONE);
 
         /* ── Check name ──────────────────────────────────────────────── */
         RecompuiResource nam = recompui_create_label(s_notif_ctx, card,
@@ -1373,13 +1393,15 @@ static void item_notif_ensure_init(void)
  * the anchor_show_notifications mode: Off, Important (catalog-filtered) or
  * All.
  *
- * @param key           Catalog/SET_FLAG key (used to classify importance).
+ * @param key           Catalog/SET_FLAG key (importance and native icon).
+ * @param value         Awarded value, including the silver/gold weapon tier.
  * @param item_display  Human-readable check name (e.g. "Chain Pipe").
  */
-static void item_notif_push(const char *key, const char *item_display)
+static void item_notif_push(const char *key, int value, const char *item_display)
 {
     int i, slot;
     unsigned int mode;
+    AnchorRomIcon icon;
     if (!item_display || !item_display[0])
         return;
 
@@ -1390,6 +1412,25 @@ static void item_notif_push(const char *key, const char *item_display)
         return;
 
     item_notif_ensure_init();
+    icon = anchor_icon_for_check(key, value);
+    if (icon != ANCHOR_ICON_NONE && !s_notif_texture_loaded[icon])
+    {
+        const AnchorRomIconInfo *info = anchor_rom_icon_info(icon);
+        if (anchor_rom_load_icon_rgba32(icon, s_notif_rgba,
+                                        sizeof(s_notif_rgba)))
+        {
+            s_notif_textures[icon] = recompui_create_texture_rgba32(
+                s_notif_rgba, info->width, info->height);
+            s_notif_texture_loaded[icon] = 1;
+        }
+        else
+        {
+            /* Keep the notification readable if its ROM contract fails. */
+            recomp_printf("[ItemSync] Icon resource 0x%04X unavailable\n",
+                          info->resource_id);
+            icon = ANCHOR_ICON_NONE;
+        }
+    }
 
     /* Prefer an idle slot so we don't prematurely evict existing toasts. */
     slot = s_notif_next % NOTIF_SLOTS;
@@ -1407,6 +1448,11 @@ static void item_notif_push(const char *key, const char *item_display)
     /* Update card text and make it visible. */
     recompui_open_context(s_notif_ctx);
     recompui_set_text(s_notif_name[slot], item_display);
+    if (icon != ANCHOR_ICON_NONE)
+        recompui_set_imageview_texture(s_notif_icon[slot], s_notif_textures[icon]);
+    /* Always reset visibility when recycling a slot after an icon toast. */
+    recompui_set_display(s_notif_icon[slot],
+                         icon == ANCHOR_ICON_NONE ? DISPLAY_NONE : DISPLAY_BLOCK);
     recompui_set_display(s_notif_card[slot], DISPLAY_FLEX);
     recompui_close_context(s_notif_ctx);
 
@@ -1541,7 +1587,7 @@ static const char *apply_flag(const char *flag_name, signed int val)
             }
             s_fields[i].cached = reconcile.cached;
             recomp_printf("[ItemSync] Applied field '%s' = %d\n", flag_name, val);
-            return get_flag_display_name(flag_name);
+            return get_flag_display_name(flag_name, val);
         }
         /* Only durable equal input acknowledges this exact local value. A
            live, stale or partial snapshot must leave a newer unsent local
@@ -1625,7 +1671,7 @@ static const char *apply_flag(const char *flag_name, signed int val)
                 recomp_printf("[ItemSync] Applied flag '%s' (id=0x%X)\n",
                               flag_name, s_flag_bits[i].id);
                 {
-                    const char *display = get_flag_display_name(flag_name);
+                    const char *display = get_flag_display_name(flag_name, val);
                     return display ? display : implied_display;
                 }
             }
@@ -1746,9 +1792,9 @@ static void notify_remote_boss_completion(int index)
         return;
 
     anchor_race_on_remote_flag_synced(s_flag_bits[index].name, 1);
-    display = get_flag_display_name(s_flag_bits[index].name);
+    display = get_flag_display_name(s_flag_bits[index].name, 1);
     if (display)
-        item_notif_push(s_flag_bits[index].name, display);
+        item_notif_push(s_flag_bits[index].name, 1, display);
     s_remote_boss_completion_notified[index] = 1;
 }
 
@@ -1774,7 +1820,7 @@ void item_sync_commit_boss_completion(const char *flag_name)
                                      s_pending_benkei_sasuke_profile);
         s_pending_benkei_sasuke_profile = -1;
         if (profile_display)
-            item_notif_push("sasuke_body", profile_display);
+            item_notif_push("sasuke_body", 1, profile_display);
     }
     notify_remote_boss_completion(index);
     s_flag_bits[index].cached = 1;
@@ -1989,7 +2035,7 @@ static void process_incoming_packets(void)
                 }
                 /* Door transitions are world state, not item checks. */
                 if (display && !is_door_unlock_name(fname))
-                    item_notif_push(fname, display);
+                    item_notif_push(fname, fval, display);
             }
         }
         else if (mnsg_json_string_equals(pkt, "type", "MNSG_DOOR_UNLOCK"))
@@ -2258,9 +2304,9 @@ static void monitor_and_send_changes(void)
             s_set_flag_send_timer = SET_FLAG_SEND_INTERVAL_FRAMES;
             recomp_printf("[ItemSync] Sent field '%s' = %d\n",
                           s_fields[i].name, cur);
-            const char *display = get_flag_display_name(s_fields[i].name);
+            const char *display = get_flag_display_name(s_fields[i].name, cur);
             if (display)
-                item_notif_push(s_fields[i].name, display);
+                item_notif_push(s_fields[i].name, cur, display);
         }
         /* Update cache when we send, or when we don't need to send (e.g. item
            lost / dropped) – but NOT when the send was deferred due to budget. */
@@ -2356,9 +2402,9 @@ static void monitor_and_send_changes(void)
             if (!is_door_unlock_flag(i))
             {
                 const char *display =
-                    get_flag_display_name(s_flag_bits[i].name);
+                    get_flag_display_name(s_flag_bits[i].name, 1);
                 if (display)
-                    item_notif_push(s_flag_bits[i].name, display);
+                    item_notif_push(s_flag_bits[i].name, 1, display);
             }
         }
         else

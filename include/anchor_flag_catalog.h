@@ -11,6 +11,7 @@ typedef struct
 int anchor_flag_catalog_count(void);
 const AnchorFlagEntry *anchor_flag_catalog_get(int index);
 const char *anchor_flag_catalog_find_display(const char *key);
+const char *anchor_flag_catalog_find_display_value(const char *key, int value);
 int anchor_flag_catalog_is_important(const char *key);
 
 #endif

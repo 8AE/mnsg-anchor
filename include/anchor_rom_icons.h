@@ -22,6 +22,32 @@
 #define ANCHOR_MAP_FACE_ICONS_RGBA32_SIZE \
     (ANCHOR_MAP_FACE_ICON_COUNT * ANCHOR_MAP_FACE_ICON_RGBA32_SIZE)
 
+typedef enum
+{
+    ANCHOR_ICON_NONE,
+#define ICON(name, ...) ANCHOR_ICON_##name,
+#include "anchor_rom_icon_defs.inc"
+#undef ICON
+    ANCHOR_ICON_COUNT
+} AnchorRomIcon;
+
+typedef struct
+{
+    unsigned int resource_id, rom_address, packed_size;
+    unsigned short sheet_width, sheet_height;
+    unsigned char x, y, width, height, flip_y;
+} AnchorRomIconInfo;
+
+#define ANCHOR_ROM_ICON_MAX_RGBA32_SIZE (32u * 32u * 4u)
+
+const AnchorRomIconInfo *anchor_rom_icon_info(AnchorRomIcon icon);
+int anchor_rom_load_icon_rgba32(AnchorRomIcon icon, unsigned char *rgba_out,
+                               unsigned int rgba_out_size);
+
+/* Select by stable check key and awarded value (weapon tiers: 1/2).
+ * Unknown checks return NONE and remain text-only. */
+AnchorRomIcon anchor_icon_for_check(const char *key, int value);
+
 /* Load the stock pause-menu sheet from the game's ROM resource table, decode
  * it with the native PIC0000 decoder, and copy Yae's 24x24 flute crop to
  * rgba_out. The caller owns rgba_out; no ROM-derived pixels are baked into the
