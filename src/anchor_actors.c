@@ -22,6 +22,7 @@
 #include "anchor_remote_motion.h"
 #include "anchor_remote_model_pool.h"
 #include "anchor_render_scratch.h"
+#include "anchor_dungeon_maps.h"
 #include "utils/string_utils.h"
 #include "utils/array_utils.h"
 #include "utils/json_utils.h"
@@ -242,6 +243,7 @@ void anchor_load_remote_cutscene_resources(void)
     anchor_player_models_load_resources();
     /* Projectile recipes share the already staged character broad files. */
     anchor_projectile_models_load_resources();
+    anchor_dungeon_maps_load_resources();
     anchor_render_scratch_load_resources();
 }
 
