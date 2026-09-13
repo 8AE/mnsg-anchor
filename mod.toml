@@ -76,6 +76,7 @@ additional_files = [
     "py/anchor_tsurami.py",
     "py/anchor_impact.py",
     "py/anchor_impact_visual.py",
+    "py/anchor_impact_sound.py",
     "icons/thumb.png",
 ]
 

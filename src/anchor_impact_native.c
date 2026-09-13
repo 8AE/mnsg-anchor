@@ -695,5 +695,4 @@ void anchor_impact_native_scheduler_end(void)
 {
     if (s_active && !s_owner && s_view_valid && !s_paused && bound_live())
         apply_shared_view(&s_view);
-    anchor_impact_visuals_render();
 }

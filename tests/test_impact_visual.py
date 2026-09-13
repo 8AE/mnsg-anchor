@@ -90,12 +90,21 @@ class ImpactVisualTests(unittest.TestCase):
 
     def test_malformed_words_and_page_bounds(self):
         original = self.send()[0]
-        for index,value in [(0,0),(1,122),(2,39),(3,3),(5,16),(6,2),
+        for index,value in [(0,0),(1,131),(2,39),(3,3),(5,16),(6,2),
                             (7,0x7F800000),(10,65536),(17,0x8770),(18,0x800000)]:
             p = copy.deepcopy(original); p["r"][0][index] = value
             self.assertFalse(self.rx.receive(self.b,self.guest,p,10))
         for key,value in [("n",5),("p",4),("q",True),("extension","x"*6144)]:
             self.assertFalse(self.rx.receive(self.b,self.guest,{**original,key:value},10))
+
+    def test_native_grapple_chain_recipes_survive_transport(self):
+        sample = rows(8)
+        for i, row in enumerate(sample):
+            row[1] = 123+i
+        packet = self.send(sample=sample)[0]
+        self.assertFalse(self.rx.receive(self.b,self.guest,{**packet,"v":5},10))
+        self.assertTrue(self.rx.receive(self.b,self.guest,packet,10))
+        self.assertEqual(self.view(),sample)
 
     def test_pause_disconnect_and_local_reentry_clear_cache(self):
         for p in self.send(): self.rx.receive(self.b,self.guest,p,10)
@@ -134,7 +143,9 @@ class ImpactVisualTests(unittest.TestCase):
             self.assertTrue(visual.rows_valid([row]))
         for actual, expected in zip(positions, (0, 2.4, 4.8, 7.2, 9.6, 12)):
             self.assertAlmostEqual(actual, expected, places=4)
-        middle = self.view(10.2125)[0]
+        # Use the pure blend for an earlier sample; the live render clock
+        # deliberately never moves backward after a later frame was drawn.
+        middle = visual.blend_row(first, self.rx.latest[0], .5)
         self.assertEqual(middle[10], 0)
         self.assertAlmostEqual(visual._float(middle[16]), 5)
         self.assertEqual(visual._float(self.rx.latest[0][7]), 12)  # never mutate receipt
@@ -185,6 +196,34 @@ class ImpactVisualTests(unittest.TestCase):
         self.assertEqual(self.view(), sample)
         sample[1][0] = sample[0][0] - 64  # distinct ID, same pool slot is invalid
         self.assertFalse(visual.rows_valid(sample))
+
+    def test_small_attack_frames_run_faster_with_bounded_page_budget(self):
+        sent = []
+        for tick in range(300):
+            sent += self.send(10+tick/300, rows(2))
+        self.assertGreater(len(sent), 24)
+        self.assertLessEqual(len(sent), 30)
+        self.assertTrue(all(p["n"] == 1 for p in sent))
+        tx = visual.ImpactVisualTransport()
+        count = 0
+        for tick in range(600):
+            _, packets = tx.update(self.a,self.host,1,0x260,1,1,
+                                  rows((1,32,48,64)[tick%4]),10+tick/300)
+            count += len(packets)
+        self.assertLessEqual(count, 2*32+3)  # at most one four-page burst
+        self.tx = visual.ImpactVisualTransport()
+        self.receive_sample(10, 0)
+        self.receive_sample(10+1/30, 10)
+        self.assertLessEqual(self.rx.render_delay, .06)
+        self.assertGreater(visual._float(self.view(10+.07)[0][7]), 0)
+
+    def test_delay_adjustment_never_rewinds_a_rendered_projectile(self):
+        self.receive_sample(10, 0)
+        self.receive_sample(10.04, 10)
+        before = visual._float(self.view(10.10)[0][7])
+        self.receive_sample(10.20, 40)
+        after = visual._float(self.view(10.20)[0][7])
+        self.assertGreaterEqual(after, before)
 
     def test_no_render_traffic_without_an_eligible_peer(self):
         self.a["players"] = {1:self.a["players"][1]}

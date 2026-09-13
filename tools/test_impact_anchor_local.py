@@ -17,6 +17,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"py"))
 import anchor_impact as impact
 import anchor_impact_visual as visual
+import anchor_impact_sound as sound
 
 
 class Peer:
@@ -80,6 +81,9 @@ def main():
         rx.update(context(guest),guest_battle,1,0x260,1,1,None,10)
         rows = [[i+1,79,16,0,0,9,0,0,0,0,0,512,0,
                  0x3E4CCCCD,0x3E4CCCCD,0x3E4CCCCD,0,0x4A8,0,*([0,0]*5)] for i in range(64)]
+        for i, recipe in enumerate([2,7,9,11,12,122,*range(123,131)]):
+            rows[i][1] = recipe  # real punch/kick/arm/hook and all chain lengths
+            rows[i][5] = 5
         _,packets = tx.update(context(host),host_battle,1,0x260,1,1,rows,10)
         assert len(packets) == 4
         for packet in packets: host.send(packet)
@@ -91,19 +95,41 @@ def main():
         assert not [p for p in outsider.read(.05) if p.get("type") == visual.PACKET_TYPE], "Cross-team leak"
         # Actual cursor/control transport uses the same server route.
         ptx,prx = impact.ImpactPlayerTransport(),impact.ImpactPlayerTransport()
-        sample = {"c":[1,0,0,0,0,512,0],"a":[[1,2,0x2000,0x2000,0,512,host.cid,1]]}
+        sample = {"c":[1,0,0,0,0,512,0],"a":[[1,2,0x10,0x10,990,630,host.cid,1],
+                  [2,3,110,60,0,0,host.cid,1], [3,2,0x8000,0x8000,990,630,host.cid,1],
+                  [4,2,0x4000,0x4000,990,630,host.cid,1]]}
         prx.update(context(host),1,0x260,1,1,{"c":[0]*7,"a":[]},10)
         _,packets = ptx.update(context(guest),1,0x260,1,1,sample,10)
         for p in packets: guest.send(p); ptx.packet_send_result(p,True)
         for p in host.read(.2):
             if p.get("type") == impact.PLAYER_PACKET_TYPE: assert prx.receive(context(host),p,10)
         status,_ = prx.update(context(host),1,0x260,1,1,{"c":[0]*7,"a":[]},10)
-        assert len(status["a"]) == len(status["c"]) == 1
+        assert len(status["a"]) == 4 and len(status["c"]) == 1
+        assert status["a"][1][3:8] == [3,110,60,0,0]
         assert status["a"][0][-2:] == [host.cid,1]
+        assert status["a"][0][4:8] == [0x10,0x10,990,630]
+        assert [r[5] for r in status["a"][2:]] == [0x8000,0x4000]
         assert not [p for p in outsider.read(.05) if p.get("type") == impact.PLAYER_PACKET_TYPE]
+        stx,srx = sound.ImpactSoundTransport(),sound.ImpactSoundTransport()
+        srx.update(context(guest),guest_battle,1,0x260,1,1,"",10)
+        _,packets = stx.update(context(host),host_battle,1,0x260,1,1,"000000107840022900000240",10)
+        for p in packets: host.send(p)
+        audio = [p for p in guest.read(.1) if p.get("type") == sound.PACKET_TYPE]
+        assert len(audio) == 1 and srx.receive(context(guest),guest_battle,audio[0],10)
+        assert not srx.receive(context(guest),guest_battle,audio[0],10)
+        assert srx.update(context(guest),guest_battle,1,0x260,1,1,"",10)[0] == "000000107840022900000240"
+        assert not [p for p in host.read(.05) if p.get("type") == sound.PACKET_TYPE]
+        assert not [p for p in outsider.read(.05) if p.get("type") == sound.PACKET_TYPE]
+        _,packets = stx.update(context(host),host_battle,1,0x260,1,1,"0000000000008240",10.1)
+        for p in packets: host.send(p)
+        audio = [p for p in guest.read(.1) if p.get("type") == sound.PACKET_TYPE]
+        assert len(audio) == 1 and srx.receive(context(guest),guest_battle,audio[0],10.1)
+        assert srx.update(context(guest),guest_battle,1,0x260,1,1,"",10.1)[0] == "0000000000008240"
         print(json.dumps({"clients":3,"render_pages":4,"render_objects":64,
                           "frame_bytes":sum(len(json.dumps(p,separators=(",", ":")).encode())+1 for p in incoming),
-                          "sender_excluded":True,"team_isolated":True,"cursor_and_controls":True}))
+                          "sender_excluded":True,"team_isolated":True,"cursor_and_controls":True,
+                          "limbs_and_chain":True,"hook_aim_and_ordered_mashes":True,
+                          "audio_start_stop":True,"audio_deduplicated":True}))
     finally:
         for peer in peers: peer.socket.close()
 

@@ -162,6 +162,17 @@ static const AnchorImpactVisualRecipe recipes[] = {
     {0x48019350u, 0x4B5u},
     {0x48019430u, 0x4B5u},
     {0x480199E0u, 0x4B5u},
+    /* FUN_801D9730 extends the uppercut after its opening animation. */
+    {0x18000248u, 0x4A8u},
+    /* FUN_801DA3CC / table 80209CF0: variable-length grappling chain. */
+    {0x4800A380u, 0x4A8u},
+    {0x4800A460u, 0x4A8u},
+    {0x4800A540u, 0x4A8u},
+    {0x4800A620u, 0x4A8u},
+    {0x4800A700u, 0x4A8u},
+    {0x4800A7E0u, 0x4A8u},
+    {0x4800A8C0u, 0x4A8u},
+    {0x4800A9A0u, 0x4A8u},
 };
 static void *volatile materials[39];
 void anchor_impact_visual_catalog_init(void) {

@@ -257,6 +257,9 @@ extern "C"
    char *anchor_impact_visuals_update(int ready, unsigned int stage,
                                       unsigned int encounter, unsigned int visit,
                                       const char *sample_json);
+char *anchor_impact_sounds_update(int ready, unsigned int stage,
+                                      unsigned int encounter, unsigned int visit,
+                                      const char *sample_json);
 
    /**
     * @brief Broadcast the local player's world-space position to teammates.

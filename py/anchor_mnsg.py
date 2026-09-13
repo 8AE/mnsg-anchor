@@ -85,6 +85,7 @@ import anchor_dharumanyo
 import anchor_tsurami
 import anchor_impact
 import anchor_impact_visual
+import anchor_impact_sound
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -172,6 +173,7 @@ _tsurami = anchor_tsurami.TsuramiTransport()
 _impact = anchor_impact.ImpactTransport()
 _impact_players = anchor_impact.ImpactPlayerTransport()
 _impact_visuals = anchor_impact_visual.ImpactVisualTransport()
+_impact_sounds = anchor_impact_sound.ImpactSoundTransport()
 _impact_debug_str: str = ""
 
 ###############################################################################
@@ -212,6 +214,7 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     anchor_impact.PACKET_TYPE: 8 * 1024,
     anchor_impact.PLAYER_PACKET_TYPE: anchor_impact.PLAYER_PACKET_BYTES,
     anchor_impact_visual.PACKET_TYPE: anchor_impact_visual.PACKET_BYTES,
+    anchor_impact_sound.PACKET_TYPE: anchor_impact_sound.PACKET_BYTES,
 }
 PLAYER_HIT_MAX_AGE_MS: int = 500
 PLAYER_SOUND_MAX_AGE_MS: int = 500
@@ -1071,6 +1074,11 @@ def _recv_loop(sock: socket.socket) -> None:
                         _impact.receive(_boss_context(), packet, time.monotonic())
                     continue
 
+                if ptype == anchor_impact_sound.PACKET_TYPE:
+                    with _player_states_lock:
+                        _impact_sounds.receive(_boss_context(), _impact, packet, time.monotonic())
+                    continue
+
                 if ptype == anchor_impact_visual.PACKET_TYPE:
                     with _player_states_lock:
                         _impact_visuals.receive(_boss_context(), _impact, packet, time.monotonic())
@@ -1183,6 +1191,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _impact.reset()
         _impact_players.reset()
         _impact_visuals.reset()
+        _impact_sounds.reset()
 
 
 ###############################################################################
@@ -1275,6 +1284,7 @@ def connect(
         _impact.reset()
         _impact_players.reset()
         _impact_visuals.reset()
+        _impact_sounds.reset()
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -2325,7 +2335,8 @@ def update_impact_players(ready: int, stage: int, encounter: int, visit: int,
 
     Input c is [visible, position XYZ float bits, rotation XYZ u16]. Event
     kind 1 carries six position/velocity float words; kind 2 carries held,
-    pressed, cursor RX/RY, intended owner and authority term. The owner alone
+    pressed, cursor RX/RY, intended owner and authority term. Kind 3 carries
+    guided-fist analog axes. The owner alone
     executes kind 2 through the native interpreter. Received kind 1 objects
     have no gameplay collision. Both channels are transient and encounter-
     scoped. Call after update_impact so owner/term and visit are current.
@@ -2363,6 +2374,16 @@ def update_impact_visuals(ready: int, stage: int, encounter: int, visit: int,
         if not _send_raw(packet):
             break  # Never queue partial or obsolete render frames.
     return json.dumps(status, separators=(",", ":"), allow_nan=False)
+
+
+def update_impact_sounds(ready: int, stage: int, encounter: int, visit: int,
+                         sample: str = "") -> str:
+    with _player_states_lock:
+        status, packets = _impact_sounds.update(
+            _boss_context(), _impact, ready, stage, encounter, visit, sample, time.monotonic())
+    for packet in packets:
+        _send_raw(packet)  # Transient sounds are never retried; loop state refreshes.
+    return status
 
 
 def send_impact_hit(sequence: int, amount: int) -> bool:

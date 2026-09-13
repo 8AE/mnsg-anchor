@@ -47,7 +47,7 @@ evidence; historical instructions in the previous handoff are not current reques
 is the halfword at system `+0x3ADF4`. Valid native stages are `0x21C..0x223`,
 `0x239..0x23C`, and title-menu boss-rush stage `0x260`.
 
-The version-4 checkpoint contains **165 u32 words**, including:
+The version-6 checkpoint contains **165 u32 words**, including:
 
 - Boss HP, shared ammunition, mech HP, combat pause and battle clock.
 - Boss root pose, animation clip ID, phase callback ID, collision dimensions,
@@ -65,13 +65,28 @@ aim. Visible mech poses settle over three native ticks after the update; the loc
 simulation pose is restored before the next AI/collision update and on promotion.
 
 All participants can submit combat buttons through `func_801D7670_602A50`. The
-owner merges held buttons and once-only press edges and executes the native
-interpreter. Local analog aiming remains independent. A local press takes aim
-priority; otherwise the lowest client ID with a new press supplies the temporary
-shooting-cursor aim. Conflicting simultaneous inputs therefore resolve through
-one native mech action, not separate per-player mechs. Input packets name the
-intended owner and term; old terms, reconnects and stale held input are discarded.
-The pad and temporary aim values are restored after the interpreter.
+owner merges held buttons and consumes one participant's ordered press per native
+tick. Local presses take priority when there is no pending native action. A pending
+action retains its initiator; competing remote edges stay queued, and physical
+edges arriving during a pending remote action are queued with local identity. Each
+remote press keeps its own aim through release heartbeats and deferred native
+action dispatch. Guard holds, guided-fist axes and follow-up R presses are supplied
+to their separate native readers. Physical pads and camera aim are restored after
+each scoped call. Both dispatchers bind the initiator to every new native attack
+task, including task-only laser/barrage attacks. Children inherit that identity
+through native allocation at `80034B58`; task reset at `80034A10` removes stale
+bindings before address reuse. The scheduler's `8001481C` boundary supplies the
+initiator's aim for that task's pre/update/post callbacks, then restores local aim
+before another task or scheduler return. This covers repeated punch/guard aim reads
+as well as delayed hook launch. Fresh cursor controls update ongoing aim; when stale,
+the accepted aim is retained. Pausing clears inputs but preserves live attack
+identity; authority/context changes clear it. At most 128 attack tasks are tracked.
+A separate bounded FIFO delivers A/B mashes to the native boss reeling reader,
+where it can advance the meter after the mech interpreter has restored the pads.
+Remote-only mashes use the native neutral-stick increment; simultaneous local
+input retains its native stick bonus. Latch loss and expiry discard old mashes.
+Input packets name the intended owner and term; old terms,
+reconnects and stale controls are discarded.
 
 Only owner-side collisions change shared HP. The native health leaf patches gate
 before subtraction, preserving the return value as well as stored HP; restoring
@@ -87,23 +102,35 @@ The native task at shared state `+0x1C4` owns the world/HUD subtree. Its dynamic
 HUD display lists stay local. The renderer traverses the scheduler's flat,
 depth-first task links and model chains, capturing visible objects with verified
 asset/material recipes. Display-only replicas are children of the battle manager
-at `+0x1BC`, outside that source subtree.
+at `+0x1BC`, outside that source subtree. The list head at `D_8006D328_6DF28`
+is valid with a self/tail backlink; ordinary nodes require reciprocal links.
+Rejecting the manager when it is the head disables the entire visual channel.
 
-[impact-visual-recipes.json](impact-visual-recipes.json) records 121 model/file
+[impact-visual-recipes.json](impact-visual-recipes.json) records 130 model/file
 recipes and 38 material IDs from native constructors, clip records and bounded
 missile/body tables. Each 29-word row carries a generation-and-slot handle, recipe/material IDs,
 primitive/environment color, renderer tags, mode, visibility, pose/frame and six
 file-relative segment bindings. Bindings must resolve within resident native
-assets; animated texture offsets and color alpha are preserved. Unknown recipes,
+assets; animated texture offsets and color alpha are preserved. File-zero slots
+may contain valid animated textures written by native code; capture retains
+resolvable asset-relative bases and ignores stale, unresolvable unbound slots. Unknown recipes,
 unsupported bindings and unloaded assets do not become arbitrary native pointers.
 
 A follower uses only complete owner frames. Six bounded snapshots supply a
-150 ms interpolation buffer for position, scale, wrapped native angles and forward
-animation frames. Completed packets still arrive at 8 Hz; rendering advances each
-native tick without increasing traffic. Native task/object lifetimes keep stable
+50–150 ms adaptive interpolation buffer for position, scale, wrapped native angles
+and forward animation frames. Small frames can arrive at up to 30 Hz; full
+four-page frames keep the 8 Hz rate. Rendering advances each native tick within
+the same sustained page budget. The render clock never moves backward. Native task/object lifetimes keep stable
 handles when traversal order changes. Spawn, despawn, asset changes and teleports
 snap; packet gaps hold the latest pose, then expire at 750 ms. No attack path is
 extrapolated. Pause, owner/session/visit changes and reconnect clear history.
+
+Replicas are prepared at entry to `func_8000AA00_B600`, immediately before native
+draw-list collection. The Impact handler runs simulation **inside** `80002040`;
+its return hooks exchange snapshots afterward. Preparing replicas at scheduler
+return made `visuals_tick` hide them again before drawing. Preparation must also
+precede `80016950`, because model births and render-mode changes must be present
+when `8000AA00` collects objects into its mode buckets.
 
 Native matching objects are hidden
 for rendering and restored before the next native update/capture. Replica tasks
@@ -114,8 +141,14 @@ native presentation is restored. Pools retain live tasks rather than allocating
 again on every pause. Traversal and object counts are bounded; overflow falls
 back to native presentation instead of publishing or hiding a partial graph.
 
-Both players need this build: protocol v4 removes seven camera words and uses
-generation handles. Older Impact packets are rejected rather than misread.
+Both players need this build: protocol v6 includes all eight native grappling-chain
+models, delayed hook launch aim and the separate boss reeling input readers.
+It retains protocol v5's guided-fist input, uppercut model and owner-driven audio,
+local cameras and generation handles. Older Impact packets are rejected.
+
+The September 13 follow-up also fixes unused native texture bindings and adds
+74 verified combat cues plus six loop-stop pairs. See the full recording/native
+audit and limitations in [impact-attacks-analysis-2026-09-13.md](impact-attacks-analysis-2026-09-13.md).
 
 ## Network contract
 
@@ -129,7 +162,8 @@ loaded save. Python does not invent a fallback visit.
 | --- | --- | --- |
 | `MNSG_IMPACT` | Fixed `targetTeamId: "default"`; transient coordinator/checkpoints | Shared boss-core coalescing; state <=4096 bytes, packet limit 8 KiB |
 | `MNSG_IMPACT_PLAYER` | Same team; transient cursors and control/shot edges | Cursor 10 Hz; event ceiling 30 Hz; <=1024 bytes including NUL; 16 peers; 32 queued edges |
-| `MNSG_IMPACT_VISUAL` | Same team, current owner only; latest render frame | At most 8 frames/s, 64 objects, 4 pages/frame, 16 rows/page, <=6144 bytes/page including NUL |
+| `MNSG_IMPACT_VISUAL` | Same team, current owner only; latest render frame | Up to 30 frames/s for small frames; 32 pages/s sustained, 64 objects, 4 pages/frame, <=6144 bytes/page including NUL |
+| `MNSG_IMPACT_SOUND` | Same team, current owner only; transient combat cues and refreshing loop state | At most 30 packets/s, 8 cues/packet, <=1024 bytes including NUL; 32 queued cues, 750 ms transport expiry |
 
 All packets use compact JSON with one trailing NUL and authoritative root
 `clientId`. Hot channels bypass the generic gameplay FIFO and are never placed in
@@ -144,9 +178,9 @@ four, or 2.81 MiB/s for sixteen, excluding other channels. It is not a statement
 of measured server capacity. A representative 64-object localhost frame used
 6,759 bytes total over four pages. No public Anchor service was load-tested.
 
-Protocol version 3 is incompatible with the previous Impact checkpoint/player
-format; all participants need the updated package. `mod.toml` includes both
-`anchor_impact.py` and `anchor_impact_visual.py`.
+The sound channel adds at most 30 KiB/s owner traffic, with the same team fan-out.
+All participants need protocol 6. `mod.toml` packages the coordinator, player,
+visual and sound modules.
 
 ## Verification and remaining limits
 
@@ -155,13 +189,13 @@ format; all participants need the updated package. `mod.toml` includes both
   native cursor recipe, input arbitration, shot capture, texture bounds, alpha,
   render visibility restoration, retained allocation over 50 pause cycles,
   plus Python transport/election/paging regressions.
-- Full Python suite: 264 tests run, one skipped; all executed tests passed.
+- Full Python suite: 270 tests run, one skipped; all executed tests passed.
 - `tools/test_impact_anchor_local.py --port 43393`: three real TCP clients against
   disposable loopback Anchor revision `bf7b43c10b19428ceba54772c7bae3abca44a345`;
   four-page/64-object delivery, sender exclusion, cross-team isolation, cursor
-  and control transport. The temporary server changes only its listener address.
+  control/analog transport and audio start/stop/deduplication. The temporary server changes only its listener address.
 - Release/debug MIPS builds and package import/integrity checks are recorded in
-  [impact-polish-validation-2026-09-12.json](impact-polish-validation-2026-09-12.json). Static packet audit reports zero errors/warnings, but only
+  [impact-attacks-validation-2026-09-13.json](impact-attacks-validation-2026-09-13.json). Static packet audit reports zero errors/warnings, but only
   inventories literal sends; the channel-specific tests cover generic sends.
 
 The supplied 16:45 recording is the user's two-player test of the preceding build.
@@ -178,3 +212,6 @@ bosses' full attack coverage, late entry, defeat/scene transitions and exact
 mid-attack host migration remain unverified in live gameplay. These limits must
 remain visible when describing the branch; automated build/transport success is
 not proof of complete boss synchronization.
+
+The subsequent two-player limb/grapple correction and its validation are recorded
+in [impact-grapple-analysis-2026-09-13.md](impact-grapple-analysis-2026-09-13.md).

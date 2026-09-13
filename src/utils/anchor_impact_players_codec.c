@@ -69,9 +69,10 @@ static int rows(Input *in, unsigned int out[][10], unsigned int *count,
         for (j = 0; j < 10; ++j)
             if ((j && !take(in, ',')) || !integer(in, &out[i][j])) return 0;
         if (!take(in, ']') || !out[i][0] || !out[i][1] || !out[i][2] ||
-            (attack ? (out[i][3] < 1 || out[i][3] > 2) : out[i][3] > 1)) return 0;
-        if (attack && out[i][3] == 2) {
+            (attack ? (out[i][3] < 1 || out[i][3] > 3) : out[i][3] > 1)) return 0;
+        if (attack && out[i][3] >= 2) {
             for (j = 4; j < 8; ++j) if (out[i][j] > 65535u) return 0;
+            if (out[i][3] == 3 && (out[i][4] > 160 || out[i][5] > 160 || out[i][6] || out[i][7])) return 0;
             for (j = 8; j < 10; ++j)
                 if (!out[i][j] || out[i][j] > 0x7fffffffu) return 0;
         } else for (j = 4; j < (attack ? 10u : 7u); ++j)

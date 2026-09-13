@@ -211,6 +211,9 @@ class ImpactPlayerTests(unittest.TestCase):
         self.assertFalse(impact._attack([1, 2, 0x2000, 0x2000, 1000, 600, 0, 1]))
         self.assertFalse(impact._attack([1, 2, 0x2000, True, 1000, 600, 1, 1]))
         self.assertFalse(impact._attack([1, 3, 0, 0, 0, 0, 0, 0]))
+        self.assertTrue(impact._attack([1, 3, 160, 0, 0, 0, 1, 1]))
+        self.assertFalse(impact._attack([1, 3, 161, 0, 0, 0, 1, 1]))
+        self.assertFalse(impact._attack([1, 3, 80, 80, 1, 0, 1, 1]))
 
     def test_bounded_packet_queue_peer_count_and_frame_drain(self):
         self.a, self.b = context(1, 30), context(2, 30)

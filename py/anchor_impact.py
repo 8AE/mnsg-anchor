@@ -18,7 +18,7 @@ from anchor_boss_transport import (
     positive,
 )
 
-VERSION = 4
+VERSION = 6
 # The transport room is the live Impact stage; ordinary roomId is unrelated in
 # title-menu boss rush. Every advertisement and operation also names the boss.
 ROOM = 0x0220
@@ -262,6 +262,10 @@ def _attack(value):
         return False
     if value[1] == 1:  # successful native Ryo shot, presentation only
         return _aim(value[2:])
+    if value[1] == 3:  # guided fist analog axes biased by +80; two reserved zeros
+        return (all(type(x) is int and 0 <= x <= 160 for x in value[2:4]) and
+                all(type(x) is int and x == 0 for x in value[4:6]) and
+                all(positive(x) for x in value[6:]))
     if value[1] == 2:  # mech input: held, pressed, cursor RX/RY, owner, term
         return (all(type(x) is int and 0 <= x <= 0xFFFF for x in value[2:6]) and
                 all(positive(x) for x in value[6:]))

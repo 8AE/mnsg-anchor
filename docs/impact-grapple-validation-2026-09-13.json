@@ -1,0 +1,63 @@
+{
+  "date": "2026-09-13",
+  "branch": "impact_syncing",
+  "protocol": 6,
+  "recording": {
+    "file": "Screen Recording 2026-09-13 at 14.02.20.mov",
+    "duration_seconds": 25.871667,
+    "audio_stream": false
+  },
+  "tests": {
+    "native_fixture_groups": 6,
+    "native_ubsan": "passed",
+    "focused_python": {
+      "run": 41,
+      "passed": 41
+    },
+    "full_python": {
+      "run": 271,
+      "passed": 270,
+      "skipped": 1
+    }
+  },
+  "loopback_anchor": {
+    "clients": 3,
+    "render_pages": 4,
+    "render_objects": 64,
+    "frame_bytes": 6765,
+    "sender_excluded": true,
+    "team_isolated": true,
+    "cursor_and_controls": true,
+    "limbs_and_chain": true,
+    "hook_aim_and_ordered_mashes": true,
+    "audio_start_stop": true,
+    "audio_deduplicated": true
+  },
+  "packages": [
+    {
+      "path": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 468733,
+      "sha256": "582a6afdf7512acee23ba15cca342979944b935dc8e05f54e2c57f5072e812be",
+      "archive_and_packaged_python": "verified"
+    },
+    {
+      "path": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 468606,
+      "sha256": "d16b1e3d98e8d856e81d821e0205537f9d5ef29c426ffd15de7ff867a581ae84",
+      "archive_and_packaged_python": "verified"
+    }
+  ],
+  "live_two_player_validation": false,
+  "limitations": [
+    "Recording does not expose the native manager backlink; the reproduced head-link defect is consistent with the symptom but not observed in live memory.",
+    "Remote-only mashes use the neutral-stick increment. Simultaneous inputs share the native one-increment-per-update behavior.",
+    "Mid-attack owner migration does not reconstruct private child collision state."
+  ],
+  "catalog_pairs": 130,
+  "native_reference": {
+    "local_build": "passed",
+    "tests": "passed",
+    "published": false,
+    "browser_search_and_changed_pages": "passed"
+  }
+}

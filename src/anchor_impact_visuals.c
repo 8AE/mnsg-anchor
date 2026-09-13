@@ -8,12 +8,18 @@
 #include "utils/anchor_impact_visual_codec.h"
 #ifndef ANCHOR_IMPACT_VISUAL_HOST_TEST
 #include "anchor.h"
+#include "modding.h"
 #include "recomputils.h"
+#else
+#ifndef RECOMP_HOOK
+#define RECOMP_HOOK(name)
+#endif
 #endif
 
 extern void *D_8020EED0_63A2B0;
 extern unsigned char *D_8015C5C8_15D1C8;
 extern unsigned char D_80167FC0_168BC0[];
+extern unsigned char D_8006D328_6DF28[];
 extern void *func_80034E08_35A08(void *, void (*)(void *, void *), unsigned short);
 extern void *func_8000DBF0_E7F0(void *, unsigned int, unsigned int,
     float, float, float, short, short, short, float, float, float, short, short);
@@ -81,7 +87,11 @@ static int valid(const void *p)
 }
 static int linked(void *task)
 {
-    return valid(task) && valid(IV_PTR(task,4)) && IV_PTR(IV_PTR(task,4),0) == task;
+    /* The first scheduler task has a self/tail backlink, not an ordinary
+     * predecessor. 34B58/34D24 maintain the separate list head at D8006D328.
+     * The Impact manager can be that head; rejecting it disables every row. */
+    return valid(task) && (IV_PTR(D_8006D328_6DF28,0) == task ||
+        (valid(IV_PTR(task,4)) && IV_PTR(IV_PTR(task,4),0) == task));
 }
 static int owns_object(void *task, void *object)
 {
@@ -186,8 +196,16 @@ static int capture_object(void *task, void *object, unsigned int *r)
         r[13+i] = IV_U32(object,0x1C+i*4);
     }
     r[16] = IV_U32(object,0x28);
-    for (i = 0; i < 6; ++i)
-        if (!segment(IV_U32(object,0x38+i*8),file,&r[17+i*2])) return 0;
+    for (i = 0; i < 6; ++i) {
+        /* 14218 leaves unbound slots alone. They may be stale, but 801D32D4
+         * and 801D34D0 also write live animated textures into slots 3..5
+         * without setting a file ID. Preserve only resolvable resident data. */
+        unsigned int bound = IV_U16(object,0x34+i*8);
+        r[17+i*2] = r[18+i*2] = 0;
+        if (bound && (bound != file && bound != system_file())) return 0;
+        if (bound && !segment(IV_U32(object,0x38+i*8),bound,&r[17+i*2])) return 0;
+        if (!bound) (void)segment(IV_U32(object,0x38+i*8),file,&r[17+i*2]);
+    }
     return anchor_impact_visual_row_valid(r);
 }
 
@@ -344,6 +362,12 @@ void anchor_impact_visuals_tick(int active)
         recomp_free(reply);
     }
 }
+/* 80002040 dispatches Impact's 801CB518, which runs the task scheduler.
+ * Its return hooks then exchange snapshots and hide the retained pool. The
+ * renderer collects objects by mode at 8000AA00 AFTER that exchange. Publish
+ * here, before collection, so births and mode changes enter the right bucket
+ * and tick() cannot hide the replicas between collection and drawing. */
+RECOMP_HOOK("func_8000AA00_B600")
 void anchor_impact_visuals_render(void)
 {
     unsigned int i;

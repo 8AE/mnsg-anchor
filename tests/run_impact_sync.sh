@@ -11,7 +11,7 @@ fi
 "$HOST_COMPILER" "${TEST_FLAGS[@]}" tests/test_impact_codec.c \
     src/utils/anchor_impact_codec.c -o "$TEST_DIR/codec"
 "$TEST_DIR/codec"
-for module in native damage; do
+for module in native damage sounds_native; do
     "$HOST_COMPILER" "${TEST_FLAGS[@]}" "tests/test_impact_${module}.c" -o "$TEST_DIR/$module"
     "$TEST_DIR/$module"
 done

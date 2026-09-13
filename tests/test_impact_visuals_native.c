@@ -2,6 +2,8 @@
 #include "impact_test_pointers.h"
 #define ANCHOR_IMPACT_VISUAL_HOST_TEST
 #define IV_PTR(p,o) TP(p,o)
+/* Keep the production entry-hook registration in the frame-order fixture. */
+#define RECOMP_HOOK(name) static const char *render_hook = name;
 char *anchor_impact_visuals_update(int, unsigned int, unsigned int, unsigned int, const char *);
 void recomp_free(void *);
 #include "../src/anchor_impact_visuals.c"
@@ -15,6 +17,7 @@ static unsigned int cache_releases;
 static char received_json[ANCHOR_IMPACT_VISUAL_JSON];
 static AnchorImpactVisualFrame sent, frame;
 unsigned char D_80167FC0_168BC0[48*8];
+unsigned char D_8006D328_6DF28[16];
 void *D_8020EED0_63A2B0 = state;
 unsigned char *D_8015C5C8_15D1C8 = (unsigned char *)system_data;
 static const AnchorImpactVisualRecipe recipe = {0x48009AC0u,0x4A8};
@@ -71,6 +74,8 @@ void *func_8000DF10_EB10(void *task, unsigned int m, int r, unsigned int g, unsi
 static void setup(void) {
     unsigned int i;
     TP(head,0) = manager; TP(manager,4) = head; TP(manager,0) = world;
+    TP(D_8006D328_6DF28,0) = manager;
+    TP(manager,4) = manager; /* actual first-task sentinel, not a fake parent */
     TP(world,4) = manager; TP(world,0) = boss; TU16(world,0x20) = 1;
     TP(boss,4) = world; TP(boss,0x18) = model; TU16(boss,0x20) = 2;
     TP(state,0x1BC) = manager; TP(state,0x1C4) = world;
@@ -83,10 +88,53 @@ static void setup(void) {
     TP(D_80167FC0_168BC0,4) = (void *)(uintptr_t)0x80200000;
     TP(D_80167FC0_168BC0+8,4) = (void *)(uintptr_t)0x80210000;
 }
+static void native_event(const char *name) {
+    if (!strcmp(render_hook,name)) anchor_impact_visuals_render();
+}
+static void frame_draw(void) {
+    void *task, *object;
+    unsigned int bucket_count[12] = {0}, visible = 0, i;
+    /* game_thread_entrypoint -> 02040 -> Impact 801CB518 -> scheduler;
+     * 02040 return exchanges snapshots; AA00 then collects by object mode;
+     * 16950 initializes graphics, and 087C4/16C44 draw those objects. */
+    anchor_impact_visuals_begin_frame();
+    native_event("func_80034734_35334");
+    anchor_impact_visuals_tick(1);
+    native_event("func_8000AA00_B600");
+    for (task = manager; task; task = TP(task,0))
+        for (object = TP(task,0x18); object; object = TP(object,0)) {
+            if (IV_U8(object,4)&0x80) continue;
+            assert(IV_U8(object,5) < 12);
+            ++bucket_count[IV_U8(object,5)];
+            if (!(IV_U8(object,0x64)&1)) ++visible;
+        }
+    native_event("func_80016950_17550");
+    assert(visible == frame.count); /* replica visible, native duplicate hidden */
+    for (i = 0; i < frame.count; ++i) {
+        object = s_slots[(frame.rows[i][0]-1)&63].object;
+        assert(object && !(IV_U8(object,0x64)&1));
+        assert(bucket_count[frame.rows[i][5]] > 0);
+    }
+}
 int main(void) {
     unsigned int i, bad[29], bases[6], original_id, inserted_id;
     setup(); owner = 1; anchor_impact_visuals_tick(1);
     assert(sent.count == 1 && sent.rows[0][1] == 1 && sent.rows[0][17] == recipe.file);
+    TP(manager,4) = boss; /* 34B58 may cache the tail in the first backlink */
+    anchor_impact_visuals_tick(1); assert(sent.count == 1);
+    TP(head,4) = head; assert(!linked(head)); /* only the real list head qualifies */
+    /* Native 35964 leaves unused segment pointers from the recycled object.
+     * File zero makes these inert even if they point outside resident assets. */
+    TU32(model,0x40) = 0x807FF000u;
+    anchor_impact_visuals_tick(1);
+    assert(sent.count == 1 && sent.rows[0][19] == 0 && sent.rows[0][20] == 0);
+    TU16(model,0x3C) = recipe.file;
+    assert(!capture_object(boss,model,bad)); /* a bound invalid pointer still fails */
+    TU16(model,0x3C) = 0;
+    /* Native face animation writes a segment with no bound file ID. */
+    TU32(model,0x50) = 0x80201234u;
+    anchor_impact_visuals_tick(1);
+    assert(sent.rows[0][23] == recipe.file && sent.rows[0][24] == 0x1234);
     original_id = sent.rows[0][0];
     /* Inserting a model ahead of the boss must not relabel the boss. */
     memcpy(overflow_models[0],model,sizeof(model));
@@ -106,12 +154,16 @@ int main(void) {
     frame.rows[0][3] = 2; frame.rows[0][4] = 0x20A0FF28; /* translucent native effect */
     frame.rows[0][6] = 0x30000; /* material command tags survive replication */
     assert(anchor_impact_visual_encode(&frame,received_json,sizeof(received_json)));
-    owner = 0; anchor_impact_visuals_tick(1); anchor_impact_visuals_render();
+    owner = 0; frame_draw(); /* includes the first allocation before collection */
     assert(anchor_impact_visuals_active() && allocated == 1 && shots_hidden == 1);
     assert(TF32(models[0],8) == 100 && TU32(tasks[0],0xDC) == 0x20A0FF28);
+    assert(TU32(models[0],0x50) == 0x80201234u);
     assert(TU32(tasks[0],0xD8) == 0xFB000000);
     assert((TU32(models[0],0x30)&0x60000000u) == 0x60000000u);
     assert(IV_U8(model,0x64)&1); assert(TF32(model,8) == 0); /* native simulation untouched */
+    frame.rows[0][5] = 8; /* mode changes must precede the next collection */
+    assert(anchor_impact_visual_encode(&frame,received_json,sizeof(received_json)));
+    frame_draw(); assert(IV_U8(models[0],5) == 8);
     anchor_impact_visuals_begin_frame(); assert(!(IV_U8(model,0x64)&1));
     for (i = 0; i < 50; ++i) {
         anchor_impact_visuals_tick(0); assert(IV_U8(models[0],0x64)&1);

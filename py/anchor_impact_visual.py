@@ -1,6 +1,7 @@
 """Owner-only, atomic native render frames. No durable or gameplay events.
 
-Team route, at most four 6 KiB pages at 8 Hz (192 KiB/s owner ceiling).
+Team route, 32 pages/s sustained (6 KiB/page), at most four pages per burst.
+Small frames run at up to 30 Hz; full 64-object frames retain the 8 Hz budget.
 Six completed frames and one bounded assembly survive receipt. Rendering uses
 a short interpolation buffer; authoritative checkpoints and damage stay immediate.
 """
@@ -68,7 +69,7 @@ def rows_valid(rows):
     for r in rows:
         if (not isinstance(r, list) or len(r) != ROW_WORDS or
                 not all(_u32(x) for x in r) or not r[0] or
-                (r[0]-1) % MAX_ROWS in ids or not 1 <= r[1] <= 121 or r[2] > 38 or
+                (r[0]-1) % MAX_ROWS in ids or not 1 <= r[1] <= 130 or r[2] > 38 or
                 r[3] > 2 or r[3] and not r[2] or r[5] > 15 or
                 r[6] & ~0x3FF01):
             return False
@@ -99,7 +100,9 @@ class ImpactVisualTransport:
         self.scope = None
         self.authority = None
         self.sequence = self.received_sequence = 0
-        self.last_wire = -1e9
+        self.last_wire = self.next_wire = -1e9
+        self.render_delay = 0.05
+        self.render_clock = -1e9
         self.history = deque(maxlen=6)
         self.latest = None
         self.received_at = -1e9
@@ -162,8 +165,13 @@ class ImpactVisualTransport:
                 self.received_sequence = q
                 self.assembly = None
                 return False
-            if now - self.received_at > MAX_BLEND_GAP:
+            gap = now - self.received_at
+            if gap > MAX_BLEND_GAP:
                 self.history.clear()
+                self.render_clock = -1e9
+                self.render_delay = max(0.05, packet["n"] * PERIOD / 4 + 0.025)
+            else:
+                self.render_delay = max(0.05, min(RENDER_DELAY, gap + 0.025))
             self.latest, self.received_at = rows, now
             self.history.append((now, rows))
             self.received_sequence, self.assembly = q, None
@@ -172,7 +180,8 @@ class ImpactVisualTransport:
     def render(self, now):
         if not self.history or not self.latest:
             return self.latest
-        target = now - RENDER_DELAY
+        target = max(self.render_clock, now - self.render_delay)
+        self.render_clock = target
         left = right = self.history[0]
         for sample in self.history:
             right = sample
@@ -207,10 +216,11 @@ class ImpactVisualTransport:
                     (m := metadata(p.get(METADATA_KEY))) and m[1] and
                     m[5] == p.get("interactionSession") and m[14:] == [stage,boss]
                     for cid,p in ctx["players"].items())
-        if battle.role == 1 and peers and rows_valid(rows) and now-self.last_wire >= PERIOD:
+        if battle.role == 1 and peers and rows_valid(rows) and now >= self.next_wire:
             self.sequence += 1
             self.last_wire = now  # Hard ceiling includes failed writes; next frame retries latest state.
             pages = max(1, (len(rows)+PAGE_ROWS-1)//PAGE_ROWS)
+            self.next_wire = now + max(1/30, pages * PERIOD / 4)
             packets = [{"type": PACKET_TYPE, "v": VERSION, "quiet": True,
                         "clientId": ctx["cid"], "targetTeamId": ctx["team"],
                         "session": ctx["session"], "visit": visit,

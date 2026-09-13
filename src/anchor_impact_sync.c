@@ -17,6 +17,7 @@ extern void recomp_free(void *);
 #include "anchor_impact_damage.h"
 #include "anchor_impact_players.h"
 #include "anchor_impact_visuals.h"
+#include "anchor_impact_sounds.h"
 #include "anchor_dialog.h"
 #include "anchor_player_models.h"
 #include "item_sync.h"
@@ -102,6 +103,7 @@ void anchor_impact_sync_frame(void)
         s_active = 0;
         anchor_impact_players_reset();
         anchor_impact_visuals_tick(0);
+        anchor_impact_sounds_tick(0,0,0);
         return;
     }
     s_active = 1;
@@ -160,6 +162,7 @@ void anchor_impact_sync_frame(void)
         anchor_impact_damage_set_context(1, 0, 1, s_context);
         anchor_impact_players_tick(0);
         anchor_impact_visuals_tick(0);
+        anchor_impact_sounds_tick(0,0,0);
         return;
     }
     recomp_free(json);
@@ -192,6 +195,7 @@ void anchor_impact_sync_frame(void)
         anchor_impact_damage_set_context(1, 0, 1, s_context);
         anchor_impact_players_tick(0);
         anchor_impact_visuals_tick(0);
+        anchor_impact_sounds_tick(0,0,0);
         return;
     }
     if (changed)
@@ -221,6 +225,7 @@ void anchor_impact_sync_frame(void)
     anchor_impact_players_set_authority((unsigned int)s_status.owner, s_status.term);
     anchor_impact_players_tick(active && !world_paused && !s_status.paused);
     anchor_impact_visuals_tick(active && !paused);
+    anchor_impact_sounds_tick(active && !paused,(unsigned int)s_status.owner,s_status.term);
 
     if (!owner || paused)
         return;
