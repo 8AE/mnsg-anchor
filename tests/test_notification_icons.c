@@ -51,7 +51,19 @@ int main(void)
     for (i = 1; i < ANCHOR_ICON_COUNT; ++i)
     {
         s_expected = anchor_rom_icon_info((AnchorRomIcon)i);
+        if (i == ANCHOR_ICON_MR_ELLY_FANT || i == ANCHOR_ICON_MR_ARROW)
+        {
+            assert(s_expected->mirror_x && s_expected->flip_y);
+            assert(s_expected->crop_width == 16);
+            assert(s_expected->width == 32 && s_expected->height == 32);
+        }
+        else
+        {
+            assert(!s_expected->mirror_x);
+            assert(s_expected->crop_width == s_expected->width);
+        }
         size = s_expected->width * s_expected->height * 4u;
+        assert(size <= ANCHOR_ROM_ICON_MAX_RGBA32_SIZE);
         s_decodes = 0;
         assert(!anchor_rom_load_icon_rgba32(i, NULL, size));
         assert(!anchor_rom_load_icon_rgba32(i, guarded + 1, size - 1));
@@ -70,7 +82,7 @@ int main(void)
         for (y = 0; y < s_expected->height; ++y)
             for (x = 0; x < s_expected->width; ++x)
                 check_texel(guarded + 1 + (y * s_expected->width + x) * 4,
-                            s_expected->x + x, s_expected->y +
+                            s_expected->x + (s_expected->mirror_x && x >= 16 ? 31 - x : x), s_expected->y +
                             (s_expected->flip_y ? s_expected->height - 1 - y : y));
     }
     assert(anchor_icon_for_check(NULL, 1) == ANCHOR_ICON_NONE);

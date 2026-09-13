@@ -29,8 +29,8 @@ static unsigned short s_icon_sheet[ROM_ICON_SHEET_PIXELS]
 
 static const AnchorRomIconInfo s_icons[ANCHOR_ICON_COUNT] = {
     {0},
-#define ICON(name, resource, rom, packed, sw, sh, x, y, w, h, flip) \
-    {resource, rom, packed, sw, sh, x, y, w, h, flip},
+#define ICON(name, resource, rom, packed, sw, sh, x, y, w, h, flip, mirror) \
+    {resource, rom, packed, sw, sh, x, y, w, (w) * (1u + (mirror)), h, flip, mirror},
 #include "anchor_rom_icon_defs.inc"
 #undef ICON
 };
@@ -78,21 +78,26 @@ static void copy_rgba5551_crop(unsigned char *rgba_out,
                                unsigned int crop_y,
                                unsigned int crop_width,
                                unsigned int crop_height,
-                               int flip_y)
+                               int flip_y,
+                               int mirror_x)
 {
     unsigned int x;
     unsigned int y;
+    unsigned int width = crop_width * (mirror_x ? 2u : 1u);
 
     for (y = 0; y < crop_height; ++y)
     {
         unsigned int source_y = crop_y +
             (flip_y ? crop_height - 1u - y : y);
 
-        for (x = 0; x < crop_width; ++x)
+        for (x = 0; x < width; ++x)
         {
+            /* Native pickup tiles use G_TX_MIRROR with an S mask of 4:
+             * texels 0..15, then 15..0, across the square billboard. */
+            unsigned int source_x = x < crop_width ? x : width - 1u - x;
             unsigned short pixel =
-                s_icon_sheet[source_y * sheet_width + crop_x + x];
-            unsigned int dst = (y * crop_width + x) * 4u;
+                s_icon_sheet[source_y * sheet_width + crop_x + source_x];
+            unsigned int dst = (y * width + x) * 4u;
 
             rgba_out[dst + 0u] = expand_5_to_8(pixel >> 11);
             rgba_out[dst + 1u] = expand_5_to_8(pixel >> 6);
@@ -109,14 +114,15 @@ int anchor_rom_load_icon_rgba32(AnchorRomIcon icon, unsigned char *rgba_out,
     if (!info || !rgba_out ||
         rgba_out_size < (unsigned int)info->width * info->height * 4u ||
         info->sheet_width * info->sheet_height != ROM_ICON_SHEET_PIXELS ||
-        info->x + info->width > info->sheet_width ||
+        info->x + info->crop_width > info->sheet_width ||
         info->y + info->height > info->sheet_height)
         return 0;
     if (!decode_rgba5551_resource(info->resource_id, info->rom_address,
                                   info->packed_size))
         return 0;
     copy_rgba5551_crop(rgba_out, info->sheet_width, info->x, info->y,
-                       info->width, info->height, info->flip_y);
+                       info->crop_width, info->height, info->flip_y,
+                       info->mirror_x);
     return 1;
 }
 
@@ -133,7 +139,7 @@ int anchor_rom_load_flute_icon_rgba32(unsigned char *rgba_out,
 
     copy_rgba5551_crop(rgba_out, FLUTE_SHEET_WIDTH, FLUTE_CROP_X,
                        FLUTE_CROP_Y, ANCHOR_FLUTE_ICON_WIDTH,
-                       ANCHOR_FLUTE_ICON_HEIGHT, 0);
+                       ANCHOR_FLUTE_ICON_HEIGHT, 0, 0);
 
     return 1;
 }
@@ -164,7 +170,7 @@ int anchor_rom_load_map_face_icons_rgba32(unsigned char *rgba_out,
         copy_rgba5551_crop(
             rgba_out + character * ANCHOR_MAP_FACE_ICON_RGBA32_SIZE,
             MAP_FACE_SHEET_WIDTH, crop_x[character], crop_y[character],
-            ANCHOR_MAP_FACE_ICON_WIDTH, ANCHOR_MAP_FACE_ICON_HEIGHT, 1);
+            ANCHOR_MAP_FACE_ICON_WIDTH, ANCHOR_MAP_FACE_ICON_HEIGHT, 1, 0);
     }
 
     return 1;

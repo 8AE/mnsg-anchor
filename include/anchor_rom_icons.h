@@ -35,7 +35,9 @@ typedef struct
 {
     unsigned int resource_id, rom_address, packed_size;
     unsigned short sheet_width, sheet_height;
-    unsigned char x, y, width, height, flip_y;
+    /* width/height describe the output; crop_width describes the ROM cell.
+     * Mirrored cells append a horizontally reversed copy of that cell. */
+    unsigned char x, y, crop_width, width, height, flip_y, mirror_x;
 } AnchorRomIconInfo;
 
 #define ANCHOR_ROM_ICON_MAX_RGBA32_SIZE (32u * 32u * 4u)

@@ -27,7 +27,7 @@ def inspect(rom_path: Path, output: Path | None = None) -> list[dict]:
         if not match:
             continue
         name = match[1]
-        rid, address, size, sw, sh, x, y, w, h, flip = [int(v.strip().rstrip('u'), 0) for v in match[2].split(',')]
+        rid, address, size, sw, sh, x, y, w, h, flip, mirror = [int(v.strip().rstrip('u'), 0) for v in match[2].split(',')]
         if rid not in sheets:
             packed = rom[address:address+size]
             decoder = Pic0000Decoder(packed)
@@ -41,10 +41,14 @@ def inspect(rom_path: Path, output: Path | None = None) -> list[dict]:
         if x+w > sw or y+h > sh:
             raise ValueError(f'{name}: crop outside source sheet')
         pixels = sheets[rid]
-        rgba = b''.join(rgba5551_to_rgba32(pixels[(y+(h-1-row if flip else row))*sw+x+col]) for row in range(h) for col in range(w))
+        width = w * (2 if mirror else 1)
+        columns = list(range(w))
+        if mirror:
+            columns += columns[::-1]
+        rgba = b''.join(rgba5551_to_rgba32(pixels[(y+(h-1-row if flip else row))*sw+x+col]) for row in range(h) for col in columns)
         if output:
-            (output/f'{name.lower()}.png').write_bytes(encode_png(w,h,rgba))
-        records.append({'name':name,'resource':f'0x{rid:04X}','romAddress':f'0x{address:08X}','packedSize':size,'crop':[x,y,w,h],'flipY':bool(flip),'rgba32Sha256':hashlib.sha256(rgba).hexdigest()})
+            (output/f'{name.lower()}.png').write_bytes(encode_png(width,h,rgba))
+        records.append({'name':name,'resource':f'0x{rid:04X}','romAddress':f'0x{address:08X}','packedSize':size,'crop':[x,y,w,h],'width':width,'height':h,'flipY':bool(flip),'mirrorX':bool(mirror),'rgba32Sha256':hashlib.sha256(rgba).hexdigest()})
     if output:
         (output/'icon-provenance.json').write_text(json.dumps(records,indent=2)+'\n')
     return records

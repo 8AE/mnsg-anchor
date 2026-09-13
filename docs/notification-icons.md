@@ -57,9 +57,15 @@ actor table at 0x802287BC to file-26 functions 0x08000204 and 0x08000000.
 pointers are 0x80234F48 / 0x80234F58, selecting model files 0x193 / 0x194 and
 model 0x08000040. The display lists bind textures **0x0A002980** and
 **0x0A003980**. The resource binding records at ROM 0x67888 / 0x67890 resolve
-these to **0x829D** / **0x829E**. The 64x32 sheets use their left 32x32 cell;
-quad texture scale 0x8000 and UV endpoints 0x800 select that cell. Top vertices
-use the larger T coordinate, so the crop is flipped vertically.
+these to **0x829D** / **0x829E**. Each 64x32 sheet supplies a **16x32 half**
+at (0,0), followed by unrelated artwork. The render-tile command at model+0x70
+is `F5102000 00094140`: S uses `G_TX_MIRROR` with mask 4, while T uses clamp
+with mask 5. Quad texture scale 0x8000 and UV endpoints 0x800 span 32x32
+texels, so S samples columns 0..15 then 15..0 to form the complete image.
+Top vertices use the larger T coordinate, so the result is flipped vertically.
+The runtime recipes and documentation exporter reproduce this as a 32x32
+image; their crop width is 16 and output width is 32. The native model files
+start at ROM 0x010402B0 / 0x01040390 and use the same square billboard layout.
 
 Roster head cells remain those documented in `player-list-flute-transfer.md`.
 They select the magic owner by check key, independently of the local active
