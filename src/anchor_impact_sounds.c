@@ -29,7 +29,7 @@ static const unsigned short cues[] = {
     0x284, 0x286, 0x2A8, 0x34E,
 };
 static unsigned int captured[8], captured_count, playing, owner_loops;
-static unsigned int scope_owner, scope_term, scope_visit, scope_stage;
+static unsigned int scope_owner, scope_term, scope_visit, scope_stage, scope_boss;
 static void *scope_manager;
 static int enabled, replaying, was_owner;
 typedef struct DeferredSound { unsigned int command, age; } DeferredSound;
@@ -52,7 +52,7 @@ static int battle_task(void)
     unsigned int i, depth;
     if (!enabled || !anchor_impact_native_ready() || !valid(scope_manager) ||
         !valid(D_8020EED0_63A2B0) || IS_PTR(D_8020EED0_63A2B0,0x1BC) != scope_manager ||
-        scope_visit != anchor_impact_native_visit()) return 0;
+        scope_visit != anchor_impact_native_visit() || scope_boss != anchor_impact_native_encounter()) return 0;
     depth = IS_U16(scope_manager,0x20);
     for (i = 0; valid(p) && i < 512; ++i) {
         if (p == scope_manager) return 1;
@@ -155,11 +155,13 @@ void anchor_impact_sounds_tick(int active, unsigned int owner, unsigned int term
     void *manager = valid(D_8020EED0_63A2B0) ? IS_PTR(D_8020EED0_63A2B0,0x1BC) : 0;
     char sample[73], *reply;
     if (!active || manager != scope_manager || owner != scope_owner || term != scope_term ||
-        visit != scope_visit || stage != scope_stage || local_owner != was_owner) {
+        visit != scope_visit || stage != scope_stage || scope_boss != anchor_impact_native_encounter() ||
+        local_owner != was_owner) {
         captured_count = deferred_count = owner_loops = 0;
     }
     scope_manager = manager; scope_owner = owner; scope_term = term;
     scope_visit = visit; scope_stage = stage; was_owner = local_owner;
+    scope_boss = anchor_impact_native_encounter();
     if (!active && !enabled && !playing) return;
     enabled = active;
     hex_word(sample,owner_loops);

@@ -1,0 +1,256 @@
+{
+  "date": "2026-09-13",
+  "branch": "impact_syncing",
+  "base_commit": "c3d8e64f5e794c6a5cc2e9499bb54c0af73efc09",
+  "protocol": 8,
+  "root_words": 293,
+  "boss_extension_words": 128,
+  "visual_row_words": 30,
+  "input_logs": [
+    {
+      "attachment": "8777e662-f30a-41f7-bcf9-d845a8c2b9ce",
+      "sha256": "95d9f041a3622c067932138eff395a0255e1344499060370d56c73de7561e05f",
+      "baseline_later_boss_binding": [
+        {
+          "line": 1237,
+          "text": "[Impact] native-only encounter=3 stage=610 (no sync profile)"
+        },
+        {
+          "line": 1314,
+          "text": "[Impact] native-only encounter=4 stage=611 (no sync profile)"
+        }
+      ]
+    },
+    {
+      "attachment": "6bb921eb-c9da-42c8-ab30-82ff860126cd",
+      "sha256": "7e23074893fa9ad07957a0f13e1fd12ed36855ad00bc7163920a8bd77e36c20c",
+      "baseline_later_boss_binding": [
+        {
+          "line": 1353,
+          "text": "[Impact] native-only encounter=3 stage=610 (no sync profile)"
+        },
+        {
+          "line": 1410,
+          "text": "[Impact] native-only encounter=4 stage=611 (no sync profile)"
+        }
+      ]
+    }
+  ],
+  "profiles": {
+    "kashiwagi": {
+      "file": "src/anchor_impact_kashiwagi.c",
+      "sha256": "ddf55ad9b47cb568a8cbd9e3663d9de1835119ded131f2b96ce358f005b35b58",
+      "phases": 79,
+      "clips": 13
+    },
+    "taisamba": {
+      "file": "src/anchor_impact_taisamba.c",
+      "sha256": "3b341a02e35dc64227b713de32d7f2dd39e469d039960c939fa22fa6f312eb98",
+      "phases": 129,
+      "clips": 16
+    },
+    "balberra": {
+      "file": "src/anchor_impact_balberra.c",
+      "sha256": "b9f8f06c6efb2072a86df738391c25b6f40dfefd68533c50ffb144d5c756897f",
+      "phases": 33,
+      "clips": 0
+    },
+    "detoile": {
+      "file": "src/anchor_impact_detoile.c",
+      "sha256": "f47d098248a028afe60a09bad802f9258335fbdd58d51f4f41ef507e3eb89900",
+      "phases": 76,
+      "clips": 14
+    }
+  },
+  "native_evidence": {
+    "overlay": "file_13_raw.bin",
+    "overlay_sha1": "6ea0ed71032ce08fc2745f412d84936382197494",
+    "main_program": "mnsg.us.0.z64",
+    "dual_color_material_abi": "func_8000E030_EC30; decompilation and full 52-instruction disassembly verify ten arguments, primitive/environment colors at +D4/+DC and returned task+C8 wrapper",
+    "story_handoff": "80201C7C -> 802085B0 increments selector, clears completion, removes children, then reuses root for 801FAEB0",
+    "auxiliary_history": "+14..+813 = 64x32-byte pose records; index+814 stays local; flags+815..817 cross the wire",
+    "carry": "D root+DC excluded from scalar mask; 801FF528 receives local scalar pose/velocity view; promotion uses native 801FC3FC idle setup"
+  },
+  "validation": {
+    "native_fixture_runs": 20,
+    "native_ubsan": "passed",
+    "focused_python_tests": 47,
+    "full_python_tests": {
+      "run": 277,
+      "passed": 276,
+      "skipped": 1
+    },
+    "network_audit": {
+      "literal_sends": 22,
+      "errors": 0,
+      "warnings": 0
+    },
+    "release_debug_mips_build": "passed",
+    "build_warnings": [
+      "Existing unused notif_ensure_init in src/ui/anchor_ui.c"
+    ],
+    "local_reference": {
+      "build": "passed",
+      "tests": 34,
+      "site_validation_errors": [],
+      "published": false
+    }
+  },
+  "loopback_anchor": {
+    "upstream_commit": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "listener": "127.0.0.1:43393",
+    "server": "disposable local process; terminated after checks",
+    "results": [
+      {
+        "clients": 3,
+        "boss": 1,
+        "stage": 608,
+        "root_words": 293,
+        "checkpoint": true,
+        "render_pages": 4,
+        "render_objects": 64,
+        "frame_bytes": 6893,
+        "sender_excluded": true,
+        "team_isolated": true,
+        "cursor_and_controls": true,
+        "limbs_and_chain": true,
+        "hook_aim_and_ordered_mashes": true,
+        "audio_start_stop": true,
+        "audio_deduplicated": true,
+        "dual_color_glows": false
+      },
+      {
+        "clients": 3,
+        "boss": 2,
+        "stage": 609,
+        "root_words": 293,
+        "checkpoint": true,
+        "render_pages": 4,
+        "render_objects": 64,
+        "frame_bytes": 6896,
+        "sender_excluded": true,
+        "team_isolated": true,
+        "cursor_and_controls": true,
+        "limbs_and_chain": true,
+        "hook_aim_and_ordered_mashes": true,
+        "audio_start_stop": true,
+        "audio_deduplicated": true,
+        "dual_color_glows": false
+      },
+      {
+        "clients": 3,
+        "boss": 3,
+        "stage": 546,
+        "root_words": 293,
+        "checkpoint": true,
+        "render_pages": 4,
+        "render_objects": 64,
+        "frame_bytes": 6948,
+        "sender_excluded": true,
+        "team_isolated": true,
+        "cursor_and_controls": true,
+        "limbs_and_chain": true,
+        "hook_aim_and_ordered_mashes": true,
+        "audio_start_stop": true,
+        "audio_deduplicated": true,
+        "dual_color_glows": true
+      },
+      {
+        "clients": 3,
+        "boss": 3,
+        "stage": 610,
+        "root_words": 293,
+        "checkpoint": true,
+        "render_pages": 4,
+        "render_objects": 64,
+        "frame_bytes": 6940,
+        "sender_excluded": true,
+        "team_isolated": true,
+        "cursor_and_controls": true,
+        "limbs_and_chain": true,
+        "hook_aim_and_ordered_mashes": true,
+        "audio_start_stop": true,
+        "audio_deduplicated": true,
+        "dual_color_glows": true
+      },
+      {
+        "clients": 3,
+        "boss": 4,
+        "stage": 546,
+        "root_words": 293,
+        "checkpoint": true,
+        "render_pages": 4,
+        "render_objects": 64,
+        "frame_bytes": 6936,
+        "sender_excluded": true,
+        "team_isolated": true,
+        "cursor_and_controls": true,
+        "limbs_and_chain": true,
+        "hook_aim_and_ordered_mashes": true,
+        "audio_start_stop": true,
+        "audio_deduplicated": true,
+        "dual_color_glows": true
+      },
+      {
+        "clients": 3,
+        "boss": 4,
+        "stage": 547,
+        "root_words": 293,
+        "checkpoint": true,
+        "render_pages": 4,
+        "render_objects": 64,
+        "frame_bytes": 6936,
+        "sender_excluded": true,
+        "team_isolated": true,
+        "cursor_and_controls": true,
+        "limbs_and_chain": true,
+        "hook_aim_and_ordered_mashes": true,
+        "audio_start_stop": true,
+        "audio_deduplicated": true,
+        "dual_color_glows": true
+      },
+      {
+        "clients": 3,
+        "boss": 4,
+        "stage": 611,
+        "root_words": 293,
+        "checkpoint": true,
+        "render_pages": 4,
+        "render_objects": 64,
+        "frame_bytes": 6936,
+        "sender_excluded": true,
+        "team_isolated": true,
+        "cursor_and_controls": true,
+        "limbs_and_chain": true,
+        "hook_aim_and_ordered_mashes": true,
+        "audio_start_stop": true,
+        "audio_deduplicated": true,
+        "dual_color_glows": true
+      }
+    ]
+  },
+  "packages": {
+    "mnsg_multiplayer_anchor.nrm": {
+      "bytes": 480431,
+      "sha256": "2cfcc5042ee92d79ec83bbb3ce192a9d94d4a77d641460e1b2652c8e33531a07",
+      "archive_crc": "passed",
+      "packaged_impact_modules": "byte-identical to source"
+    },
+    "debug_mnsg_multiplayer_anchor.nrm": {
+      "bytes": 480537,
+      "sha256": "0c6d638db1b39a26ed9957c9eb5c9fe8910399ee588686b6d44c66e650ae97e2",
+      "archive_crc": "passed",
+      "packaged_impact_modules": "byte-identical to source"
+    }
+  },
+  "installation": {
+    "path": "/Users/ahmad/Library/Application Support/Goemon64Recompiled/mods/debug_mnsg_multiplayer_anchor.nrm",
+    "sha256": "0c6d638db1b39a26ed9957c9eb5c9fe8910399ee588686b6d44c66e650ae97e2",
+    "backup": "/tmp/impact-last-bosses-0913/debug_mnsg_multiplayer_anchor.before-last-bosses.nrm"
+  },
+  "limits": [
+    "No fresh two-client native gameplay run of Balberra or D'Etoile was performed. Native host fixtures stub game imports; TCP tests use synthetic native records.",
+    "The native renderer keeps its existing 64-object/four-page cap. Actual boss effect populations, afterimage presentation and cinematic timing remain live-game verification items.",
+    "Prior user confirmation applies to Kashiwagi/Taisamba and the defeat repair, not this new build."
+  ]
+}

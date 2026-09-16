@@ -12,15 +12,15 @@ void *D_8020EED0_63A2B0 = state, *D_8016DAB4_16E6B4 = child;
 volatile unsigned char D_801C09FD_1C15FD, D_801C09C9_1C15C9;
 volatile unsigned int D_801C0A00_1C1600[8];
 static int owner = 1;
-static unsigned int visit = 1;
+static unsigned int visit = 1, test_encounter = 1;
 static char response[73] = "00000000", published[73];
 int anchor_impact_native_ready(void) { return 1; }
 int anchor_impact_native_is_owner(void) { return owner; }
 unsigned int anchor_impact_native_visit(void) { return visit; }
 unsigned int anchor_impact_native_stage(void) { return 0x260; }
-unsigned int anchor_impact_native_encounter(void) { return 1; }
+unsigned int anchor_impact_native_encounter(void) { return test_encounter; }
 char *anchor_impact_sounds_update(int active,unsigned int stage,unsigned int boss,unsigned int v,const char *sample) {
-    assert(stage == 0x260 && boss == 1 && v == visit); (void)active;
+    assert(stage == 0x260 && boss == test_encounter && v == visit); (void)active;
     strcpy(published,sample); return response;
 }
 void recomp_free(void *p) { (void)p; }
@@ -67,6 +67,15 @@ int main(void) {
     assert(!read_words("00000000000007ff",words));
     assert(!read_words("000000ff",words)); assert(!read_words("0000000",words));
     assert(!read_words("0000000000800229",words)); assert(!read_words("000000000000826d",words));
+    /* Same scene, manager, owner, term and visit: a new boss still retires
+     * queued sounds and active loops at the Balberra -> D'Etoile handoff. */
+    queue_clear(); D_8016DAB4_16E6B4 = child; owner = 1; test_encounter = 3; strcpy(response,"00000000");
+    anchor_impact_sounds_tick(1,1,1);
+    func_80038C30_39830(0x152,64,120); assert(owner_loops & 4u);
+    deferred[0] = (DeferredSound){0x229,0}; deferred_count = 1;
+    test_encounter = 4; queue_clear();
+    anchor_impact_sounds_tick(1,1,1);
+    assert(!owner_loops && !captured_count && !deferred_count && !playing);
     puts("Impact native audio authority, loop repair, queue capacity and scope tests passed");
     return 0;
 }

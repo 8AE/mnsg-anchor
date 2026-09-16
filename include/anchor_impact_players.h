@@ -13,4 +13,6 @@ void anchor_impact_players_reel_begin(void *task);
 void anchor_impact_players_reel_end(void);
 void anchor_impact_players_source_aim_begin(void *attack);
 void anchor_impact_players_source_aim_end(void);
+void anchor_impact_players_source_axes_begin(void *attack);
+void anchor_impact_players_source_axes_end(void);
 #endif

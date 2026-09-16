@@ -92,7 +92,7 @@ class ImpactStateSchemaTests(unittest.TestCase):
         advertisement = [anchor_impact.VERSION, 1, 1, 0, 1, 101,
                          0, 0, 0, 0, 0, 0, 0, 1, 0x220, 1]
         self.assertEqual(anchor_impact.metadata(advertisement), advertisement)
-        self.assertIsNone(anchor_impact.metadata([6] + advertisement[1:]))
+        self.assertIsNone(anchor_impact.metadata([anchor_impact.VERSION-1] + advertisement[1:]))
         transport = anchor_impact.ImpactTransport()
         self.assertEqual(transport.room, anchor_impact.ROOM)
         transport.set_stage(0x0223)
@@ -110,11 +110,19 @@ class ImpactStateSchemaTests(unittest.TestCase):
 
 
 class ImpactBossRushBridgeTests(unittest.TestCase):
-    def test_kashiwagi_to_taisamba_without_a_loaded_save(self):
+    def test_all_four_bosses_without_a_loaded_save(self):
+        self.run_sequence(False)
+
+    def test_story_handoff_same_stage_and_visit(self):
+        self.run_sequence(True)
+
+    def run_sequence(self, story):
+        def stage_for(boss):
+            return (0x220,0x221,0x222,0x222)[boss-1] if story else 0x25F+boss
         clients = [load_client(2, 101), load_client(3, 202)]
         for client in clients:
             self.addCleanup(client.disconnect)
-            client.set_save_loaded(False)
+            client.set_save_loaded(story)
         now = 100.0
         history = []
 
@@ -123,13 +131,14 @@ class ImpactBossRushBridgeTests(unittest.TestCase):
             now += 0.05
             results = []
             for client, boss in zip(clients, bosses):
-                stage = 0x25F + boss
+                stage = stage_for(boss)
+                visit = 1 if story else boss
                 client._sock.sent.clear()
                 results.append(json.loads(client.update_impact(
-                    1, stage, boss, boss, 0, json.dumps(state(boss, stage)))))
-                client.update_impact_players(1, stage, boss, boss, json.dumps(player_sample()))
-                client.update_impact_visuals(1, stage, boss, boss, json.dumps(visual_rows(1)))
-                client.update_impact_sounds(1, stage, boss, boss, "0000001000000240")
+                    1, stage, boss, visit, 0, json.dumps(state(boss, stage)))))
+                client.update_impact_players(1, stage, boss, visit, json.dumps(player_sample()))
+                client.update_impact_visuals(1, stage, boss, visit, json.dumps(visual_rows(1)))
+                client.update_impact_sounds(1, stage, boss, visit, "0000001000000240")
                 for raw in client._sock.sent:
                     self.assertTrue(raw.endswith(b"\0"))
                     packet = json.loads(raw[:-1])
@@ -160,15 +169,14 @@ class ImpactBossRushBridgeTests(unittest.TestCase):
                 status = tick((2, 2))
             self.assertEqual([s["role"] for s in status], [1, 2])
             for client, result in zip(clients, status):
-                self.assertFalse(client._local_save_loaded)
-                self.assertEqual(result["state"], state(2, 0x261))
+                self.assertEqual(client._local_save_loaded,story)
+                self.assertEqual(result["state"], state(2, stage_for(2)))
                 self.assertFalse(client._impact.receive(client._boss_context(), old_packet, now))
             self.assertTrue(any(p["type"] == anchor_impact.PACKET_TYPE and
-                                p["op"] == "s" and p["s"] == 0x261 and p["k"] == 2
+                                p["op"] == "s" and p["s"] == stage_for(2) and p["k"] == 2
                                 for p in history))
-            # Taisamba's outro hands off to Balberra, even if a stale/native
-            # caller reports ready. Neither client may elect or publish for
-            # a boss without a complete sync profile.
+            # Taisamba's outro hands off to Balberra. Clear every old channel
+            # before electing the next encounter, even if the root address is reused.
             old_taisamba = next(p for p in reversed(history)
                                if p["type"] == anchor_impact.PACKET_TYPE and p["op"] == "s")
             follower = clients[1]
@@ -190,20 +198,30 @@ class ImpactBossRushBridgeTests(unittest.TestCase):
             self.assertFalse(follower._impact_sounds.receive(ctx, follower._impact, old_channels[anchor_impact_sound.PACKET_TYPE], now))
             for _ in range(10):
                 status = tick((3, 2))
-            self.assertEqual(status[0]["role"], 0)
+            self.assertEqual(status[0]["role"], 1)
             for boss in (3, 4):
                 start = len(history)
                 for _ in range(20):
                     status = tick((boss, boss))
-                self.assertEqual([s["role"] for s in status], [0, 0])
-                self.assertFalse(any(p["type"].startswith("MNSG_IMPACT")
-                                     for p in history[start:]))
-                for client in clients:
-                    self.assertFalse(client._impact.local[0])
-                    self.assertIsNone(client._impact_players.scope)
-                    self.assertIsNone(client._impact_visuals.scope)
-                    self.assertIsNone(client._impact_sounds.guard.scope)
+                self.assertEqual([s["role"] for s in status], [1, 2])
+                self.assertTrue(any(p["type"] == anchor_impact.PACKET_TYPE and
+                                    p["s"] == stage_for(boss) and p["k"] == boss
+                                    for p in history[start:]))
+                for client,result in zip(clients,status):
+                    self.assertEqual(result["state"],state(boss,stage_for(boss)))
+                    self.assertTrue(client._impact.local[0])
+                    self.assertEqual(client._impact_players.scope[2:4],(stage_for(boss),boss))
+                    self.assertEqual(client._impact_visuals.scope[2:4],(stage_for(boss),boss))
+                    self.assertEqual(client._impact_sounds.guard.scope[2:4],(stage_for(boss),boss))
                     self.assertFalse(client._impact.receive(client._boss_context(), old_taisamba, now))
+                self.assertTrue(clients[1]._impact_players.remote)
+                self.assertTrue(clients[1]._impact_visuals.latest)
+                self.assertTrue(clients[1]._impact_sounds.loops)
+            for client in clients:
+                client.update_impact(0,0x25F,0,0,0,"null")
+                self.assertFalse(client._impact_players.remote)
+                self.assertIsNone(client._impact_visuals.latest)
+                self.assertFalse(client._impact_sounds.loops)
             # Starting a new run still activates Kashiwagi and Taisamba.
             for boss in (1, 2):
                 for _ in range(30):

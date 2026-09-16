@@ -15,7 +15,7 @@ def rows(n=64):
     return [[i+1,121,38,2,0xFFFFFFFF,9,0xFF01,
              0xC9742400,0xC9742400,0xC9742400,65535,65535,65535,
              0x49742400,0x49742400,0x49742400,0x49742400,
-             *([0x876F,0x7FFFFF]*6)] for i in range(n)]
+             *([0x876F,0x7FFFFF]*6),0] for i in range(n)]
 
 
 class ImpactVisualTests(unittest.TestCase):
@@ -90,7 +90,7 @@ class ImpactVisualTests(unittest.TestCase):
 
     def test_malformed_words_and_page_bounds(self):
         original = self.send()[0]
-        for index,value in [(0,0),(1,131),(2,39),(3,3),(5,16),(6,2),
+        for index,value in [(0,0),(1,131),(2,39),(3,4),(5,16),(6,2),
                             (7,0x7F800000),(10,65536),(17,0x8770),(18,0x800000)]:
             p = copy.deepcopy(original); p["r"][0][index] = value
             self.assertFalse(self.rx.receive(self.b,self.guest,p,10))
@@ -105,6 +105,25 @@ class ImpactVisualTests(unittest.TestCase):
         self.assertFalse(self.rx.receive(self.b,self.guest,{**packet,"v":5},10))
         self.assertTrue(self.rx.receive(self.b,self.guest,packet,10))
         self.assertEqual(self.view(),sample)
+
+    def test_dual_color_glows_blend_and_keep_packet_budget(self):
+        sample = rows()
+        for row in sample:
+            row[3], row[4], row[29] = 3, 0xFF803000, 0x2070FFFF
+        packets = self.send(sample=sample)
+        self.assertEqual(len(packets),4)
+        for packet in packets:
+            self.assertLessEqual(len(json.dumps(packet,separators=(",", ":")).encode())+1,visual.PACKET_BYTES)
+            self.assertTrue(self.rx.receive(self.b,self.guest,packet,10))
+        self.assertEqual(self.view(),sample)
+        a,b = sample[0],list(sample[0])
+        b[4], b[29] = 0xFF8030FF, 0x2070FF00
+        mixed = visual.blend_row(a,b,.5)
+        self.assertEqual(mixed[4],0xFF803080)
+        self.assertEqual(mixed[29],0x2070FF80)
+        self.assertFalse(visual.rows_valid([a[:-1]]))
+        b[3] = 2
+        self.assertFalse(visual.rows_valid([b]))
 
     def test_pause_disconnect_and_local_reentry_clear_cache(self):
         for p in self.send(): self.rx.receive(self.b,self.guest,p,10)

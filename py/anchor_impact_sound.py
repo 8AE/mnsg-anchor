@@ -28,12 +28,16 @@ CUES = frozenset((
 
 
 TAISAMBA_CUES = frozenset((1,7,8,0x27,0x28,0x4A,0x4C,0x4D,0x60))
+BALBERRA_CUES = frozenset((1,7,9,0x4C))
+DETOILE_CUES = frozenset((1,7,8,0x37,0x38,0x4A,0x4C,0x4D))
 
 def command_valid(command, encounter=0):
     # Verified combat cues, including the six global loop stops.
     return (_u32(command) and command & 0xFFFF != 0 and
             (command & 0xFFFF in CUES or
              encounter == 2 and command & 0xFFFF in TAISAMBA_CUES or
+             encounter == 3 and command & 0xFFFF in BALBERRA_CUES or
+             encounter == 4 and command & 0xFFFF in DETOILE_CUES or
              command & 0xFFFF in tuple(x | 0x8000 for x in LOOPS)) and
             (command >> 16 & 255) < 128)
 

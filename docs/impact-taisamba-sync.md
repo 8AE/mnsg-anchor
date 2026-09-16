@@ -1,5 +1,10 @@
 # Taisamba 2 synchronization
 
+This page records the earlier protocol-7 Taisamba implementation and repairs.
+The current build uses protocol 8 and supports all four bosses; see
+[the final-boss notes](impact-last-bosses-sync.md). The temporary restriction of
+later bosses described below has been replaced by their complete profiles.
+
 The September 13 implementation extends the user-confirmed Kashiwagi baseline.
 Boss behavior is separated from the reusable multiplayer machinery:
 

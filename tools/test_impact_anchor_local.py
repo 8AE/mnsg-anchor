@@ -58,7 +58,7 @@ class Peer:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port",type=int,required=True)
-    parser.add_argument("--boss",type=int,choices=(1,2),default=1)
+    parser.add_argument("--boss",type=int,choices=(1,2,3,4),default=1)
     parser.add_argument("--stage",type=lambda s:int(s,0),
                         help="Native stage; defaults to the selected boss's boss-rush stage")
     args = parser.parse_args()
@@ -87,7 +87,7 @@ def main():
         tx,rx = visual.ImpactVisualTransport(),visual.ImpactVisualTransport()
         rx.update(context(guest),guest_battle,1,stage,boss,1,None,10)
         rows = [[i+1,79,16,0,0,9,0,0,0,0,0,512,0,
-                 0x3E4CCCCD,0x3E4CCCCD,0x3E4CCCCD,0,0x4A8,0,*([0,0]*5)] for i in range(64)]
+                 0x3E4CCCCD,0x3E4CCCCD,0x3E4CCCCD,0,0x4A8,0,*([0,0]*5),0] for i in range(64)]
         for i, recipe in enumerate([2,7,9,11,12,122,*range(123,131)]):
             rows[i][1] = recipe  # real punch/kick/arm/hook and all chain lengths
             rows[i][5] = 5
@@ -95,6 +95,17 @@ def main():
             # Actual Taisamba clips, returning weapon and whirlwind recipes.
             for row,recipe in zip(rows[16:],(18,21,22,27,31,35,39,41,44,46,50,53,55,57,58,97,99,100,101,103)):
                 row[1],row[17] = recipe,0x4B2
+        if boss == 3:
+            for row,recipe in zip(rows[16:],range(109,121)):
+                row[1],row[17] = recipe,0x4B5
+        if boss in (3,4):
+            # Native primitive/environment glow recipes, with independent alpha.
+            rows[32][1],rows[32][17] = (120,0x4B5) if boss == 3 else (75,0x4B6)
+            rows[33][1],rows[33][17] = 70,0x4AE
+            for row in rows[32:34]:
+                row[3],row[4],row[29] = 3,0xFF803028,0x2070FFFF
+        if boss == 4:
+            rows[16][1],rows[16][17] = 121,0x4B5  # shield
         _,packets = tx.update(context(host),host_battle,1,stage,boss,1,rows,10)
         assert len(packets) == 4
         for packet in packets: host.send(packet)
@@ -143,6 +154,15 @@ def main():
         if boss == 2:
             root[15] = 129  # returning-weapon launch phase, beyond old phase limit
             root[165+1],root[165+4],root[165+6] = 0x3F800000,0x43480000,1
+        if boss == 3:
+            root[0],root[15] = 712,32  # native drone deployment phase
+            for slot in range(12):
+                offset = 180+slot*8
+                root[offset:offset+8] = [0x10001,50,8,16,max(0,slot-6),0,0,0]
+            root[180:182] = [2,0]  # destroyed multi-cannon
+        if boss == 4:
+            root[15],root[172] = 61,50  # initial grapple and shared meter
+            root[188:190] = [0x10002,21]  # shield deflection survives consumed pulse
         checkpoint = {"k":boss,"s":stage,"r":root}
         for engine in engines: engine.set_encounter(stage,boss)
         for tick in range(10):
@@ -163,7 +183,7 @@ def main():
                           "frame_bytes":sum(len(json.dumps(p,separators=(",", ":")).encode())+1 for p in incoming),
                           "sender_excluded":True,"team_isolated":True,"cursor_and_controls":True,
                           "limbs_and_chain":True,"hook_aim_and_ordered_mashes":True,
-                          "audio_start_stop":True,"audio_deduplicated":True}))
+                          "audio_start_stop":True,"audio_deduplicated":True,"dual_color_glows":boss in (3,4)}))
     finally:
         for peer in peers: peer.socket.close()
 

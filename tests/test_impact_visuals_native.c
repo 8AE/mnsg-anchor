@@ -3,6 +3,8 @@
 #include "impact_test_pointers.h"
 #define ANCHOR_IMPACT_VISUAL_HOST_TEST
 #define IV_PTR(p,o) TP(p,o)
+/* Host pointers have unrelated high bits; reserve native material tag bits. */
+#define IV_ADDR(p) ((unsigned int)(uintptr_t)(p)&~0x60000000u)
 /* Keep the production entry-hook registration in the frame-order fixture. */
 #define RECOMP_HOOK(name) static const char *render_hook = name;
 char *anchor_impact_visuals_update(int, unsigned int, unsigned int, unsigned int, const char *);
@@ -73,6 +75,13 @@ void *func_8000DDF0_E9F0(void *task, unsigned int m, int r, unsigned int g, unsi
 void *func_8000DF10_EB10(void *task, unsigned int m, int r, unsigned int g, unsigned int b, unsigned int a) {
     void *p = func_8000DDF0_E9F0(task,m,r,g,b,a); TU32(task,0xD8) = 0xFB000000; return p;
 }
+void *func_8000E030_EC30(void *task, unsigned int m, int r, unsigned int g, unsigned int b, unsigned int a,
+                        int er, unsigned int eg, unsigned int eb, unsigned int ea) {
+    TU32(task,0xC8) = 0x06000000; TU32(task,0xCC) = m; TU32(task,0xD0) = 0xFA000000;
+    TU32(task,0xD4) = (unsigned int)r<<24 | g<<16 | b<<8 | a;
+    TU32(task,0xD8) = 0xFB000000; TU32(task,0xDC) = (unsigned int)er<<24 | eg<<16 | eb<<8 | ea;
+    TU32(task,0xE0) = 0xB8000000; TU32(task,0xE4) = 0; return (unsigned char *)task+0xC8;
+}
 static void setup(void) {
     unsigned int i;
     TP(head,0) = manager; TP(manager,4) = head; TP(manager,0) = world;
@@ -88,7 +97,7 @@ static void setup(void) {
     for (i = 0; i < 3; ++i) TF32(model,0x1C+i*4) = .2f;
     TU16(D_80167FC0_168BC0,0) = recipe.file;
     TP(D_80167FC0_168BC0,4) = (void *)(uintptr_t)0x80200000;
-    TP(D_80167FC0_168BC0+8,4) = (void *)(uintptr_t)0x80210000;
+    TP(D_80167FC0_168BC0+8,4) = (void *)(uintptr_t)0x80230000;
 }
 static void native_event(const char *name) {
     if (!strcmp(render_hook,name)) anchor_impact_visuals_render();
@@ -120,9 +129,18 @@ static void frame_draw(void) {
 }
 int main(int argc, char **argv) {
     if (argc > 1) { test_boss = 2; recipe.model = (unsigned int)strtoul(argv[1],0,16); recipe.file = 0x4B2; }
-    unsigned int i, bad[29], bases[6], original_id, inserted_id;
+    if (argc > 2) { test_boss = (unsigned int)atoi(argv[2]); recipe.file = 0x4B5; }
+    if (argc > 3) recipe.file = (unsigned short)strtoul(argv[3],0,0);
+    unsigned int i, bad[ANCHOR_IMPACT_VISUAL_WORDS], bases[6], original_id, inserted_id;
     setup(); owner = 1; anchor_impact_visuals_tick(1);
     assert(sent.count == 1 && sent.rows[0][1] == 1 && sent.rows[0][17] == recipe.file);
+    TU32(model,0x30) = IV_ADDR(func_8000E030_EC30(boss,0x80000004,
+        0xFF,0x80,0x30,0x28,0x20,0x70,0xFF,0xFF)) | 0x60000000u;
+    assert(capture_object(boss,model,bad));
+    assert(bad[3] == 3 && bad[4] == 0xFF803028 && bad[29] == 0x2070FFFF && bad[6] == 0x30000);
+    TU32(boss,0xD8) = 0x06000000; assert(!capture_object(boss,model,bad));
+    TU32(boss,0xD8) = 0xFB000000;
+    TU32(model,0x30) = 0x80000004;
     TP(manager,4) = boss; /* 34B58 may cache the tail in the first backlink */
     anchor_impact_visuals_tick(1); assert(sent.count == 1);
     TP(head,4) = head; assert(!linked(head)); /* only the real list head qualifies */
@@ -164,6 +182,11 @@ int main(int argc, char **argv) {
     assert(TU32(tasks[0],0xD8) == 0xFB000000);
     assert((TU32(models[0],0x30)&0x60000000u) == 0x60000000u);
     assert(IV_U8(model,0x64)&1); assert(TF32(model,8) == 0); /* native simulation untouched */
+    frame.rows[0][3] = 3; frame.rows[0][4] = 0xFF803028; frame.rows[0][29] = 0x2070FFFF;
+    assert(anchor_impact_visual_encode(&frame,received_json,sizeof(received_json)));
+    frame_draw();
+    assert(TU32(tasks[0],0xD0) == 0xFA000000 && TU32(tasks[0],0xD4) == 0xFF803028);
+    assert(TU32(tasks[0],0xD8) == 0xFB000000 && TU32(tasks[0],0xDC) == 0x2070FFFF);
     frame.rows[0][5] = 8; /* mode changes must precede the next collection */
     assert(anchor_impact_visual_encode(&frame,received_json,sizeof(received_json)));
     frame_draw(); assert(IV_U8(models[0],5) == 8);
@@ -174,7 +197,7 @@ int main(int argc, char **argv) {
     }
     assert(allocated == 1); /* retained slots across pauses */
     assert(cache_releases == 0);
-    TU16(models[0],0x34) = 0x4B5; TP(models[0],0x78) = model;
+    TU16(models[0],0x34) = recipe.file == 0x4B5 ? 0x4B2 : 0x4B5; TP(models[0],0x78) = model;
     anchor_impact_visuals_begin_frame(); anchor_impact_visuals_tick(1); anchor_impact_visuals_render();
     assert(cache_releases == 2 && !TP(models[0],0x78) && allocated == 1);
     anchor_impact_visuals_begin_frame();
@@ -190,7 +213,7 @@ int main(int argc, char **argv) {
     TP(model,0) = 0;
     memcpy(bad,frame.rows[0],sizeof(bad)); bad[18] = 0xFFFF;
     assert(!resolve(bad,bases)); bad[18] = 0; bad[19] = 0x4B0;
-    assert(!resolve(bad,bases)); bad[19] = recipe.file; bad[20] = 0x10000;
+    assert(!resolve(bad,bases)); bad[19] = recipe.file; bad[20] = 0x30000;
     assert(!resolve(bad,bases));
     anchor_impact_visuals_begin_frame(); strcpy(received_json,"null");
     anchor_impact_visuals_tick(1); anchor_impact_visuals_render();

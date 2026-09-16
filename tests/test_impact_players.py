@@ -36,9 +36,10 @@ class ImpactScopeTests(unittest.TestCase):
             self.assertFalse(impact._impact_stage(stage), stage)
 
     def test_only_complete_profiles_activate_on_their_native_rush_stage(self):
-        for stage, boss in [(0x220, 1), (0x221, 2), (0x260, 1), (0x261, 2)]:
+        for stage, boss in [(0x220, 1), (0x221, 2), (0x222, 3), (0x222, 4), (0x223, 4),
+                            (0x260, 1), (0x261, 2), (0x262, 3), (0x263, 4)]:
             self.assertTrue(impact.sync_supported(stage, boss))
-        for stage, boss in [(0x262, 3), (0x263, 4), (0x222, 3), (0x223, 4),
+        for stage, boss in [
                             (0x260, 2), (0x261, 1), (0x262, 2), (0x220, True)]:
             self.assertFalse(impact.sync_supported(stage, boss))
             status, packets = impact.ImpactPlayerTransport().update(

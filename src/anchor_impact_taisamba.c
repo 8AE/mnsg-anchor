@@ -170,7 +170,7 @@ static unsigned int taisamba_references[9];
 /* Read-only native inputs, scoped to one callback. These never join a task
  * list, render, collide, or execute AI. Each peer keeps its real task pointers. */
 static unsigned int taisamba_weapon[0x60/4];
-static unsigned int taisamba_carrier[0x80/4], taisamba_carrier_model[0x30/4];
+static AnchorImpactCarryView taisamba_carrier_view;
 static void *taisamba_saved_weapon, *taisamba_saved_carrier;
 static void *taisamba_weapon_root, *taisamba_carrier_root;
 static int taisamba_recover_carrier;
@@ -217,17 +217,8 @@ static void taisamba_capture(void *state, void *task, unsigned int *r)
     if (r[IMP_PHASE] == 76 && anchor_impact_boss_pointer_valid(reference))
         r[TS_WEAPON_ACTIVE] = IB_U16(reference,0x5C) == 0x5B;
     reference = IB_PTR(task,0xDC);
-    if ((r[IMP_PHASE] == 116 || r[IMP_PHASE] == 117) &&
-        anchor_impact_boss_pointer_valid(reference) &&
-        anchor_impact_boss_pointer_valid(IB_PTR(reference,0x18))) {
-        void *object = IB_PTR(reference,0x18);
-        r[TS_CARRY_VALID] = 1;
-        for (i = 0; i < 3; ++i) {
-            r[TS_CARRY_POS+i] = IB_U32(object,8+i*4);
-            r[TS_CARRY_VELOCITY+i] = IB_U32(reference,0x70+i*4);
-        }
-        r[TS_CARRY_YAW] = IB_U16(object,0x16);
-    }
+    if (r[IMP_PHASE] == 116 || r[IMP_PHASE] == 117)
+        anchor_impact_boss_carry_capture(reference,r+TS_CARRY_VALID);
     if (!anchor_impact_native_is_owner() && taisamba_reference_live(task)) {
         for (i = 0; i < 9; ++i) r[TS_WEAPON_ACTIVE+i] = taisamba_references[i];
     }
@@ -346,7 +337,6 @@ void anchor_impact_taisamba_weapon_end(void)
 RECOMP_HOOK("func_801F6660_621A40")
 void anchor_impact_taisamba_carrier_begin(void *task)
 {
-    unsigned int i;
     void *carrier;
     taisamba_carrier_root = 0;
     if (!taisamba_context(task)) return;
@@ -355,13 +345,11 @@ void anchor_impact_taisamba_carrier_begin(void *task)
         anchor_impact_boss_pointer_valid(IB_PTR(carrier,0x18))) return;
     taisamba_saved_carrier = carrier; taisamba_carrier_root = task;
     taisamba_recover_carrier = anchor_impact_native_is_owner();
-    IB_PTR(taisamba_carrier,0x18) = taisamba_carrier_model;
-    for (i = 0; i < 3; ++i) {
-        IB_U32(taisamba_carrier_model,8+i*4) = taisamba_reference_live(task) ? taisamba_references[2+i] : 0;
-        IB_U32(taisamba_carrier,0x70+i*4) = taisamba_reference_live(task) ? taisamba_references[5+i] : 0;
+    {
+        static const unsigned int empty[8] = {0};
+        IB_PTR(task,0xDC) = anchor_impact_boss_carry_view(&taisamba_carrier_view,
+            taisamba_reference_live(task) ? taisamba_references+1 : empty);
     }
-    IB_U16(taisamba_carrier_model,0x16) = taisamba_reference_live(task) ? taisamba_references[8] : 0;
-    IB_PTR(task,0xDC) = taisamba_carrier;
 }
 RECOMP_HOOK_RETURN("func_801F6660_621A40")
 void anchor_impact_taisamba_carrier_end(void)

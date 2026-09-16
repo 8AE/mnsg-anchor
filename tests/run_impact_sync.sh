@@ -22,7 +22,7 @@ done
 "$HOST_COMPILER" "${TEST_FLAGS[@]}" tests/test_impact_players_native.c \
     src/utils/anchor_impact_players_codec.c -o "$TEST_DIR/players"
 "$TEST_DIR/players"
-"$TEST_DIR/players" 2
+for boss in 2 3 4; do "$TEST_DIR/players" "$boss"; done
 "$HOST_COMPILER" "${TEST_FLAGS[@]}" tests/test_impact_visuals_native.c \
     src/utils/anchor_impact_visual_codec.c -o "$TEST_DIR/visuals"
 "$TEST_DIR/visuals"
@@ -30,4 +30,9 @@ done
 for model in 18000E28 4800F5A0 4800FE90; do
     "$TEST_DIR/visuals" "$model"
 done
+# Balberra body/pod/gun and D'Etoile root/shield/glow recipes.
+for model in 48016730 480137C0 48017330; do "$TEST_DIR/visuals" "$model" 3; done
+for model in 18000E9C 480199E0; do "$TEST_DIR/visuals" "$model" 4; done
+"$TEST_DIR/visuals" 480008B0 4 0x4B6
+"$TEST_DIR/visuals" 48000170 4 0x4AE
 PYTHONPATH=py python3 -m unittest discover -s tests -p 'test_impact*.py'

@@ -8,7 +8,7 @@
 #include "utils/anchor_impact_catalog.h"
 #define ANCHOR_IMPACT_MECH_OBJECTS 10
 #define ANCHOR_IMPACT_POSE_WORDS 11
-#define ANCHOR_IMPACT_BOSS_WORDS 32
+#define ANCHOR_IMPACT_BOSS_WORDS 128
 
 enum AnchorImpactRootField
 {

@@ -12,6 +12,8 @@ root = Path(__file__).resolve().parents[1]
 clips = json.loads((root / "tests/impact_boss_clips.json").read_text())
 sources = [root / "src/anchor_impact_kashiwagi.c",
            root / "src/anchor_impact_taisamba.c",
+           root / "src/anchor_impact_balberra.c",
+           root / "src/anchor_impact_detoile.c",
            root / "src/utils/anchor_impact_catalog.c",
            root / "src/utils/anchor_impact_visual_catalog.c"]
 text = "\n".join(p.read_text() for p in sources)

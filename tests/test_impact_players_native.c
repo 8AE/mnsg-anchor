@@ -215,6 +215,11 @@ int main(int argc, char **argv) {
     assert(TF32(state,4) == 13 && TF32(state,8) == 17);
     row[3] = 3; row[4] = 110; row[5] = 60; row[6] = row[7] = 0; receive_controls(row);
     TU16(system_data,0x3B07E) = 9; TU16(system_data,0x3B080) = 7;
+    TF32(system_data,0x3B084) = .75f; TF32(system_data,0x3B088) = .5f;
+    anchor_impact_players_source_axes_begin(arm_task);
+    assert(TF32(system_data,0x3B084) == .375f && TF32(system_data,0x3B088) == -.25f);
+    anchor_impact_players_source_axes_end();
+    assert(TF32(system_data,0x3B084) == .75f && TF32(system_data,0x3B088) == .5f);
     anchor_impact_fist_begin(arm_task,arm_object);
     assert((short)TU16(system_data,0x3B07E) == 30 && (short)TU16(system_data,0x3B080) == -20);
     anchor_impact_fist_end();

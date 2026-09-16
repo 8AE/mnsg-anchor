@@ -37,7 +37,8 @@ int anchor_impact_visual_row_valid(const unsigned int *r)
 {
     unsigned int i;
     if (!r[0] || !r[1] || r[1] > 130 || r[2] > 38 ||
-        r[3] > 2 || (r[3] && !r[2]) || r[5] > 15 || (r[6] & ~0x3FF01u)) return 0;
+        r[3] > 3 || (r[3] && !r[2]) || (r[3] != 3 && r[29]) ||
+        r[5] > 15 || (r[6] & ~0x3FF01u)) return 0;
     for (i = 7; i <= 16; ++i) {
         if (i >= 10 && i <= 12) { if (r[i] > 65535) return 0; }
         else if ((r[i] & 0x7FFFFFFFu) > 0x49742400u) return 0; /* finite, <=1e6 */

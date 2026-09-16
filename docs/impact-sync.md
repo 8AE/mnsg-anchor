@@ -2,10 +2,11 @@
 
 This branch implements a shared mech with independent native reticles, owner-executed
 controls, boss checkpoints and an owner-only stream of native render objects.
-The user confirmed Kashiwagi and Taisamba 2 syncing on September 13, then reported
-both games crashing when boss rush advanced past Taisamba. The current transition
-repair and its limits are described in [the Taisamba implementation notes](impact-taisamba-sync.md).
-Balberra and D'Etoile remain native-only until complete sync profiles exist.
+The user confirmed Kashiwagi, Taisamba 2 and the post-defeat transition repair.
+Balberra and D'Etoile now have separate native AI profiles and reuse the shared
+player, rendering and audio paths in story scenes and boss rush. See
+[the final-boss implementation notes](impact-last-bosses-sync.md) for native
+findings and validation limits. The new bosses have not had a fresh live game run here.
 
 ## Corrections from the recordings and native code
 
@@ -47,20 +48,22 @@ evidence; historical instructions in the previous handoff are not current reques
 `D_8020EED0_63A2B0` is the dedicated file_13 battle-state pointer. The boss selector
 is the halfword at system `+0x3ADF4`. Valid native stages are `0x21C..0x223`,
 `0x239..0x23C`, and title-menu boss-rush stages `0x260..0x263`.
-Recognizing a stage does not enable synchronization: only selectors 1 and 2 have
-complete profiles. In boss rush, the stage must also match the selector exactly
-(`0x260`/1 or `0x261`/2). The remaining catalog entries are dormant groundwork.
+Every selector has a complete profile. In boss rush the live stage must match
+the selector exactly (`0x260`/1, `0x261`/2, `0x262`/3, `0x263`/4). Story handoffs
+also fence by selector and root ID, even when the scene and task address stay the same.
 
-The version-7 checkpoint contains **197 u32 words**, including:
+The version-8 checkpoint contains **293 u32 words**, including:
 
 - Boss HP, shared ammunition, mech HP, combat pause and battle clock.
-- Boss root pose, animation clip ID, phase callback ID, collision dimensions,
-  render flags and an explicit per-boss mask of scalar task fields.
-- Ten cockpit/mech object poses. Camera position, target and FOV are not sent.
-- Taisamba 2's arena origin/displacement, ascent gate, collision mode, hook meter,
-  latch and scalar attachment references (never task pointers).
-- Taisamba 2's auxiliary angle, countdown and bubble gate. Native pointer lists
-  in this block remain local. Legacy auxiliary packing for later bosses is inactive.
+- Boss pose, animation/phase IDs, collision dimensions and masked private scalars.
+- Ten cockpit/mech poses, with camera position, target, FOV and aim kept local.
+- Arena displacement/origin, ascent, collision mode, grapple meter, action/timer,
+  latch and defeat state where used by the boss.
+- Scalar carry references for Taisamba and D'Etoile; native pointers stay local.
+- Balberra's 12 weapon/pod records, including separate HP, attack/death callbacks,
+  timers, sliding offsets and model/frame state.
+- D'Etoile's shield deflection state and afterimage/glow controls. Its 64-entry
+  native pose-history ring and write index stay local.
 
 Callbacks, clips and asset recipes use fixed IDs resolved against the locally
 loaded USA overlay. No foreign task pointer, object pointer or callback address is
@@ -114,8 +117,8 @@ Rejecting the manager when it is the head disables the entire visual channel.
 
 [impact-visual-recipes.json](impact-visual-recipes.json) records 130 model/file
 recipes and 38 material IDs from native constructors, clip records and bounded
-missile/body tables. Each 29-word row carries a generation-and-slot handle, recipe/material IDs,
-primitive/environment color, renderer tags, mode, visibility, pose/frame and six
+missile/body tables. Each 30-word row carries a generation-and-slot handle, recipe/material IDs,
+primitive and environment colors, renderer tags, mode, visibility, pose/frame and six
 file-relative segment bindings. Bindings must resolve within resident native
 assets; animated texture offsets and color alpha are preserved. File-zero slots
 may contain valid animated textures written by native code; capture retains
@@ -186,44 +189,24 @@ of measured server capacity. A representative 64-object localhost frame used
 6,759 bytes total over four pages. No public Anchor service was load-tested.
 
 The sound channel adds at most 30 KiB/s owner traffic, with the same team fan-out.
-All participants need protocol 7. `mod.toml` packages the coordinator, player,
+All participants need protocol 8. `mod.toml` packages the coordinator, player,
 visual and sound modules.
 
 ## Verification and remaining limits
 
-- `UBSAN=1 tests/run_impact_sync.sh`: production C codecs, native checkpoint
-  application, damage return semantics, native Balberra HP fallback and legacy auxiliary packing,
-  native cursor recipe, input arbitration, shot capture, texture bounds, alpha,
-  render visibility restoration, retained allocation over 50 pause cycles,
-  plus Python transport/election/paging regressions.
-- The post-Taisamba regression rejects queued defeat snapshots after a stage
-  change and leaves later native bosses untouched. Bridge tests run all four
-  channels through staggered `0x261` → `0x262` transitions, reject late packets,
-  and verify that a new Kashiwagi/Taisamba run can synchronize again. See
-  [impact-defeat-validation-2026-09-13.json](impact-defeat-validation-2026-09-13.json).
-- Full Python suite: 270 tests run, one skipped; all executed tests passed.
-- `tools/test_impact_anchor_local.py --port 43393`: three real TCP clients against
-  disposable loopback Anchor revision `bf7b43c10b19428ceba54772c7bae3abca44a345`;
-  four-page/64-object delivery, sender exclusion, cross-team isolation, cursor
-  control/analog transport and audio start/stop/deduplication. The temporary server changes only its listener address.
-- Release/debug MIPS builds and package import/integrity checks are recorded in
-  [impact-attacks-validation-2026-09-13.json](impact-attacks-validation-2026-09-13.json). Static packet audit reports zero errors/warnings, but only
-  inventories literal sends; the channel-specific tests cover generic sends.
+Current results are recorded in [impact-last-bosses-validation-2026-09-13.json](impact-last-bosses-validation-2026-09-13.json).
 
-The supplied 16:45 recording is the user's two-player test of the preceding build.
-The user subsequently confirmed the gameplay refinements. The post-Taisamba
-transition repair has not had a fresh live game run here. The earlier automation restriction and baseline checks remain
-recorded in [impact-validation-2026-09-12.json](impact-validation-2026-09-12.json).
+- `UBSAN=1 tests/run_impact_sync.sh`: 20 native fixture runs and 47 Python tests,
+  covering all four profiles, shared controls, native render recipes, two-color
+  materials, story/rush transitions, defeat, carry promotion and malformed inputs.
+- Full Python suite: 277 tests run, 276 passed and one skipped.
+- Seven isolated three-client TCP runs against local Anchor cover all four rush
+  fights and Balberra/D'Etoile story stages. They verify real framing/routing,
+  owner election, checkpoints, controls, native asset rows, dual colors and audio.
+- Release/debug MIPS builds, package contents and installed package hashes are
+  recorded with the validation evidence. Static packet audit reports no findings.
 
-Followers still maintain local native graphs for introductions, scene flow and
-future authority takeover. Checkpoints cover root/auxiliary scalar state; they do
-not serialize every child's private AI state or reconstruct every in-flight
-collision actor during host migration. Unsupported render objects remain local,
-and a 64-object overflow falls back to local presentation. Balberra and D'Etoile
-are not synchronized. Sound timing, late entry, the repaired defeat/scene transition and exact
-mid-attack host migration remain unverified in live gameplay. These limits must
-remain visible when describing the branch; automated build/transport success is
-not proof of complete boss synchronization.
-
-The subsequent two-player limb/grapple correction and its validation are recorded
-in [impact-grapple-analysis-2026-09-13.md](impact-grapple-analysis-2026-09-13.md).
+These checks do not execute the actual two-client native boss fights. The user
+confirmed the preceding Kashiwagi/Taisamba build; Balberra and D'Etoile still need
+live gameplay verification. Historical recordings and earlier validation files
+refer to their respective earlier builds.

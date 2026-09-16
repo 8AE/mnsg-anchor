@@ -20,12 +20,9 @@
 extern unsigned short D_800C7AB2;
 extern unsigned char *D_8015C5C8_15D1C8;
 extern void *D_8020EED0_63A2B0;
-extern void *D_8020EF40_63A320;
 extern void *D_8016DAB4_16E6B4;
 extern void func_801D2EE4_5FE2C4(void *object, const void *clip);
 
-extern void func_80200200_62B5E0(void *task);
-extern void func_801FAEB0_626290(void *task);
 
 #define IMPACT_STATE_HP 0x60
 #define IMPACT_STATE_AMMO 0x64
@@ -301,15 +298,6 @@ int anchor_impact_native_bind(void *task, unsigned int encounter)
     return 1;
 }
 
-#define IMPACT_BIND_HOOK(address, encounter) \
-    RECOMP_HOOK(address) \
-    void anchor_impact_bind_##encounter(void *task) \
-    { \
-        (void)anchor_impact_native_bind(task, encounter); \
-    }
-IMPACT_BIND_HOOK("func_80200200_62B5E0", 3)
-IMPACT_BIND_HOOK("func_801FAEB0_626290", 4)
-#undef IMPACT_BIND_HOOK
 
 static int snapshot_valid(const AnchorImpactNativeSnapshot *snapshot)
 {
@@ -356,35 +344,6 @@ static int snapshot_valid(const AnchorImpactNativeSnapshot *snapshot)
         (r[IMP_AUX_KIND] == 2 && (s_encounter < 3 ||
          (r[IMP_AUX_DATA+3]&255u) || (r[IMP_AUX_DATA+4]&255u))) || r[IMP_AUX_DATA+5]) return 0;
     return anchor_impact_boss_validate(s_encounter, r);
-}
-
-/* These auxiliary fields are native scalars. Never transfer the task-pointer
- * lists at EF30+0 or EF40+0/+14..+814. Their ownership stays with the local
- * native graph. The byte lists are initialized explicitly by FUN_802099A8. */
-static void capture_aux(unsigned int *r)
-{
-    unsigned int i;
-    void *aux;
-    for (i = 0; i < 7; ++i) r[IMP_AUX_KIND+i] = 0;
-    if (s_encounter >= 3 && pointer_valid(D_8020EF40_63A320)) {
-        aux = D_8020EF40_63A320; r[IMP_AUX_KIND] = 2;
-        for (i = 0; i < 15; ++i)
-            r[IMP_AUX_DATA+i/4] |= (unsigned int)ANCHOR_IMPACT_READ_U8(aux,4+i) << (24-(i%4)*8);
-        for (i = 0; i < 3; ++i)
-            r[IMP_AUX_DATA+4] |= (unsigned int)ANCHOR_IMPACT_READ_U8(aux,0x815+i) << (24-i*8);
-    }
-}
-static void apply_aux(const unsigned int *r)
-{
-    unsigned int i;
-    void *aux;
-    if (r[IMP_AUX_KIND] == 2 && pointer_valid(D_8020EF40_63A320)) {
-        aux = D_8020EF40_63A320;
-        for (i = 0; i < 15; ++i)
-            ANCHOR_IMPACT_WRITE_U8(aux,4+i,r[IMP_AUX_DATA+i/4] >> (24-(i%4)*8));
-        for (i = 0; i < 3; ++i)
-            ANCHOR_IMPACT_WRITE_U8(aux,0x815+i,r[IMP_AUX_DATA+4] >> (24-i*8));
-    }
 }
 
 static void capture_pose(const void *object, unsigned int *out)
@@ -487,7 +446,6 @@ int anchor_impact_native_capture(AnchorImpactNativeSnapshot *snapshot)
         } else capture_pose(object, pose);
         r[IMP_MECH_MASK] |= 1u << i;
     }
-    capture_aux(r);
     anchor_impact_boss_capture(s_encounter, s_state, s_task, r);
     snapshot->encounter = s_encounter;
     snapshot->stage = s_stage;
@@ -525,16 +483,11 @@ static void apply_root(const AnchorImpactNativeSnapshot *snapshot)
     ANCHOR_IMPACT_WRITE_I32(s_state, IMPACT_STATE_AMMO, (int)r[IMP_AMMO]);
     ANCHOR_IMPACT_WRITE_I32(s_state, IMPACT_STATE_MECH_HP,
                            (int)r[IMP_MECH_HP]);
-    /* Balberra keeps the actual HP in root+AC. FUN_8020407C republishes it
-     * to shared+60 every update; changing only the HUD pool is undone. */
-    if (s_encounter == 3u)
-        ANCHOR_IMPACT_WRITE_I32(s_task, 0xAC, (int)r[IMP_BOSS_HP]);
     anchor_impact_boss_apply_lifecycle(s_encounter, s_state, r);
     /* Let each native introduction finish creating its task graph. An early
      * phase jump could otherwise enter an action before its child exists. */
     if (r[IMP_PAUSE] || ANCHOR_IMPACT_READ_U8(s_state, IMPACT_STATE_PAUSE))
         return;
-    apply_aux(r);
     anchor_impact_boss_apply(s_encounter, s_state, s_task, r);
     ANCHOR_IMPACT_WRITE_U32(s_state, IMPACT_STATE_CLOCK, r[IMP_CLOCK]);
     clip = anchor_impact_clip_data(s_encounter, r[IMP_CLIP]);

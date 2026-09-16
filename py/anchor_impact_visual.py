@@ -13,7 +13,7 @@ from anchor_impact import VERSION, METADATA_KEY, metadata, _u32, sync_supported
 from anchor_boss_transport import positive
 
 PACKET_TYPE = "MNSG_IMPACT_VISUAL"
-MAX_ROWS, ROW_WORDS, PAGE_ROWS, PACKET_BYTES = 64, 29, 16, 6144
+MAX_ROWS, ROW_WORDS, PAGE_ROWS, PACKET_BYTES = 64, 30, 16, 6144
 PERIOD, TTL = 0.125, 0.75
 RENDER_DELAY, MAX_BLEND_GAP = 0.15, 0.35
 TELEPORT_DISTANCE = 500.0
@@ -31,7 +31,7 @@ def blend_row(a, b, fraction):
     # IDs include a native allocation generation. Snap recipe, visibility,
     # material and segment-file transitions rather than blending unrelated poses.
     # Offsets within the same file may be animated texture frames.
-    if (a[:4] != b[:4] or a[5:7] != b[5:7] or a[17::2] != b[17::2] or
+    if (a[:4] != b[:4] or a[5:7] != b[5:7] or a[17:29:2] != b[17:29:2] or
             sum((_float(b[i]) - _float(a[i])) ** 2 for i in range(7, 10)) >
             TELEPORT_DISTANCE ** 2):
         return list(b)
@@ -56,9 +56,10 @@ def blend_row(a, b, fraction):
     else:
         out[16] = b[16]
     if a[3]:
-        out[4] = sum(round(((a[4] >> shift) & 255) * (1 - fraction) +
-                           ((b[4] >> shift) & 255) * fraction) << shift
-                     for shift in (0, 8, 16, 24))
+        for color in ((4, 29) if a[3] == 3 else (4,)):
+            out[color] = sum(round(((a[color] >> shift) & 255) * (1 - fraction) +
+                                  ((b[color] >> shift) & 255) * fraction) << shift
+                             for shift in (0, 8, 16, 24))
     return out
 
 
@@ -70,7 +71,7 @@ def rows_valid(rows):
         if (not isinstance(r, list) or len(r) != ROW_WORDS or
                 not all(_u32(x) for x in r) or not r[0] or
                 (r[0]-1) % MAX_ROWS in ids or not 1 <= r[1] <= 130 or r[2] > 38 or
-                r[3] > 2 or r[3] and not r[2] or r[5] > 15 or
+                r[3] > 3 or r[3] and not r[2] or r[3] != 3 and r[29] or r[5] > 15 or
                 r[6] & ~0x3FF01):
             return False
         ids.add((r[0]-1) % MAX_ROWS)

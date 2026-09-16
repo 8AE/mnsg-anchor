@@ -952,11 +952,7 @@ static void reel_end(void)
     }
     s_reel_system = 0;
 }
-#define REEL_HOOK(name, symbol) \
-    RECOMP_HOOK(symbol) void name##_begin(void *task) { reel_begin(task); } \
-    RECOMP_HOOK_RETURN(symbol) void name##_end(void) { reel_end(); }
-REEL_HOOK(anchor_impact_balberra_reel, "func_801FED3C_62A11C")
-#undef REEL_HOOK
+
 static void *s_fist_system;
 static int s_fist_pad;
 static unsigned short s_fist_axes[2];
@@ -1365,3 +1361,39 @@ void anchor_impact_players_reel_begin(void *task) { reel_begin(task); }
 void anchor_impact_players_reel_end(void) { reel_end(); }
 void anchor_impact_players_source_aim_begin(void *attack) { anchor_impact_attack_task_begin(attack); }
 void anchor_impact_players_source_aim_end(void) { task_aim_restore(); }
+
+/* Some boss reactions read the initiator's physical stick rather than aim.
+ * Scope that input to the reader; local cameras keep their real controller. */
+static void *s_source_axes_system;
+static unsigned int s_source_axes_saved[2];
+static int s_source_axes_pad;
+void anchor_impact_players_source_axes_end(void)
+{
+    int i;
+    if (s_source_axes_system && s_source_axes_system == D_8015C5C8_15D1C8)
+        for (i = 0; i < 2; ++i)
+            IP_WRITE_U32(s_source_axes_system,0x3B084+s_source_axes_pad*0x18+i*4,s_source_axes_saved[i]);
+    s_source_axes_system = 0;
+}
+void anchor_impact_players_source_axes_begin(void *attack)
+{
+    ImpactPress *source;
+    int i, j;
+    anchor_impact_players_source_axes_end();
+    if (!attack_context_live() || !anchor_impact_native_is_owner() ||
+        !pointer_valid(D_8015C5C8_15D1C8) || !(source = attack_aim(attack))) return;
+    s_source_axes_pad = (int)IP_READ_U32(D_8020EED0_63A2B0,0x1E4);
+    if (s_source_axes_pad < 0 || s_source_axes_pad > 1) return;
+    s_source_axes_system = D_8015C5C8_15D1C8;
+    for (j = 0; j < 2; ++j) {
+        s_source_axes_saved[j] = IP_READ_U32(s_source_axes_system,0x3B084+s_source_axes_pad*0x18+j*4);
+        IP_WRITE_F32(s_source_axes_system,0x3B084+s_source_axes_pad*0x18+j*4,0);
+    }
+    for (i = 0; i < IP_CURSOR_MAX; ++i) {
+        ImpactControls *c = &s_controls[i];
+        if (c->cid != source->cid || c->session != source->session || c->axis_age > 9) continue;
+        IP_WRITE_F32(s_source_axes_system,0x3B084+s_source_axes_pad*0x18,c->axis_x/80.0f);
+        IP_WRITE_F32(s_source_axes_system,0x3B088+s_source_axes_pad*0x18,c->axis_y/80.0f);
+        break;
+    }
+}

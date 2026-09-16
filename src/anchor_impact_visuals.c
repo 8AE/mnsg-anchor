@@ -25,6 +25,8 @@ extern void *func_8000DBF0_E7F0(void *, unsigned int, unsigned int,
     float, float, float, short, short, short, float, float, float, short, short);
 extern void *func_8000DDF0_E9F0(void *, unsigned int, int, unsigned int, unsigned int, unsigned int);
 extern void *func_8000DF10_EB10(void *, unsigned int, int, unsigned int, unsigned int, unsigned int);
+extern void *func_8000E030_EC30(void *, unsigned int, int, unsigned int, unsigned int, unsigned int,
+                              int, unsigned int, unsigned int, unsigned int);
 extern int func_8003674C_3734C(void *);
 extern int func_80036798_37398(void *);
 #ifndef IV_PTR
@@ -33,7 +35,9 @@ extern int func_80036798_37398(void *);
 #define IV_U8(p,o) (*(unsigned char *)((unsigned char *)(p)+(o)))
 #define IV_U16(p,o) (*(unsigned short *)((unsigned char *)(p)+(o)))
 #define IV_U32(p,o) (*(unsigned int *)((unsigned char *)(p)+(o)))
+#ifndef IV_ADDR
 #define IV_ADDR(p) ((unsigned int)(unsigned long)(p))
+#endif
 
 typedef struct VisualSlot { void *task, *object; } VisualSlot;
 typedef struct HiddenObject {
@@ -162,10 +166,20 @@ static int segment(unsigned int address, unsigned int file, unsigned int *out)
 static int material(void *task, void *object, unsigned int *r)
 {
     unsigned int p = IV_U32(object,0x30), id, offset;
-    r[3] = r[4] = 0;
+    r[3] = r[4] = r[29] = 0;
     id = anchor_impact_visual_material_id(p);
     if (id != 0xFFFFFFFFu) { r[2] = id; return 1; }
     p &= ~0x60000000u;
+    /* Native primitive + environment wrapper, used by Balberra sparks and
+     * D'Etoile glows. The two colors can have different alpha values. */
+    if (p == IV_ADDR((unsigned char *)task+0xC8) && IV_U32(task,0xC8) == 0x06000000u &&
+        IV_U32(task,0xD0) == 0xFA000000u && IV_U32(task,0xD8) == 0xFB000000u &&
+        IV_U32(task,0xE0) == 0xB8000000u && !IV_U32(task,0xE4)) {
+        id = anchor_impact_visual_material_id(IV_U32(task,0xCC));
+        if (!id || id == 0xFFFFFFFFu) return 0;
+        r[2] = id; r[3] = 3; r[4] = IV_U32(task,0xD4); r[29] = IV_U32(task,0xDC);
+        return 1;
+    }
     for (offset = 0xB0; offset <= 0xD0; offset += 0x20) {
         if (p != IV_ADDR((unsigned char *)task+offset) ||
             IV_U32(task,offset) != 0x06000000u ||
@@ -300,7 +314,12 @@ static int render_row(const unsigned int *r)
         (void)func_80036798_37398(object);
     }
     mat = IV_ADDR(anchor_impact_visual_material(r[2]));
-    if (r[3]) {
+    if (r[3] == 3) {
+        unsigned int env = r[29];
+        mat = IV_ADDR(func_8000E030_EC30(slot->task,mat,
+            rgba>>24,(rgba>>16)&255,(rgba>>8)&255,rgba&255,
+            env>>24,(env>>16)&255,(env>>8)&255,env&255));
+    } else if (r[3]) {
         void *wrapper = r[3] == 1
             ? func_8000DDF0_E9F0(slot->task,mat,rgba>>24,(rgba>>16)&255,(rgba>>8)&255,rgba&255)
             : func_8000DF10_EB10(slot->task,mat,rgba>>24,(rgba>>16)&255,(rgba>>8)&255,rgba&255);

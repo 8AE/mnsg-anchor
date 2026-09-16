@@ -59,7 +59,7 @@ int main(void) {
     AnchorImpactNativeSnapshot snapshot, bad;
     unsigned int before, fallback, before_clip;
     setup();
-    assert(ANCHOR_IMPACT_ROOT_WORDS == 197);
+    assert(ANCHOR_IMPACT_ROOT_WORDS == 293);
     assert(anchor_impact_native_capture(&snapshot));
     assert(snapshot.root[IMP_PHASE] == 1 && snapshot.root[IMP_CLIP] == 1);
     assert(snapshot.root[IMP_MECH_MASK] == 1);
@@ -127,20 +127,6 @@ int main(void) {
     setup(); TU16(system_data,0x3ADF4) = 3; TU16(task,0x5C) = 0x78;
     assert(!anchor_impact_native_bind(task,3));
     assert(!anchor_impact_native_capture(&snapshot));
-    /* Legacy auxiliary packing stays pointer-free, but does not enable a
-     * boss without a complete native profile. */
-    s_encounter = 3;
-    capture_aux(snapshot.root);
-    snapshot.root[IMP_AUX_DATA] = 0x50010301;
-    snapshot.root[IMP_AUX_DATA+4] = 0x01010100;
-    TU32(auxiliary,0) = 0x81234560; TU32(auxiliary,0x14) = 0x81234570;
-    apply_aux(snapshot.root);
-    assert(((unsigned char *)auxiliary)[4] == 0x50 && ((unsigned char *)auxiliary)[6] == 3);
-    assert(((unsigned char *)auxiliary)[0x815] == 1);
-    assert(TU32(auxiliary,0) == 0x81234560 && TU32(auxiliary,0x14) == 0x81234570);
-    capture_aux(bad.root);
-    assert(bad.root[IMP_AUX_DATA] == snapshot.root[IMP_AUX_DATA]);
-    bad.root[IMP_AUX_KIND] = 1; assert(!anchor_impact_native_apply(&bad));
     puts("Impact native checkpoint tests passed");
     return 0;
 }

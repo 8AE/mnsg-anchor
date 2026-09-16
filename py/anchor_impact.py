@@ -1,8 +1,8 @@
 """Shared giant-robot Impact-battle snapshot and transient coordinator.
 
 All four Impact bosses share the dedicated file_13 battle-state block.
-Kashiwagi and Taisamba 2 have complete sync profiles; the later bosses remain
-native-only until their graph/lifecycle handling is implemented. The native codec validates the
+Kashiwagi, Taisamba 2, Balberra and D'Etoile have separate native AI profiles.
+The native codec validates the
 meaning of every word, including float bit patterns and the overlay callback.
 Python never accepts arbitrary object fields or pointers.
 """
@@ -18,7 +18,7 @@ from anchor_boss_transport import (
     positive,
 )
 
-VERSION = 7
+VERSION = 8
 # The transport room is the live Impact stage; ordinary roomId is unrelated in
 # title-menu boss rush. Every advertisement and operation also names the boss.
 ROOM = 0x0220
@@ -29,7 +29,7 @@ MAX_STATE_BYTES = 4096
 # Battle boss HP at +0x60, player/mech Ryo ammo at +0x64, mech HP at +0x68,
 # combat pause at +0x2C0, per-encounter clock at +0x2C8, plus the root model
 # transform/animation mirrored for visible alignment.
-ROOT_WORDS = 197
+ROOT_WORDS = 293
 DAMAGE_AMOUNTS = tuple(range(1, 256))
 
 IMPACT_ENCOUNTER_MIN = 1
@@ -50,8 +50,8 @@ def _impact_stage(stage):
 
 
 def sync_supported(stage, boss):
-    """Native stage recognition is broader than completed sync support."""
-    return (_impact_stage(stage) and type(boss) is int and boss in (1, 2) and
+    """Match story battle stages or the exact boss-rush stage/selector pair."""
+    return (_impact_stage(stage) and type(boss) is int and boss in (1, 2, 3, 4) and
             (not IMPACT_BOSS_RUSH_STAGE <= stage <= IMPACT_BOSS_RUSH_LAST or
              boss == stage - IMPACT_BOSS_RUSH_STAGE + 1))
 
