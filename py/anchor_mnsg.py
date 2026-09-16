@@ -86,6 +86,7 @@ import anchor_tsurami
 import anchor_impact
 import anchor_impact_visual
 import anchor_impact_sound
+import anchor_world
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -174,6 +175,7 @@ _impact = anchor_impact.ImpactTransport()
 _impact_players = anchor_impact.ImpactPlayerTransport()
 _impact_visuals = anchor_impact_visual.ImpactVisualTransport()
 _impact_sounds = anchor_impact_sound.ImpactSoundTransport()
+_world = anchor_world.WorldTransport()
 _impact_debug_str: str = ""
 
 ###############################################################################
@@ -212,6 +214,7 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     anchor_dharumanyo.PACKET_TYPE: 8 * 1024,
     anchor_tsurami.PACKET_TYPE: 8 * 1024,
     anchor_impact.PACKET_TYPE: 8 * 1024,
+    anchor_world.PACKET_TYPE: anchor_world.PACKET_BYTES,
     anchor_impact.PLAYER_PACKET_TYPE: anchor_impact.PLAYER_PACKET_BYTES,
     anchor_impact_visual.PACKET_TYPE: anchor_impact_visual.PACKET_BYTES,
     anchor_impact_sound.PACKET_TYPE: anchor_impact_sound.PACKET_BYTES,
@@ -595,6 +598,11 @@ def _merge_client_state(
     # A confirmed visit ends at the metadata edge, even if the sender returns
     # before the game's next invitation poll. Unconfirmed entries retain their
     # grace period because room/session metadata may follow the arena event.
+    if anchor_world.METADATA_KEY in payload:
+        value = anchor_world.merge_metadata(state.get(anchor_world.METADATA_KEY),
+            payload[anchor_world.METADATA_KEY], state.get("interactionSession"))
+        if value:
+            state[anchor_world.METADATA_KEY] = value
     if anchor_congo.METADATA_KEY in payload:
         value = anchor_congo.merge_metadata(
             state.get(anchor_congo.METADATA_KEY),
@@ -740,6 +748,10 @@ def _replace_all_client_states(states: list) -> None:
             if (impact and
                     impact[5] not in _retired_interaction_sessions.get(cid, ())):
                 merged[anchor_impact.METADATA_KEY] = impact
+            world = anchor_world.merge_metadata(previous.get(anchor_world.METADATA_KEY),
+                client_state.get(anchor_world.METADATA_KEY), merged.get("interactionSession"))
+            if world:
+                merged[anchor_world.METADATA_KEY] = world
             new_players[cid] = merged
         for cid, previous in previous_players.items():
             replacement = new_players.get(cid, {})
@@ -1051,6 +1063,11 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_boss_arena(packet)
                     continue
 
+                if ptype == anchor_world.PACKET_TYPE:
+                    with _player_states_lock:
+                        _world.receive(_boss_context(), packet, time.monotonic())
+                    continue
+
                 if ptype == anchor_congo.PACKET_TYPE:
                     with _player_states_lock:
                         _congo.receive(_boss_context(), packet, time.monotonic())
@@ -1193,6 +1210,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _impact_players.reset()
         _impact_visuals.reset()
         _impact_sounds.reset()
+        _world.reset()
 
 
 ###############################################################################
@@ -2058,6 +2076,7 @@ def update_client_state(state_json: str) -> bool:
         )
         state[anchor_tsurami.METADATA_KEY] = _tsurami.advertisement(context)
         state[anchor_impact.METADATA_KEY] = _impact.advertisement(context)
+        state[anchor_world.METADATA_KEY] = _world.advertisement(context)
 
     sent = _send_raw({
         "type": "UPDATE_CLIENT_STATE",
@@ -3755,3 +3774,30 @@ def _decode_png_rgba(png: bytes) -> bytes:
 
     import struct as _struct
     return _struct.pack(">II", width, height) + bytes(rgba)
+
+
+def update_world(room: int, signature: int, visit: int, state_json: str) -> str:
+    """One bounded native checkpoint exchange, coalesced off the event FIFO."""
+    supplied = {}
+    if isinstance(state_json, str) and len(state_json.encode()) <= anchor_world.STATE_BYTES:
+        try:
+            supplied = json.loads(state_json)
+        except (ValueError, RecursionError):
+            pass
+    if not isinstance(supplied, dict):
+        supplied = {}
+    now = time.monotonic()
+    with _player_states_lock:
+        result, packets = _world.update(_boss_context(), room, signature, visit,
+            supplied.get('a', []), supplied.get('d', '00' * 32), now)
+        dirty = _world.dirty
+    if dirty and _connected:
+        if update_client_state('{}'):
+            with _player_states_lock:
+                _world.dirty = False
+    success = True
+    for packet in packets:
+        success = _send_raw(packet) and success
+    with _player_states_lock:
+        _world.sent(packets, success, now)
+    return json.dumps(result, separators=(',', ':'))

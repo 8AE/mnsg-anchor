@@ -21,6 +21,7 @@
 #include "anchor.h"
 #include "anchor_player_models.h"
 #include "enemy_sync.h"
+#include "anchor_world.h"
 #include "utils/json_utils.h"
 #include "utils/string_utils.h"
 
@@ -1225,6 +1226,7 @@ static void record_roster_source(EnemyActorInstance *source,
         resolve_definition(source->definition, file_id);
     unsigned short entity_id = definition ? definition->actor_id : 0;
 
+    anchor_world_roster_add(index, source, definition);
     s_source_instances[index] = source;
     *hash = signature_mix(*hash, (unsigned short)index);
     *hash = signature_mix(*hash, entity_id);
@@ -1263,6 +1265,7 @@ static void build_room_roster(void)
     }
     clear_room_state();
     s_room = D_800C7AB2;
+    anchor_world_roster_begin(s_room);
     if ((unsigned int)s_room >= ENEMY_ROOM_METADATA_COUNT)
         goto invalid_roster;
     metadata = D_80231300_5EC7D0[s_room];
@@ -1413,6 +1416,7 @@ static void build_room_roster(void)
         ++total_count;
     }
 
+    anchor_world_roster_end(total_count);
     if (enemy_count == 0)
         goto invalid_roster;
 

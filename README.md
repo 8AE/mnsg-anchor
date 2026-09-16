@@ -23,6 +23,8 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 * **Tsurami reward progression** — Miracle Star ownership and the following story completion are shared durably. Each active local reward controller finishes its native actor cleanup, control release and exit sequence. Reflecting Tsurami's projectiles also updates the shared fight; see [Tsurami and Miracle Star](docs/tsurami-sync.md).
 * **Regular enemy sync** — ordinary combat enemies in a shared room are simulated by one elected room authority. All players see and fight the same enemy through a shared health pool and streamed transforms/animation, the enemy turns toward one of the players it sees, and an enemy killed by anyone disappears for everyone. Enemy defeat state persists while the room stays occupied and respawns once everyone leaves. See [enemy synchronization](docs/enemy-sync.md).
 
+* **Shared room NPCs and objects** — placed NPC movement/animation, the moving-platform family, ordinary pickup removal, breakable-container removal and timed emitter cycles now have room-scoped synchronization. See [world-object coverage, limits and validation](docs/world-sync.md); fresh two-client gameplay verification is still required.
+
 ### What is synced
 
 #### Items & equipment

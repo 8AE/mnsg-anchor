@@ -70,6 +70,7 @@ data_reference_syms_files = ["Goemon64RecompSyms/mnsg.datasyms.toml"]
 # It is embedded in the .nrm and importable thanks to REPY_PREINIT_ADD_NRM_TO_ALL_INTERPRETERS.
 additional_files = [
     "py/anchor_mnsg.py",
+    "py/anchor_world.py",
     "py/anchor_boss_transport.py",
     "py/anchor_congo.py",
     "py/anchor_dharumanyo.py",

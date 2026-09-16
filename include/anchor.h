@@ -198,6 +198,10 @@ extern "C"
     */
    unsigned int anchor_get_enemy_authority(void);
 
+   /* Bounded occupied-room NPC/platform snapshot; caller frees result. */
+   char *anchor_update_world(unsigned int room, unsigned int signature,
+                             unsigned int visit, const char *state);
+
    /**
     * @brief Publish the exact gameplay location used by the native Japan map.
     *

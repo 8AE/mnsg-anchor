@@ -1052,3 +1052,19 @@ char *anchor_get_clipboard_text(void)
     REPY_FN_CLEANUP;
     return result;
 }
+
+char *anchor_update_world(unsigned int room, unsigned int signature,
+                          unsigned int visit, const char *state)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_U32("room", room);
+    REPY_FN_SET_U32("signature", signature);
+    REPY_FN_SET_U32("visit", visit);
+    REPY_FN_SET_STR("state", state ? state : "{}");
+    REPY_FN_EXEC_CACHE(anchor_world_update_code,
+        "import anchor_mnsg\n"
+        "result = anchor_mnsg.update_world(room, signature, visit, state)\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
