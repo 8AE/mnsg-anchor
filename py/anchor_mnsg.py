@@ -83,6 +83,9 @@ from collections import deque
 import anchor_congo
 import anchor_dharumanyo
 import anchor_tsurami
+import anchor_impact
+import anchor_impact_visual
+import anchor_impact_sound
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -167,6 +170,11 @@ _arena_confirmed_sessions: "dict[int, int]" = {}
 _congo = anchor_congo.CongoTransport()
 _dharumanyo = anchor_dharumanyo.DharumanyoTransport()
 _tsurami = anchor_tsurami.TsuramiTransport()
+_impact = anchor_impact.ImpactTransport()
+_impact_players = anchor_impact.ImpactPlayerTransport()
+_impact_visuals = anchor_impact_visual.ImpactVisualTransport()
+_impact_sounds = anchor_impact_sound.ImpactSoundTransport()
+_impact_debug_str: str = ""
 
 ###############################################################################
 # Constants
@@ -203,6 +211,10 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     anchor_congo.PACKET_TYPE: 8 * 1024,
     anchor_dharumanyo.PACKET_TYPE: 8 * 1024,
     anchor_tsurami.PACKET_TYPE: 8 * 1024,
+    anchor_impact.PACKET_TYPE: 8 * 1024,
+    anchor_impact.PLAYER_PACKET_TYPE: anchor_impact.PLAYER_PACKET_BYTES,
+    anchor_impact_visual.PACKET_TYPE: anchor_impact_visual.PACKET_BYTES,
+    anchor_impact_sound.PACKET_TYPE: anchor_impact_sound.PACKET_BYTES,
 }
 PLAYER_HIT_MAX_AGE_MS: int = 500
 PLAYER_SOUND_MAX_AGE_MS: int = 500
@@ -234,7 +246,8 @@ IMPACT_ARENA_FIRST: int = KASHIWAGI_ARENA
 IMPACT_ARENA_LAST: int = DETOILE_ARENA
 # Intro cutscene stages 0x239..0x23C, one per boss (0x239 = Kashiwagi).
 # Minigames 0x21C..0x21F and boss stages 0x220..0x223 follow the same order.
-# (Stage 0x0224 is an unused fifth slot; the boss rush mode uses stage 0x0260.)
+# Stage 0x0224 is an unused fifth slot. Boss rush uses 0x0260..0x0263;
+# those battle scopes are separate from the story invitation stages below.
 IMPACT_STAGE_FIRST: int = 0x21C
 IMPACT_STAGE_LAST: int = 0x223
 IMPACT_INTRO_FIRST: int = 0x239
@@ -606,6 +619,14 @@ def _merge_client_state(
         )
         if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
             state[anchor_tsurami.METADATA_KEY] = value
+    if anchor_impact.METADATA_KEY in payload:
+        value = anchor_impact.merge_metadata(
+            state.get(anchor_impact.METADATA_KEY),
+            payload[anchor_impact.METADATA_KEY],
+            state.get("interactionSession"),
+        )
+        if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
+            state[anchor_impact.METADATA_KEY] = value
     now_ms = int(time.monotonic() * 1000)
     if enforce_movement_order:
         # Sender monotonic timestamps are useful only for packet ordering; they
@@ -616,6 +637,8 @@ def _merge_client_state(
     _congo.observe(context)
     _dharumanyo.observe(context)
     _tsurami.observe(context)
+    _impact.observe(context)
+    _impact_players.observe(context)
     _invalidate_confirmed_boss_invitation(cid)
     _prune_projectile_spawns(now_ms)
     return True
@@ -709,6 +732,14 @@ def _replace_all_client_states(states: list) -> None:
             if (tsurami and
                     tsurami[5] not in _retired_interaction_sessions.get(cid, ())):
                 merged[anchor_tsurami.METADATA_KEY] = tsurami
+            impact = anchor_impact.merge_metadata(
+                previous.get(anchor_impact.METADATA_KEY),
+                client_state.get(anchor_impact.METADATA_KEY),
+                merged.get("interactionSession"),
+            )
+            if (impact and
+                    impact[5] not in _retired_interaction_sessions.get(cid, ())):
+                merged[anchor_impact.METADATA_KEY] = impact
             new_players[cid] = merged
         for cid, previous in previous_players.items():
             replacement = new_players.get(cid, {})
@@ -724,6 +755,8 @@ def _replace_all_client_states(states: list) -> None:
         _congo.observe(context)
         _dharumanyo.observe(context)
         _tsurami.observe(context)
+        _impact.observe(context)
+        _impact_players.observe(context)
         for cid in list(_arena_events):
             _invalidate_confirmed_boss_invitation(cid)
         now_ms = int(time.monotonic() * 1000)
@@ -1037,6 +1070,27 @@ def _recv_loop(sock: socket.socket) -> None:
                         )
                     continue
 
+                if ptype == anchor_impact.PACKET_TYPE:
+                    with _player_states_lock:
+                        _impact.receive(_boss_context(), packet, time.monotonic())
+                    continue
+
+                if ptype == anchor_impact_sound.PACKET_TYPE:
+                    with _player_states_lock:
+                        _impact_sounds.receive(_boss_context(), _impact, packet, time.monotonic())
+                    continue
+
+                if ptype == anchor_impact_visual.PACKET_TYPE:
+                    with _player_states_lock:
+                        _impact_visuals.receive(_boss_context(), _impact, packet, time.monotonic())
+                    continue
+
+                if ptype == anchor_impact.PLAYER_PACKET_TYPE:
+                    with _player_states_lock:
+                        _impact_players.receive(
+                            _boss_context(), packet, time.monotonic())
+                    continue
+
                 if ptype == "MNSG_PROJECTILES":
                     # Retired continuous-visual protocol: never replay these
                     # old packets through the durable item/event queue.
@@ -1135,6 +1189,10 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _congo.reset()
         _dharumanyo.reset()
         _tsurami.reset()
+        _impact.reset()
+        _impact_players.reset()
+        _impact_visuals.reset()
+        _impact_sounds.reset()
 
 
 ###############################################################################
@@ -1224,6 +1282,10 @@ def connect(
         _congo.reset()
         _dharumanyo.reset()
         _tsurami.reset()
+        _impact.reset()
+        _impact_players.reset()
+        _impact_visuals.reset()
+        _impact_sounds.reset()
 
     # Drain stale queued messages.
     while not _recv_queue.empty():
@@ -1274,6 +1336,7 @@ def connect(
             anchor_tsurami.METADATA_KEY: _tsurami.advertisement(
                 _boss_context()
             ),
+            anchor_impact.METADATA_KEY: _impact.advertisement(_boss_context()),
         },
         "roomState": {},
     }
@@ -1994,6 +2057,7 @@ def update_client_state(state_json: str) -> bool:
             _dharumanyo.advertisement(context)
         )
         state[anchor_tsurami.METADATA_KEY] = _tsurami.advertisement(context)
+        state[anchor_impact.METADATA_KEY] = _impact.advertisement(context)
 
     sent = _send_raw({
         "type": "UPDATE_CLIENT_STATE",
@@ -2212,6 +2276,141 @@ def send_tsurami_hit(sequence: int, amount: int, target: int = 0) -> bool:
         return _tsurami.send_hit(
             _boss_context(), sequence, amount, time.monotonic(), target
         )
+
+
+def update_impact(ready: int, stage: int, encounter: int, visit: int,
+                  paused: int, state_json: str = "") -> str:
+    """Publish previous-frame Impact battle state and return hit work.
+
+    The transport room tracks the live Impact stage so peers on a different
+    giant-robot encounter never exchange checkpoints. The Impact battle has no
+    save dependency, so it is reported as loaded even from the title-menu boss
+    rush.
+    """
+    ready = bool(ready and anchor_impact.sync_supported(stage, encounter))
+    if type(visit) is not int or visit <= 0:
+        # Native Impact binding supplies its own visit in title-menu boss rush.
+        # Inventing one here could revive packets from a previous battle.
+        ready, visit = 0, 0
+    supplied = None
+    if (isinstance(state_json, str) and
+            len(state_json.encode("utf-8")) <= anchor_impact.MAX_STATE_BYTES):
+        try:
+            supplied = json.loads(state_json) if state_json else None
+        except (ValueError, RecursionError):
+            pass
+    with _player_states_lock:
+        if not ready or (stage, encounter, visit) != (
+                _impact.room, _impact.encounter, _impact.local[1]):
+            # Retire every channel at the root boundary. Native inactive
+            # frames do not call the player bridge, so waiting for its next
+            # tick would leave old cursor/input packets eligible for receipt.
+            _impact_players.reset()
+            _impact_visuals.reset()
+            _impact_sounds.reset()
+        _impact.set_encounter(stage, encounter)
+        context = _boss_context()
+        context["loaded"] = True
+        status, packets = _impact.update(
+            context, ready, visit, paused, supplied, time.monotonic()
+        )
+        dirty = _impact.advertisement_dirty
+        _impact.advertisement_dirty = False
+    if dirty and _connected:
+        if not update_client_state("{}"):
+            with _player_states_lock:
+                _impact.advertisement_dirty = True
+    for packet in packets:
+        sent = _send_raw(packet)
+        with _player_states_lock:
+            _impact.packet_send_result(packet, sent)
+    global _impact_debug_str
+    _impact_debug_str = json.dumps({
+        "cid": context.get("cid", 0),
+        "conn": int(bool(context.get("connected"))),
+        "loaded": int(bool(context.get("loaded"))),
+        "room": context.get("room", -1),
+        "selfRoom": _impact.room,
+        "visit": visit,
+        "ready": int(bool(ready)),
+        "role": status.get("role", -1),
+        "e": status.get("encounter", []),
+    }, separators=(",", ":"))
+    return json.dumps(status, separators=(",", ":"), allow_nan=False)
+
+
+def update_impact_players(ready: int, stage: int, encounter: int, visit: int,
+                          sample_json: str = "") -> str:
+    """Exchange native cursor poses, visual Ryo shots and shared mech input.
+
+    Input c is [visible, position XYZ float bits, rotation XYZ u16]. Event
+    kind 1 carries six position/velocity float words; kind 2 carries held,
+    pressed, cursor RX/RY, intended owner and authority term. Kind 3 carries
+    guided-fist analog axes. The owner alone
+    executes kind 2 through the native interpreter. Received kind 1 objects
+    have no gameplay collision. Both channels are transient and encounter-
+    scoped. Call after update_impact so owner/term and visit are current.
+    """
+    supplied = None
+    if (isinstance(sample_json, str) and
+            len(sample_json.encode("utf-8")) <= 4096):
+        try:
+            supplied = json.loads(sample_json) if sample_json else None
+        except (ValueError, RecursionError):
+            pass
+    with _player_states_lock:
+        context = _boss_context()
+        status, packets = _impact_players.update(
+            context, ready, stage, encounter, visit, supplied, time.monotonic())
+    for packet in packets:
+        sent = _send_raw(packet)
+        with _player_states_lock:
+            _impact_players.packet_send_result(packet, sent)
+    return json.dumps(status, separators=(",", ":"), allow_nan=False)
+
+
+def update_impact_visuals(ready: int, stage: int, encounter: int, visit: int,
+                          sample_json: str = "") -> str:
+    supplied = None
+    if isinstance(sample_json, str) and len(sample_json.encode()) < 22000:
+        try:
+            supplied = json.loads(sample_json)
+        except (ValueError, RecursionError):
+            pass
+    with _player_states_lock:
+        status, packets = _impact_visuals.update(
+            _boss_context(), _impact, ready, stage, encounter, visit, supplied, time.monotonic())
+    for packet in packets:
+        if not _send_raw(packet):
+            break  # Never queue partial or obsolete render frames.
+    return json.dumps(status, separators=(",", ":"), allow_nan=False)
+
+
+def update_impact_sounds(ready: int, stage: int, encounter: int, visit: int,
+                         sample: str = "") -> str:
+    with _player_states_lock:
+        status, packets = _impact_sounds.update(
+            _boss_context(), _impact, ready, stage, encounter, visit, sample, time.monotonic())
+    for packet in packets:
+        _send_raw(packet)  # Transient sounds are never retried; loop state refreshes.
+    return status
+
+
+def send_impact_hit(sequence: int, amount: int) -> bool:
+    """Queue one physical Impact hit; retries keep its identity until acked."""
+    with _player_states_lock:
+        return _impact.send_hit(
+            _boss_context(), sequence, amount, time.monotonic()
+        )
+
+
+def impact_debug() -> str:
+    """Last Impact readiness snapshot, for bridging into the native log.
+
+    Returned as a ready-to-print line (no printf ``%`` escapes) because the
+    native side forwards it verbatim.
+    """
+    return "[Impact] dbg " + (_impact_debug_str or "{}") + "\n"
 
 
 def _reset_boss_invitations() -> None:

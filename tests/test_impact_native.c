@@ -1,0 +1,145 @@
+#include <stdio.h>
+#include "impact_test_pointers.h"
+#define ANCHOR_IMPACT_NATIVE_HOST_TEST
+#define ANCHOR_IMPACT_READ_PTR(p, o) TP(p, o)
+#define ANCHOR_IMPACT_AI(p) TU32(p, 0x0C)
+#define ANCHOR_IMPACT_SET_AI(p, v) (TU32(p, 0x0C) = (v))
+#include "../src/anchor_impact_native.c"
+
+static unsigned char state[0x300], system_data[0x40000];
+static unsigned int task[0x100], object[0x80], hand[0x80];
+static unsigned int auxiliary[0x820/4];
+unsigned short D_800C7AB2 = 0x260;
+unsigned char *D_8015C5C8_15D1C8 = system_data;
+void *D_8020EED0_63A2B0 = state, *D_8016DAB4_16E6B4;
+void *D_8020EF30_63A310 = auxiliary, *D_8020EF40_63A320 = auxiliary;
+static unsigned int visit, clip_calls;
+static unsigned int clip_words[] = {0x18001234, 0x140004B0};
+unsigned int anchor_boss_invite_world_visit(void) { return visit; }
+void anchor_impact_catalog_init(void) {}
+unsigned int anchor_impact_phase_id(unsigned int e, unsigned int c) {
+    return e == 1 && (c & ~0x00800000u) == 0x801E493Cu ? 1 : 0;
+}
+unsigned int anchor_impact_phase_callback(unsigned int e, unsigned int p) {
+    return e == 1 && p == 1 ? 0x801E493Cu : 0;
+}
+unsigned int anchor_impact_clip_id(unsigned int e, unsigned int m, unsigned int f) {
+    return e == 1 && m == clip_words[0] && f == 0x4B0 ? 1 : 0;
+}
+const void *anchor_impact_clip_data(unsigned int e, unsigned int c) {
+    return e == 1 && c == 1 ? clip_words : 0;
+}
+unsigned int anchor_impact_private_offset(unsigned int i) { return 0x70 + i * 4; }
+int anchor_impact_private_used(unsigned int e, unsigned int i) { return e == 1 && i < 3; }
+void func_801D2EE4_5FE2C4(void *o, const void *c) {
+    const unsigned int *r = c;
+    ++clip_calls; TU32(o, 0x2C) = r[0]; TU16(o, 0x34) = (unsigned short)r[1];
+    TF32(o, 0x28) = 0;
+}
+static void setup(void) {
+    unsigned int i;
+    memset(state, 0, sizeof(state)); memset(task, 0, sizeof(task));
+    memset(object, 0, sizeof(object)); memset(hand, 0, sizeof(hand));
+    memset(test_ptrs, 0, sizeof(test_ptrs)); test_ptr_count = 0;
+    TU16(system_data, 0x3ADF4) = 1; D_800C7AB2 = 0x260;
+    TP(state, 0x1D8) = task; TP(task, 0x18) = object; TP(state, 0x1C) = hand;
+    TU16(task, 0x5C) = 0x50; TU32(task, 0x0C) = 0x801E493C;
+    TU32(state, 0x60) = 2000; TU32(state, 0x64) = 100; TU32(state, 0x68) = 999;
+    TU32(object, 0x2C) = clip_words[0]; TU16(object, 0x34) = 0x4B0;
+    ((unsigned char *)object)[5] = 2;
+    for (i = 0; i < 3; ++i) TF32(object, 0x1C + 4*i) = TF32(hand, 0x1C + 4*i) = 1;
+    TF32(object, 0x08) = 50; TF32(object, 0x28) = 12;
+    TF32(task, 0x70) = 3; TF32(hand, 0x08) = 24;
+    TF32(state, 0xA0) = 12; TU16(state, 0xBA) = 40;
+    clip_calls = 0; visit = 0;
+    assert(anchor_impact_native_bind(task, 1));
+    anchor_impact_native_set_role(1, 0, 0);
+}
+int main(void) {
+    AnchorImpactNativeSnapshot snapshot, bad;
+    unsigned int before, fallback, before_clip;
+    setup();
+    assert(ANCHOR_IMPACT_ROOT_WORDS == 293);
+    assert(anchor_impact_native_capture(&snapshot));
+    assert(snapshot.root[IMP_PHASE] == 1 && snapshot.root[IMP_CLIP] == 1);
+    assert(snapshot.root[IMP_MECH_MASK] == 1);
+    fallback = anchor_impact_native_visit(); assert(fallback > 0);
+    visit = 17; assert(anchor_impact_native_visit() == 17);
+    /* Validate before queueing, including encounter, callback and float bits. */
+    bad = snapshot; bad.root[IMP_PHASE] = 99;
+    assert(!anchor_impact_native_apply(&bad));
+    bad = snapshot; bad.root[IMP_MECH_POSES] = 0x7FC00000;
+    assert(!anchor_impact_native_apply(&bad));
+    bad = snapshot; bad.encounter = 2;
+    assert(!anchor_impact_native_apply(&bad));
+    assert(!s_pending_valid);
+    /* Phase, animation and private motion land together before native AI. */
+    snapshot.root[IMP_BOSS_HP] = 1800;
+    TU32(task, 0x0C) = 0x801E4B38; TF32(task, 0x70) = 123;
+    TF32(object, 0x28) = 99; TF32(object, 0x08) = -99;
+    assert(anchor_impact_native_apply(&snapshot));
+    assert(TU32(state, 0x60) == 2000);
+    anchor_impact_native_scheduler_begin();
+    assert(TU32(state, 0x60) == 1800 && TU32(task, 0x0C) == 0x801E493C);
+    assert(TF32(task, 0x70) == 3 && TF32(object, 0x28) == 12);
+    assert(TF32(object, 0x08) == 50 && clip_calls == 1);
+    /* Shared hands survive the update, but local aim/camera/FOV stay local. */
+    TF32(hand, 0x08) = 0;
+    for (before = 0; before < 6; ++before) TF32(state, 0xA0 + before*4) = 100 + before;
+    TF32(state, 4) = -50; TF32(state, 8) = 15; TU16(state, 0xBA) = 1234;
+    anchor_impact_native_scheduler_end();
+    assert(TF32(hand, 0x08) == 24);
+    for (before = 0; before < 6; ++before) assert(TF32(state, 0xA0 + before*4) == 100 + before);
+    assert(TF32(state, 4) == -50 && TF32(state, 8) == 15 && TU16(state, 0xBA) == 1234);
+    /* A new shared hand pose settles in three render ticks. The native pose
+     * is restored before the next simulation, so smoothing cannot affect hits. */
+    snapshot.root[IMP_MECH_POSES] = impact_pose_bits(36);
+    assert(anchor_impact_native_apply(&snapshot)); anchor_impact_native_scheduler_begin();
+    assert(TF32(hand, 0x08) == 0);
+    TF32(hand, 0x08) = 7;
+    anchor_impact_native_scheduler_end(); assert(TF32(hand, 0x08) == 28);
+    assert(anchor_impact_native_capture(&bad));
+    assert(impact_pose_float(bad.root[IMP_MECH_POSES]) == 7);
+    anchor_impact_native_scheduler_begin(); assert(TF32(hand, 0x08) == 7);
+    anchor_impact_native_scheduler_end(); assert(TF32(hand, 0x08) == 32);
+    anchor_impact_native_scheduler_begin();
+    anchor_impact_native_scheduler_end(); assert(TF32(hand, 0x08) == 36);
+    anchor_impact_native_set_role(1, 1, 0);
+    assert(TF32(hand, 0x08) == 7 && !s_mech_view[0].smooth.valid);
+    TF32(hand, 0x08) = 5;
+    anchor_impact_native_scheduler_end(); assert(TF32(hand, 0x08) == 5);
+    /* Do not jump out of a native intro before its graph has been created. */
+    state[0x2C0] = 1; before = TU32(task, 0x0C); before_clip = clip_calls; snapshot.root[IMP_BOSS_HP] = 1700;
+    assert(anchor_impact_native_apply(&snapshot)); anchor_impact_native_scheduler_begin();
+    assert(TU32(state, 0x60) == 1700 && TU32(task, 0x0C) == before && clip_calls == before_clip);
+    /* A replaced root cannot receive a queued checkpoint or cached view. */
+    TP(state, 0x1D8) = hand; assert(!anchor_impact_native_root_live());
+    assert(!anchor_impact_native_apply(&snapshot));
+    anchor_impact_native_reset(); assert(!s_view_valid && !s_pending_valid);
+    /* Story stages can change while keeping the selector/root alive too. */
+    setup(); D_800C7AB2 = 0x220;
+    assert(anchor_impact_native_capture(&snapshot));
+    snapshot.root[IMP_BOSS_HP] = 0;
+    assert(anchor_impact_native_apply(&snapshot));
+    D_800C7AB2 = 0x21C;
+    anchor_impact_native_scheduler_begin();
+    assert(TU32(state,0x60) == 2000 && !s_pending_valid);
+    setup(); TU16(system_data,0x3ADF4) = 3; TU16(task,0x5C) = 0x78;
+    assert(!anchor_impact_native_bind(task,3));
+    assert(!anchor_impact_native_capture(&snapshot));
+    puts("Impact native checkpoint tests passed");
+    return 0;
+}
+
+void anchor_impact_visuals_begin_frame(void) {}
+void anchor_impact_visuals_render(void) {}
+
+void anchor_impact_boss_capture(unsigned int e, void *s, void *t, unsigned int *r) {(void)e;(void)s;(void)t;(void)r;}
+int anchor_impact_boss_validate(unsigned int e, const unsigned int *r) {return r[IMP_AUX_KIND] != 1 || e == 2;}
+void anchor_impact_boss_apply(unsigned int e, void *s, void *t, const unsigned int *r) {(void)e;(void)s;(void)t;(void)r;}
+void anchor_impact_boss_apply_lifecycle(unsigned int e, void *s, const unsigned int *r) {(void)e;(void)s;(void)r;}
+
+const AnchorImpactBossProfile *anchor_impact_boss_profile(unsigned int e) {
+    static const AnchorImpactBossProfile profiles[] = {{.task_id=0x50},{.task_id=0x5A}};
+    return e >= 1 && e <= 2 ? &profiles[e-1] : 0;
+}

@@ -1,0 +1,66 @@
+{
+  "date": "2026-09-12",
+  "branch": "impact_syncing",
+  "protocol": 3,
+  "checkpoint_words": 172,
+  "python": {
+    "run": 259,
+    "skipped": 1,
+    "result": "pass"
+  },
+  "focused_impact_python": 29,
+  "native_regressions": {
+    "undefined_behavior_sanitizer": "pass",
+    "groups": [
+      "checkpoint codec",
+      "native checkpoint and auxiliary fields",
+      "damage and native returns",
+      "native cursor and shared controls",
+      "native render, cache lifetime, bounds and overflow"
+    ]
+  },
+  "local_anchor": {
+    "revision": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "listener": "127.0.0.1:43393",
+    "clients": 3,
+    "render_objects": 64,
+    "render_pages": 4,
+    "render_bytes": 6759,
+    "sender_exclusion": "pass",
+    "team_isolation": "pass",
+    "cursor_controls": "pass",
+    "server_stopped": true
+  },
+  "packages": [
+    {
+      "file": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 454460,
+      "sha256": "7c86639c9d0fbf0b195962d841fa5d320876cc1b1665a966e3aa9de5e76c8584",
+      "integrity": "pass",
+      "isolated_import": "pass"
+    },
+    {
+      "file": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 454646,
+      "sha256": "c57e693e2ee505e647462f2075a0940b393228ff0bc62a91f61d32a5b3d1b34b",
+      "integrity": "pass",
+      "isolated_import": "pass"
+    }
+  ],
+  "documentation": {
+    "local_build": "pass",
+    "tests": 29,
+    "site_validation_errors": 0,
+    "published": false
+  },
+  "live_game": {
+    "two_client_battle": "not run",
+    "block": "Computer Use was not approved to use Goemon64Recompiled",
+    "normal_profile_modified": false
+  },
+  "limitations": [
+    "All four bosses, sound, late entry and defeat transitions lack fresh live verification.",
+    "Host migration does not reconstruct all native child collision/AI state.",
+    "Unsupported render objects remain local; overflow falls back to native presentation."
+  ]
+}

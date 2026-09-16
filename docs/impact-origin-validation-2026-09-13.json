@@ -1,0 +1,83 @@
+{
+  "date": "2026-09-13",
+  "branch": "impact_syncing",
+  "protocol": 6,
+  "packages": [
+    {
+      "path": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 470897,
+      "sha256": "40d3c822629bd4acffa99dda78d433e1ea76da9a881f1d6de92c6d03a1b70f63",
+      "zip_valid": true,
+      "native_binary_bytes": 490784
+    },
+    {
+      "path": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 470916,
+      "sha256": "3a4018d6ba2f7000daed851f888f7db5ed4f06a02574c90b9fc5bd1fb33a946a",
+      "zip_valid": true,
+      "native_binary_bytes": 491008
+    }
+  ],
+  "checks": {
+    "ubsan_native_fixture_groups": 6,
+    "dispatcher_actions": [
+      10,
+      11,
+      12,
+      13,
+      20,
+      21,
+      30,
+      31,
+      32,
+      40,
+      41,
+      50,
+      51,
+      60,
+      70,
+      71,
+      100
+    ],
+    "focused_python_passed": 41,
+    "full_python": {
+      "run": 271,
+      "passed": 270,
+      "skipped": 1
+    },
+    "frame_order_negative_controls": [
+      {
+        "mutation": "early-render",
+        "returncode": -6,
+        "failure": "Assertion failed: (object && !(IV_U8(object,0x64)&1)), function frame_draw, file test_impact_visuals_native.c, line 115."
+      },
+      {
+        "mutation": "late-render",
+        "returncode": -6,
+        "failure": "Assertion failed: (bucket_count[frame.rows[i][5]] > 0), function frame_draw, file test_impact_visuals_native.c, line 116."
+      }
+    ],
+    "compiled_hooks": [
+      ".recomp_hook.func_8000AA00_B600",
+      ".recomp_hook.func_8001481C_1541C",
+      ".recomp_hook.func_80034A10_35610",
+      ".recomp_hook.func_80034B58_35758",
+      ".recomp_hook_return.func_80034B58_35758",
+      ".recomp_hook.func_801D7BC8_602FA8",
+      ".recomp_hook_return.func_801D7BC8_602FA8",
+      ".recomp_hook.func_801D8184_603564",
+      ".recomp_hook_return.func_801D8184_603564",
+      ".recomp_hook.func_80034734_35334",
+      ".recomp_hook_return.func_80034734_35334"
+    ],
+    "release_debug_builds": "passed",
+    "build_warning": "Existing unused notif_ensure_init",
+    "packet_static_audit": "completed; no wire-format, routing or cadence changes",
+    "native_docs": "local source updates, generation, build, tests and browser checks passed"
+  },
+  "runtime": {
+    "fresh_two_client_fight": false,
+    "reason": "No permitted game-UI session. Host fixtures do not execute the full game or GPU renderer.",
+    "loopback": "Previous protocol-6 localhost result remains historical; not rerun for this native-only change."
+  }
+}

@@ -1,0 +1,1399 @@
+/* Retained render-only children for the shared Impact battles.
+ *
+ * This module owns two presentation pools: one stock reticle per remote
+ * participant and one collision-free visual per remote Ryo shot. These pools
+ * never create native attack tasks, apply damage or touch the
+ * shared boss/mech health authority. Local successful shots are captured from
+ * the native constructor and republished only as visuals.
+ *
+ * Both pools reuse retained tasks parented to the native battle manager at
+ * shared state +0x1BC. Inactive objects are hidden; the engine destroys the
+ * whole manager subtree once, so this module never frees a child task.
+ */
+
+#include "anchor_impact_players.h"
+#include "anchor_impact_native.h"
+#include "anchor_impact_boss.h"
+#include "anchor_remote_model_pool.h"
+#include "utils/anchor_impact_players_codec.h"
+#include "utils/anchor_impact_smoothing.h"
+
+#ifdef ANCHOR_IMPACT_PLAYERS_HOST_TEST
+#define RECOMP_HOOK(name)
+#define RECOMP_HOOK_RETURN(name)
+#else
+#include "anchor.h"
+#include "modding.h"
+#include "recomputils.h"
+#endif
+
+/* Shared file_13 battle-state block (D_8020EED0_63A2B0). */
+extern void *D_8020EED0_63A2B0;
+extern unsigned char *D_8015C5C8_15D1C8;
+extern unsigned char D_8006D328_6DF28[];
+
+/* Stock Impact reticle/shot materials and models. */
+extern unsigned char D_8020A728_635B08[];
+extern unsigned char D_8020A7D0_635BB0[];
+
+extern void *func_80034E08_35A08(void *parent, void (*update)(void *, void *),
+                                 unsigned short flags);
+extern void *func_8000DBF0_E7F0(void *task, unsigned int model, unsigned int material,
+                                float x, float y, float z,
+                                short rx, short ry, short rz,
+                                float sx, float sy, float sz,
+                                short file8, short file9);
+extern void func_801DB200_6065E0(void);
+extern void *func_800141C4_14DC4(unsigned int file_id);
+
+#define IP_STATE_MANAGER 0x1BCu
+#define IP_STATE_CURSOR 0x00u
+
+#define IP_CURSOR_MAX 16
+#define IP_SHOT_MAX 32
+#define IP_PENDING_MAX 32
+
+/* FUN_801CCA5C creates this mesh; FUN_801CCF74 rotates it to aim.
+ * 0x480099F0 / D_8020A2D0 is the full-screen damage flash, NOT a cursor. */
+#define IP_CURSOR_MODEL 0x4800A1E0u
+#define IP_CURSOR_SCALE 0.2f
+#define IP_CURSOR_MODE 9
+#define IP_SHOT_MODEL 0x48009AC0u
+#define IP_SHOT_MODE 5
+#define IP_SHOT_SCALE 0.2f
+#define IP_ASSET_FILE 0x4A8
+
+#define IP_SHOT_GRAVITY -0.004f
+#define IP_SHOT_MAX_AGE 180
+#define IP_SHOT_MAX_DISTANCE_SQ (1500.0f * 1500.0f)
+#define IP_SHOT_KIND 1u
+
+#define IP_READ_U8(p, o) \
+    (*(volatile unsigned char *)((unsigned char *)(p) + (o)))
+#define IP_WRITE_U8(p, o, v) \
+    (*(volatile unsigned char *)((unsigned char *)(p) + (o)) = (unsigned char)(v))
+#define IP_READ_U16(p, o) \
+    (*(volatile unsigned short *)((unsigned char *)(p) + (o)))
+#define IP_READ_U32(p, o) \
+    (*(volatile unsigned int *)((unsigned char *)(p) + (o)))
+#define IP_WRITE_U16(p, o, v) \
+    (*(volatile unsigned short *)((unsigned char *)(p) + (o)) = (unsigned short)(v))
+#define IP_WRITE_U32(p, o, v) \
+    (*(volatile unsigned int *)((unsigned char *)(p) + (o)) = (unsigned int)(v))
+#define IP_READ_F32(p, o) \
+    (*(volatile float *)((unsigned char *)(p) + (o)))
+#define IP_WRITE_F32(p, o, v) \
+    (*(volatile float *)((unsigned char *)(p) + (o)) = (float)(v))
+#ifndef IP_READ_PTR
+#define IP_READ_PTR(p, o) \
+    (*(void *volatile *)((unsigned char *)(p) + (o)))
+#endif
+
+typedef struct ImpactCursorSlot
+{
+    void *task;
+    void *object;
+    unsigned int cid, session;
+    AnchorImpactSmoothPose smooth;
+    int active, seen;
+    float position[3];
+    unsigned short rotation[3];
+} ImpactCursorSlot;
+
+typedef struct ImpactShotSlot
+{
+    void *task;
+    void *object;
+    unsigned int cid, session, sequence;
+    int active, age;
+    float position[3], velocity[3], origin[3];
+} ImpactShotSlot;
+
+typedef struct ImpactPending
+{
+    unsigned int sequence;
+    unsigned int row[8];
+} ImpactPending;
+
+static ImpactCursorSlot s_cursors[IP_CURSOR_MAX];
+static ImpactShotSlot s_shots[IP_SHOT_MAX];
+static ImpactPending s_pending[IP_PENDING_MAX];
+static int s_pending_head, s_pending_count;
+static unsigned int s_next_sequence = 1, s_accepted;
+static void *s_manager;
+static unsigned int s_scope_stage, s_scope_encounter, s_scope_visit;
+static unsigned int s_authority, s_authority_term;
+
+typedef struct ImpactControls {
+    unsigned int cid, session;
+    unsigned short held, rx, ry;
+    short axis_x, axis_y;
+    int age, axis_age;
+} ImpactControls;
+static ImpactControls s_controls[IP_CURSOR_MAX];
+/* Preserve edges and their aim separately from the latest held heartbeat.
+ * Releasing/moving before the next native tick must not rewrite a punch. */
+typedef struct ImpactPress {
+    unsigned int cid, session;
+    unsigned short held, pressed, rx, ry;
+    int age;
+} ImpactPress;
+static ImpactPress s_presses[IP_PENDING_MAX], s_action_aim;
+static int s_press_head, s_press_count, s_action_remote;
+static unsigned int s_input_tick, s_input_held, s_axis_tick;
+static short s_sent_axis[2];
+static unsigned int s_remote_frame_pressed;
+static ImpactPress s_reel_presses[IP_PENDING_MAX];
+static void *s_reel_target;
+static int s_reel_head, s_reel_count;
+static unsigned short s_saved_pad[2][2];
+static unsigned int s_saved_aim[2];
+static unsigned short s_saved_rotation[2][2];
+static void *s_input_system, *s_input_state, *s_input_cursor[2];
+static int s_input_swapped, s_aim_swapped;
+static int s_controls_owner;
+
+/* Aim belongs to a native attack's lifetime, including delayed constructors
+ * and child tasks. This is local metadata, never a transmitted native pointer. */
+#define IP_ATTACK_TASK_MAX 128
+typedef struct ImpactAttackTask { void *task; ImpactPress aim; } ImpactAttackTask;
+static ImpactAttackTask s_attack_tasks[IP_ATTACK_TASK_MAX];
+static void *s_attack_state, *s_attack_manager;
+static unsigned int s_attack_stage, s_attack_boss, s_attack_visit;
+static ImpactPress s_dispatch_aim, s_birth_aim;
+static void *s_birth_parent, *s_birth_next;
+static void *s_task_aim_state, *s_task_aim_cursor[2], *s_task_aim_cursor_task[2];
+static unsigned int s_task_saved_aim[2];
+static unsigned short s_task_saved_rotation[2][2];
+static void task_aim_restore(void);
+static int attack_context_live(void);
+static void attack_context_clear(void);
+
+static int s_ctor_bracket;
+static int s_ctor_captured;
+static void *s_ctor_velocity_task;
+static float s_ctor_position[3];
+static float s_ctor_velocity[3];
+
+static void impact_cursor_update(void *task, void *object);
+static void impact_shot_update(void *task, void *object);
+
+static int pointer_valid(const void *pointer)
+{
+#ifdef ANCHOR_IMPACT_PLAYERS_HOST_TEST
+    return pointer != 0;
+#else
+    unsigned int address = (unsigned int)(unsigned long)pointer;
+    return (address & 3u) == 0 &&
+           ((address >= 0x80001000u && address < 0x80800000u) ||
+            anchor_remote_model_pool_contains(pointer));
+#endif
+}
+
+static int linked(const void *task)
+{
+    void *backlink;
+    if (!pointer_valid(task))
+        return 0;
+    if (IP_READ_PTR(D_8006D328_6DF28,0) == task) return 1;
+    backlink = IP_READ_PTR(task, 0x04);
+    return pointer_valid(backlink) && IP_READ_PTR(backlink, 0x00) == task;
+}
+
+static int owned_task(const void *task, void (*update)(void *, void *))
+{
+    return linked(task) &&
+           IP_READ_PTR(task, 0x0C) == (void *)(unsigned long)update;
+}
+
+static unsigned int float_bits(float value)
+{
+    union { float f; unsigned int u; } bits;
+    bits.f = value;
+    return bits.u;
+}
+
+static float bits_float(unsigned int value)
+{
+    union { float f; unsigned int u; } bits;
+    bits.u = value;
+    return bits.f;
+}
+
+/* Bit-pattern finiteness; a float compare is unreliable under -ffast-math. */
+static int finite_word(unsigned int value)
+{
+    return (value & 0x7f800000u) != 0x7f800000u;
+}
+
+static int finite_float(float value)
+{
+    return finite_word(float_bits(value));
+}
+
+static void hide_object(void *object)
+{
+    if (!pointer_valid(object))
+        return;
+    IP_READ_U8(object, 0x64) |= 1u;
+    IP_READ_U8(object, 0x65) = 0;
+}
+
+/* Only touch an object that is still owned by the retained task. A stale
+ * handle whose subtree was destroyed must never be written. */
+static void hide_slot_object(void *task, void *object,
+                             void (*update)(void *, void *))
+{
+    if (owned_task(task, update) && pointer_valid(object) &&
+        IP_READ_PTR(task, 0x18) == object)
+        hide_object(object);
+}
+
+static void show_object(void *object)
+{
+    IP_READ_U8(object, 0x64) &= (unsigned char)~1u;
+    IP_READ_U8(object, 0x65) = 0;
+}
+
+/* Received shots must never run collision or boss damage. Zero the combat
+ * fields the native attack constructor would otherwise populate. */
+static void clear_combat_fields(void *task)
+{
+    IP_WRITE_U32(task, 0x30, 0);
+    IP_WRITE_U32(task, 0x34, 0);
+    IP_WRITE_U32(task, 0x38, 0);
+    IP_WRITE_U32(task, 0x3C, 0);
+    IP_WRITE_U32(task, 0x48, 0);
+    IP_WRITE_U32(task, 0x5C, 0);
+}
+
+static void refresh_handle(void **task, void **object,
+                           void (*update)(void *, void *))
+{
+    if (!owned_task(*task, update))
+    {
+        *task = 0;
+        *object = 0;
+        return;
+    }
+    if (IP_READ_PTR(*task, 0x18) != *object)
+        *object = IP_READ_PTR(*task, 0x18);
+}
+
+static void cursor_render(ImpactCursorSlot *slot)
+{
+    refresh_handle(&slot->task, &slot->object, impact_cursor_update);
+    if (!pointer_valid(slot->object))
+        return;
+    if (!slot->active)
+    {
+        hide_object(slot->object);
+        return;
+    }
+    IP_WRITE_F32(slot->object, 0x08, slot->position[0]);
+    IP_WRITE_F32(slot->object, 0x0C, slot->position[1]);
+    IP_WRITE_F32(slot->object, 0x10, slot->position[2]);
+    IP_WRITE_U16(slot->object, 0x14, slot->rotation[0]);
+    IP_WRITE_U16(slot->object, 0x16, slot->rotation[1]);
+    IP_WRITE_U16(slot->object, 0x18, slot->rotation[2]);
+    IP_WRITE_U8(slot->object, 0x05, IP_CURSOR_MODE);
+    /* The stock combiner is TEXEL0 RGB/alpha (FCFFFFFF FFFCF279).
+     * Replace RGB only; the texture alpha still cuts out the native reticle.
+     * The retained task's D0..EF block fits exactly four GBI commands. */
+    IP_WRITE_U32(slot->task, 0xD0, 0x06000000u);
+    IP_WRITE_U32(slot->task, 0xD4, (unsigned int)(unsigned long)D_8020A728_635B08);
+    IP_WRITE_U32(slot->task, 0xD8, 0xFA000000u);
+    IP_WRITE_U32(slot->task, 0xDC, 0xFFCC40FFu); /* gold; local stays cyan/red */
+    IP_WRITE_U32(slot->task, 0xE0, 0xFCFFFFFFu);
+    IP_WRITE_U32(slot->task, 0xE4, 0xFFFDF2F9u); /* RGB=PRIMITIVE, alpha=TEXEL0 */
+    IP_WRITE_U32(slot->task, 0xE8, 0xB8000000u);
+    IP_WRITE_U32(slot->task, 0xEC, 0);
+    IP_WRITE_U32(slot->object, 0x30,
+        (unsigned int)(unsigned long)((unsigned char *)slot->task + 0xD0) | 0x60000000u);
+    show_object(slot->object);
+}
+
+static void shot_simulate(ImpactShotSlot *slot)
+{
+    float dx, dy, dz;
+
+    refresh_handle(&slot->task, &slot->object, impact_shot_update);
+    if (!pointer_valid(slot->object))
+        return;
+    if (!slot->active)
+    {
+        hide_object(slot->object);
+        return;
+    }
+    if (++slot->age > IP_SHOT_MAX_AGE)
+    {
+        slot->active = 0;
+        hide_object(slot->object);
+        return;
+    }
+    slot->velocity[1] += IP_SHOT_GRAVITY;
+    slot->position[0] += slot->velocity[0];
+    slot->position[1] += slot->velocity[1];
+    slot->position[2] += slot->velocity[2];
+    dx = slot->position[0] - slot->origin[0];
+    dy = slot->position[1] - slot->origin[1];
+    dz = slot->position[2] - slot->origin[2];
+    if (dx * dx + dy * dy + dz * dz > IP_SHOT_MAX_DISTANCE_SQ)
+    {
+        slot->active = 0;
+        hide_object(slot->object);
+        return;
+    }
+    IP_WRITE_F32(slot->object, 0x08, slot->position[0]);
+    IP_WRITE_F32(slot->object, 0x0C, slot->position[1]);
+    IP_WRITE_F32(slot->object, 0x10, slot->position[2]);
+    IP_WRITE_U8(slot->object, 0x05, IP_SHOT_MODE);
+    show_object(slot->object);
+}
+
+static int cursor_ensure(ImpactCursorSlot *slot)
+{
+    void *base = func_800141C4_14DC4(IP_ASSET_FILE);
+    if (!pointer_valid(base))
+        return 0;
+    if (!owned_task(slot->task, impact_cursor_update))
+    {
+        slot->task = 0;
+        slot->object = 0;
+    }
+    if (!slot->task)
+        slot->task = func_80034E08_35A08(s_manager, impact_cursor_update, 0);
+    if (!slot->task)
+        return 0;
+    if (!pointer_valid(slot->object))
+    {
+        slot->object = func_8000DBF0_E7F0(
+            slot->task, IP_CURSOR_MODEL,
+            (unsigned int)(unsigned long)D_8020A728_635B08,
+            0.0f, 0.0f, 0.0f, 0, 0, 0,
+            IP_CURSOR_SCALE, IP_CURSOR_SCALE, IP_CURSOR_SCALE,
+            (short)IP_ASSET_FILE, 0);
+        if (pointer_valid(slot->object))
+        {
+            unsigned int address = (unsigned int)(unsigned long)base;
+            clear_combat_fields(slot->task);
+            /* Match the native segment-8 resource binding. This mesh has no
+             * screen-flash texture animation or billboard rotations. */
+            if (pointer_valid(base) && address != 0xffffffffu)
+                IP_WRITE_U32(slot->object, 0x38, address & 0xbfffffffu);
+            hide_object(slot->object);
+        }
+    }
+    return pointer_valid(slot->object);
+}
+
+static int shot_ensure(ImpactShotSlot *slot)
+{
+    if (!pointer_valid(func_800141C4_14DC4(IP_ASSET_FILE)))
+        return 0;
+    if (!owned_task(slot->task, impact_shot_update))
+    {
+        slot->task = 0;
+        slot->object = 0;
+    }
+    if (!slot->task)
+        slot->task = func_80034E08_35A08(s_manager, impact_shot_update, 0);
+    if (!slot->task)
+        return 0;
+    if (!pointer_valid(slot->object))
+    {
+        slot->object = func_8000DBF0_E7F0(
+            slot->task, IP_SHOT_MODEL,
+            (unsigned int)(unsigned long)D_8020A7D0_635BB0,
+            slot->position[0], slot->position[1], slot->position[2],
+            (short)0x8000, (short)0x8000, (short)0x8000,
+            IP_SHOT_SCALE, IP_SHOT_SCALE, IP_SHOT_SCALE,
+            (short)IP_ASSET_FILE, 0);
+        if (pointer_valid(slot->object))
+            clear_combat_fields(slot->task);
+    }
+    return pointer_valid(slot->object);
+}
+
+static void impact_cursor_update(void *task, void *object)
+{
+    int index;
+    (void)object;
+    for (index = 0; index < IP_CURSOR_MAX; ++index)
+    {
+        if (s_cursors[index].task != task)
+            continue;
+        {
+            unsigned int i;
+            ImpactCursorSlot *slot = &s_cursors[index];
+            impact_pose_step(&slot->smooth);
+            for (i = 0; i < 3; ++i) {
+                slot->position[i] = impact_pose_float(slot->smooth.current[i]);
+                slot->rotation[i] = (unsigned short)slot->smooth.current[3+i];
+            }
+            cursor_render(slot);
+        }
+        return;
+    }
+}
+
+static void impact_shot_update(void *task, void *object)
+{
+    int index;
+    (void)object;
+    for (index = 0; index < IP_SHOT_MAX; ++index)
+    {
+        if (s_shots[index].task != task)
+            continue;
+        shot_simulate(&s_shots[index]);
+        return;
+    }
+}
+
+static void release_cursor(ImpactCursorSlot *slot)
+{
+    hide_slot_object(slot->task, slot->object, impact_cursor_update);
+    refresh_handle(&slot->task, &slot->object, impact_cursor_update);
+    slot->cid = slot->session = 0;
+    slot->active = slot->seen = 0;
+    slot->smooth.valid = 0;
+}
+
+static void release_shot(ImpactShotSlot *slot)
+{
+    hide_slot_object(slot->task, slot->object, impact_shot_update);
+    refresh_handle(&slot->task, &slot->object, impact_shot_update);
+    slot->cid = slot->session = slot->sequence = 0;
+    slot->active = 0;
+}
+
+void anchor_impact_players_reset(void)
+{
+    int index;
+    task_aim_restore();
+    /* Pausing clears queued inputs, but the native attack tasks survive it. */
+    if (!attack_context_live()) attack_context_clear();
+    s_dispatch_aim.cid = s_birth_aim.cid = 0;
+    s_birth_parent = 0;
+    for (index = 0; index < IP_CURSOR_MAX; ++index)
+        release_cursor(&s_cursors[index]);
+    for (index = 0; index < IP_SHOT_MAX; ++index)
+        release_shot(&s_shots[index]);
+    /* Keep live retained handles across pause/reconnect. Discarding them
+     * leaks another hidden subtree on every pause. The manager-change path
+     * below explicitly drops handles after hiding the previous pool. */
+    s_pending_head = s_pending_count = 0;
+    s_accepted = 0;
+    s_ctor_bracket = s_ctor_captured = 0;
+    s_ctor_velocity_task = 0;
+    for (index = 0; index < IP_CURSOR_MAX; ++index)
+    {
+        s_controls[index].cid = s_controls[index].session = 0;
+        s_controls[index].held = 0;
+        s_controls[index].age = s_controls[index].axis_age = 0;
+        s_controls[index].axis_x = s_controls[index].axis_y = 0;
+    }
+    s_input_tick = s_input_held = s_axis_tick = 0;
+    s_sent_axis[0] = s_sent_axis[1] = 0;
+    s_remote_frame_pressed = 0;
+    s_reel_target = 0;
+    s_reel_head = s_reel_count = 0;
+    s_press_head = s_press_count = s_action_remote = 0;
+    s_controls_owner = 0;
+    s_scope_stage = s_scope_encounter = s_scope_visit = 0;
+}
+
+void anchor_impact_players_set_authority(unsigned int owner, unsigned int term)
+{
+    if (owner != s_authority || term != s_authority_term)
+    {
+        anchor_impact_players_reset();
+        attack_context_clear();
+    }
+    s_authority = owner;
+    s_authority_term = term;
+}
+
+/* These are the three native boss callbacks that read mash edges, after the
+ * mech interpreter has returned. Callback offsets alone never cross the wire. */
+static int reeling(void *task)
+{
+    unsigned int callback;
+    if (!pointer_valid(D_8020EED0_63A2B0) || !linked(task) ||
+        IP_READ_PTR(D_8020EED0_63A2B0,0x174) != task) return 0;
+    callback = IP_READ_U32(task,0x0C) & ~0x00800000u;
+    return anchor_impact_boss_is_reel_callback(callback);
+}
+
+static void receive_controls(const unsigned int *row)
+{
+    int i, free_slot = -1;
+    unsigned int pressed;
+    void *target;
+    if (!anchor_impact_native_is_owner() || !s_authority_term ||
+        row[8] != s_authority || row[9] != s_authority_term)
+        return;
+    for (i = 0; i < IP_CURSOR_MAX; ++i)
+    {
+        if (s_controls[i].cid == row[0] && s_controls[i].session == row[1]) break;
+        if (!s_controls[i].cid || s_controls[i].age > 9) free_slot = i;
+    }
+    if (i == IP_CURSOR_MAX) i = free_slot;
+    if (i < 0) return;
+    if (s_controls[i].cid != row[0] || s_controls[i].session != row[1]) {
+        s_controls[i].held = 0;
+        s_controls[i].axis_x = s_controls[i].axis_y = 0;
+        s_controls[i].axis_age = 10;
+    }
+    s_controls[i].cid = row[0];
+    s_controls[i].session = row[1];
+    if (row[3] == 3) {
+        if (row[4] > 160 || row[5] > 160) return;
+        s_controls[i].axis_x = (short)((int)row[4]-80);
+        s_controls[i].axis_y = (short)((int)row[5]-80);
+        s_controls[i].axis_age = 0;
+        return;
+    }
+    s_controls[i].held = (unsigned short)(row[4] & 0xE03Fu);
+    s_controls[i].rx = (unsigned short)row[6];
+    s_controls[i].ry = (unsigned short)row[7];
+    s_controls[i].age = 0;
+    pressed = row[5] & 0xE03Fu;
+    target = pointer_valid(D_8020EED0_63A2B0) ? IP_READ_PTR(D_8020EED0_63A2B0,0x174) : 0;
+    if (reeling(target)) {
+        if (s_reel_target != target) s_reel_head = s_reel_count = 0;
+        s_reel_target = target;
+        if ((pressed & 0xC030u) && s_reel_count < IP_PENDING_MAX) {
+            ImpactPress *p = &s_reel_presses[(s_reel_head+s_reel_count++) % IP_PENDING_MAX];
+            *p = (ImpactPress){row[0],row[1],row[4],pressed&0xC030u,row[6],row[7],0};
+        }
+        /* A mash belongs to this latch, not a delayed punch after release. */
+        pressed &= ~0xC030u;
+    }
+    if (pressed && s_press_count < IP_PENDING_MAX) {
+        ImpactPress *p = &s_presses[(s_press_head+s_press_count++) % IP_PENDING_MAX];
+        *p = (ImpactPress){row[0], row[1], row[4]&0xE03Fu, pressed,
+                           row[6], row[7], 0};
+    }
+}
+
+/* The native action interpreter reads held/pressed at system+3B07A/+3B07C,
+ * stride 0x18. Keep each native cursor's analog aim local. Only the elected
+ * owner interprets combat controls; that creates one mech action/shot and
+ * one ammunition debit. Restore the actual controller state on return. */
+RECOMP_HOOK("func_801D7670_602A50")
+void anchor_impact_controls_begin(int primary, int secondary)
+{
+    unsigned int held, pressed, peer_held = 0, defer_local = 0;
+    void *cursor, *task, *state = D_8020EED0_63A2B0;
+    ImpactPending *pending;
+    ImpactPress *aim = 0;
+    int i;
+    s_input_swapped = s_aim_swapped = 0;
+    s_remote_frame_pressed = 0;
+    if (!anchor_impact_native_ready() || !pointer_valid(state) ||
+        !pointer_valid(D_8015C5C8_15D1C8) || primary < 0 || primary > 1 ||
+        secondary < 0 || secondary > 1) return;
+    s_input_system = D_8015C5C8_15D1C8;
+    s_input_state = state;
+    held = IP_READ_U16(s_input_system, 0x3B07A + primary * 0x18);
+    pressed = IP_READ_U16(s_input_system, 0x3B07C + primary * 0x18) |
+              IP_READ_U16(s_input_system, 0x3B07C + secondary * 0x18);
+    held |= IP_READ_U16(s_input_system, 0x3B07A + secondary * 0x18);
+    task = IP_READ_PTR(state, 0x00);
+    cursor = linked(task) ? IP_READ_PTR(task, 0x18) : 0;
+    if (!anchor_impact_native_is_owner() && s_authority && s_authority_term &&
+        (pressed || held != s_input_held || ++s_input_tick >= 6u) &&
+        pointer_valid(cursor) && s_pending_count < IP_PENDING_MAX)
+    {
+        pending = &s_pending[(s_pending_head + s_pending_count) % IP_PENDING_MAX];
+        pending->sequence = s_next_sequence++;
+        pending->row[0] = pending->sequence;
+        pending->row[1] = 2;
+        pending->row[2] = held & 0xE03Fu;
+        pending->row[3] = pressed & 0xE03Fu;
+        pending->row[4] = IP_READ_U16(cursor, 0x14);
+        pending->row[5] = IP_READ_U16(cursor, 0x16);
+        pending->row[6] = s_authority;
+        pending->row[7] = s_authority_term;
+        ++s_pending_count;
+        s_input_tick = 0;
+        s_input_held = held;
+    }
+    if (!anchor_impact_native_is_owner() && s_authority && s_authority_term) {
+        int axes[2];
+        axes[0] = (short)IP_READ_U16(s_input_system,0x3B07Eu +primary*0x18);
+        axes[1] = (short)IP_READ_U16(s_input_system,0x3B080+primary*0x18);
+        for (i = 0; i < 2; ++i) {
+            if (axes[i] < -80) axes[i] = -80;
+            if (axes[i] > 80) axes[i] = 80;
+        }
+        if ((axes[0] != s_sent_axis[0] || axes[1] != s_sent_axis[1] || ++s_axis_tick >= 3) &&
+            s_pending_count < IP_PENDING_MAX) {
+            pending = &s_pending[(s_pending_head+s_pending_count++) % IP_PENDING_MAX];
+            pending->sequence = s_next_sequence++;
+            pending->row[0] = pending->sequence; pending->row[1] = 3;
+            pending->row[2] = axes[0]+80; pending->row[3] = axes[1]+80;
+            pending->row[4] = pending->row[5] = 0;
+            pending->row[6] = s_authority; pending->row[7] = s_authority_term;
+            s_sent_axis[0] = axes[0]; s_sent_axis[1] = axes[1]; s_axis_tick = 0;
+        }
+    }
+    for (i = 0; i < 2; ++i)
+    {
+        s_saved_pad[i][0] = IP_READ_U16(s_input_system, 0x3B07A + i * 0x18);
+        s_saved_pad[i][1] = IP_READ_U16(s_input_system, 0x3B07C + i * 0x18);
+    }
+    s_input_swapped = 1;
+    if (!anchor_impact_native_is_owner())
+    {
+        for (i = 0; i < 2; ++i)
+        {
+            IP_WRITE_U16(s_input_system, 0x3B07A + i * 0x18, 0);
+            IP_WRITE_U16(s_input_system, 0x3B07C + i * 0x18, 0);
+        }
+        IP_WRITE_U8(state, 0x141, 0);
+        IP_WRITE_U8(state, 0x145, 0);
+        return;
+    }
+    for (i = 0; i < IP_CURSOR_MAX; ++i) {
+        ImpactControls *control = &s_controls[i];
+        if (control->cid && control->age <= 9) peer_held |= control->held;
+    }
+    /* A native pending action already has an initiator. Finish it before
+     * offering another participant's edges, even if the next edge would be
+     * ignored by the combo interpreter. Otherwise its aim can be reassigned
+     * without the pending action byte changing. */
+    if (IP_READ_U8(state,0x141) || IP_READ_U8(state,0x145)) {
+        if (s_action_remote) {
+            aim = &s_action_aim;
+            defer_local = pressed & 0xE03Fu;
+            if (defer_local && pointer_valid(cursor) && s_press_count < IP_PENDING_MAX) {
+                ImpactPress *p = &s_presses[(s_press_head+s_press_count++) % IP_PENDING_MAX];
+                *p = (ImpactPress){0,0,held,defer_local,
+                    IP_READ_U16(cursor,0x14),IP_READ_U16(cursor,0x16),0};
+            }
+        }
+    } else if (pressed & 0xE03Fu) s_action_remote = 0;
+    else if (s_press_count) {
+        s_action_aim = s_presses[s_press_head];
+        s_press_head = (s_press_head+1) % IP_PENDING_MAX;
+        --s_press_count;
+        s_action_remote = s_action_aim.cid != 0;
+        s_remote_frame_pressed = s_action_aim.pressed;
+        aim = &s_action_aim;
+    } else {
+        s_action_remote = 0;
+        /* Guard can start from held C buttons after the original press has
+         * passed. Keep the holder's aim when only a peer is holding guard. */
+        if (!(held & 3u) && (peer_held & 3u))
+            for (i = 0; i < IP_CURSOR_MAX; ++i) {
+                ImpactControls *c = &s_controls[i];
+                if (!c->cid || c->age > 9 || !(c->held & 3u)) continue;
+                s_action_aim = (ImpactPress){c->cid,c->session,c->held,0,c->rx,c->ry,0};
+                aim = &s_action_aim; s_action_remote = 1; break;
+            }
+    }
+    for (i = 0; i < 2; ++i) {
+        if (i != primary && i != secondary) continue;
+        IP_WRITE_U16(s_input_system,0x3B07A+i*0x18,
+                     s_saved_pad[i][0] | peer_held | (aim ? aim->held : 0));
+        IP_WRITE_U16(s_input_system,0x3B07C+i*0x18,
+                     (s_saved_pad[i][1] & ~defer_local) | (aim ? aim->pressed : 0));
+    }
+    if (aim) {
+        int yaw = ((int)aim->ry - 512) & 1023;
+        int pitch = aim->rx & 1023;
+        if (yaw > 511) yaw -= 1024;
+        if (pitch > 511) pitch -= 1024;
+        s_saved_aim[0] = IP_READ_U32(state,0x04);
+        s_saved_aim[1] = IP_READ_U32(state,0x08);
+        IP_WRITE_F32(state,0x04,(float)yaw*(360.0f/1024.0f));
+        IP_WRITE_F32(state,0x08,(float)pitch*(360.0f/1024.0f));
+        for (i = 0; i < 2; ++i) {
+            task = IP_READ_PTR(state,i ? 0x0C : 0x00);
+            cursor = linked(task) ? IP_READ_PTR(task,0x18) : 0;
+            if (!pointer_valid(cursor) || (i && cursor == s_input_cursor[0])) cursor = 0;
+            s_input_cursor[i] = cursor;
+            if (!cursor) continue;
+            s_saved_rotation[i][0] = IP_READ_U16(cursor,0x14);
+            s_saved_rotation[i][1] = IP_READ_U16(cursor,0x16);
+            IP_WRITE_U16(cursor,0x14,aim->rx);
+            IP_WRITE_U16(cursor,0x16,aim->ry);
+        }
+        s_aim_swapped = 1;
+        aim->pressed = 0; /* Deferred native actions retain aim, not a new edge. */
+    }
+}
+
+RECOMP_HOOK_RETURN("func_801D7670_602A50")
+void anchor_impact_controls_end(void)
+{
+    int i;
+    if (s_input_swapped && s_input_system == D_8015C5C8_15D1C8)
+        for (i = 0; i < 2; ++i)
+        {
+            IP_WRITE_U16(s_input_system, 0x3B07A + i * 0x18, s_saved_pad[i][0]);
+            IP_WRITE_U16(s_input_system, 0x3B07C + i * 0x18, s_saved_pad[i][1]);
+        }
+    if (s_aim_swapped && s_input_state == D_8020EED0_63A2B0)
+    {
+        IP_WRITE_U32(s_input_state, 0x04, s_saved_aim[0]);
+        IP_WRITE_U32(s_input_state, 0x08, s_saved_aim[1]);
+        for (i = 0; i < 2; ++i) if (s_input_cursor[i]) {
+            IP_WRITE_U16(s_input_cursor[i],0x14,s_saved_rotation[i][0]);
+            IP_WRITE_U16(s_input_cursor[i],0x16,s_saved_rotation[i][1]);
+        }
+    }
+    s_input_swapped = s_aim_swapped = 0;
+}
+
+static void *s_guard_system;
+static unsigned short s_guard_saved[2];
+RECOMP_HOOK("func_801DD394_608774")
+void anchor_impact_guard_begin(void)
+{
+    unsigned int i, held = 0;
+    s_guard_system = 0;
+    if (!anchor_impact_native_ready() || !anchor_impact_native_is_owner() ||
+        !pointer_valid(D_8015C5C8_15D1C8)) return;
+    for (i = 0; i < IP_CURSOR_MAX; ++i)
+        if (s_controls[i].cid && s_controls[i].age <= 9) held |= s_controls[i].held & 3u;
+    s_guard_system = D_8015C5C8_15D1C8;
+    for (i = 0; i < 2; ++i) {
+        s_guard_saved[i] = IP_READ_U16(s_guard_system,0x3B07A+i*0x18);
+        IP_WRITE_U16(s_guard_system,0x3B07A+i*0x18,s_guard_saved[i] | held);
+    }
+}
+RECOMP_HOOK_RETURN("func_801DD394_608774")
+void anchor_impact_guard_end(void)
+{
+    unsigned int i;
+    if (s_guard_system && s_guard_system == D_8015C5C8_15D1C8)
+        for (i = 0; i < 2; ++i)
+            IP_WRITE_U16(s_guard_system,0x3B07A+i*0x18,s_guard_saved[i]);
+    s_guard_system = 0;
+}
+
+/* Both dispatchers create native attacks synchronously. 34B58 also covers
+ * task-only attacks (laser/barrage), whose first aim read happens later. */
+RECOMP_HOOK("func_801D7BC8_602FA8")
+void anchor_impact_action_begin(int action, int primary)
+{
+    (void)action; (void)primary;
+    s_dispatch_aim = s_action_aim;
+    if (!s_aim_swapped) s_dispatch_aim.cid = 0;
+}
+RECOMP_HOOK_RETURN("func_801D7BC8_602FA8")
+void anchor_impact_action_end(void) { s_dispatch_aim.cid = 0; }
+RECOMP_HOOK("func_801D8184_603564")
+void anchor_impact_secondary_action_begin(int action, int primary)
+{ anchor_impact_action_begin(action,primary); }
+RECOMP_HOOK_RETURN("func_801D8184_603564")
+void anchor_impact_secondary_action_end(void) { anchor_impact_action_end(); }
+
+static ImpactPress *attack_aim(void *task)
+{
+    int i;
+    if (!linked(task)) return 0;
+    for (i = 0; i < IP_ATTACK_TASK_MAX; ++i)
+        if (s_attack_tasks[i].task == task) return &s_attack_tasks[i].aim;
+    return 0;
+}
+static int attack_context_live(void)
+{
+    return anchor_impact_native_ready() && s_attack_state &&
+        s_attack_state == D_8020EED0_63A2B0 &&
+        IP_READ_PTR(s_attack_state,IP_STATE_MANAGER) == s_attack_manager &&
+        s_attack_stage == anchor_impact_native_stage() &&
+        s_attack_boss == anchor_impact_native_encounter() &&
+        s_attack_visit == anchor_impact_native_visit();
+}
+static void attack_context_clear(void)
+{
+    int i;
+    for (i = 0; i < IP_ATTACK_TASK_MAX; ++i) s_attack_tasks[i].task = 0;
+    s_attack_state = s_attack_manager = 0;
+}
+static ImpactPress latest_aim(ImpactPress aim)
+{
+    int i;
+    for (i = 0; i < IP_CURSOR_MAX; ++i)
+        if (s_controls[i].cid == aim.cid && s_controls[i].session == aim.session &&
+            s_controls[i].age <= 9) {
+            aim.rx = s_controls[i].rx; aim.ry = s_controls[i].ry; break;
+        }
+    return aim;
+}
+/* Reset is part of every native task allocation, including recycled addresses.
+ * Clear metadata here; callback changes during one attack retain its source. */
+RECOMP_HOOK("func_80034A10_35610")
+void anchor_impact_attack_task_reset(void *task)
+{
+    int i;
+    for (i = 0; i < IP_ATTACK_TASK_MAX; ++i)
+        if (s_attack_tasks[i].task == task) s_attack_tasks[i].task = 0;
+}
+RECOMP_HOOK("func_80034B58_35758")
+void anchor_impact_attack_child_begin(void *parent)
+{
+    ImpactPress *inherited;
+    s_birth_parent = 0;
+    if (!anchor_impact_native_ready() || !anchor_impact_native_is_owner() || !linked(parent)) return;
+    if (!attack_context_live()) attack_context_clear();
+    inherited = attack_aim(parent);
+    s_birth_aim = s_dispatch_aim;
+    if (!s_birth_aim.cid && inherited) s_birth_aim = *inherited;
+    if (!s_birth_aim.cid) return;
+    s_attack_state = D_8020EED0_63A2B0;
+    s_attack_manager = IP_READ_PTR(s_attack_state,IP_STATE_MANAGER);
+    s_attack_stage = anchor_impact_native_stage(); s_attack_boss = anchor_impact_native_encounter();
+    s_attack_visit = anchor_impact_native_visit();
+    s_birth_parent = parent; s_birth_next = IP_READ_PTR(parent,0);
+}
+RECOMP_HOOK_RETURN("func_80034B58_35758")
+void anchor_impact_attack_child_end(void)
+{
+    void *task;
+    int i;
+    /* Native 34B58 is non-recursive and inserts the result at parent->next.
+     * A failed allocation leaves that link alone. Object attachment is later. */
+    if (!s_birth_parent) return;
+    task = IP_READ_PTR(s_birth_parent,0); s_birth_parent = 0;
+    if (task == s_birth_next || !linked(task)) return;
+    for (i = 0; i < IP_ATTACK_TASK_MAX; ++i) {
+        if (s_attack_tasks[i].task && linked(s_attack_tasks[i].task)) continue;
+        s_attack_tasks[i].task = task; s_attack_tasks[i].aim = s_birth_aim; return;
+    }
+}
+static void task_aim_restore(void)
+{
+    int i;
+    if (s_task_aim_state && s_task_aim_state == D_8020EED0_63A2B0) {
+        IP_WRITE_U32(s_task_aim_state,4,s_task_saved_aim[0]);
+        IP_WRITE_U32(s_task_aim_state,8,s_task_saved_aim[1]);
+        for (i = 0; i < 2; ++i)
+            if (s_task_aim_cursor[i] && linked(s_task_aim_cursor_task[i]) &&
+                IP_READ_PTR(s_task_aim_cursor_task[i],0x18) == s_task_aim_cursor[i]) {
+                IP_WRITE_U16(s_task_aim_cursor[i],0x14,s_task_saved_rotation[i][0]);
+                IP_WRITE_U16(s_task_aim_cursor[i],0x16,s_task_saved_rotation[i][1]);
+            }
+    }
+    s_task_aim_state = 0;
+}
+/* 34734 calls 1481C exactly once before each runnable task's pre/update/post
+ * callbacks. Restore at the next task and at scheduler return, so cameras,
+ * boss AI and the local cursor always see their physical local aim.
+ * Disassembly: 9030 rereads state+4/+8 on EVERY punch frame; 9DA8 reads the
+ * cursor on delayed hook launch; DD3DC and laser/barrage also read live aim. */
+RECOMP_HOOK("func_8001481C_1541C")
+void anchor_impact_attack_task_begin(void *task)
+{
+    ImpactPress *source, aim;
+    int i, yaw, pitch;
+    void *state = D_8020EED0_63A2B0;
+    task_aim_restore();
+    if (!attack_context_live() || !anchor_impact_native_is_owner() ||
+        !pointer_valid(state) || !(source = attack_aim(task))) return;
+    aim = latest_aim(*source);
+    yaw = ((int)aim.ry-512)&1023; if (yaw > 511) yaw -= 1024;
+    pitch = aim.rx&1023; if (pitch > 511) pitch -= 1024;
+    s_task_aim_state = state;
+    s_task_saved_aim[0] = IP_READ_U32(state,4); s_task_saved_aim[1] = IP_READ_U32(state,8);
+    IP_WRITE_F32(state,4,(float)yaw*(360.0f/1024.0f));
+    IP_WRITE_F32(state,8,(float)pitch*(360.0f/1024.0f));
+    for (i = 0; i < 2; ++i) {
+        void *cursor_task = IP_READ_PTR(state,i ? 0xC : 0);
+        void *cursor = linked(cursor_task) ? IP_READ_PTR(cursor_task,0x18) : 0;
+        s_task_aim_cursor_task[i] = cursor_task;
+        s_task_aim_cursor[i] = 0;
+        if (!pointer_valid(cursor) || (i && cursor == s_task_aim_cursor[0])) continue;
+        s_task_aim_cursor[i] = cursor;
+        s_task_saved_rotation[i][0] = IP_READ_U16(cursor,0x14);
+        s_task_saved_rotation[i][1] = IP_READ_U16(cursor,0x16);
+        IP_WRITE_U16(cursor,0x14,aim.rx); IP_WRITE_U16(cursor,0x16,aim.ry);
+    }
+}
+RECOMP_HOOK("func_80034734_35334")
+void anchor_impact_attack_tasks_begin(void) { task_aim_restore(); }
+RECOMP_HOOK_RETURN("func_80034734_35334")
+void anchor_impact_attack_tasks_end(void) { task_aim_restore(); }
+
+static void *s_reel_system;
+static unsigned short s_reel_saved;
+static unsigned int s_reel_axis;
+static int s_reel_pad;
+static void reel_begin(void *task)
+{
+    unsigned int edge = 0;
+    s_reel_system = 0;
+    if (!anchor_impact_native_ready() || !anchor_impact_native_is_owner() ||
+        !reeling(task) || !pointer_valid(D_8015C5C8_15D1C8)) return;
+    s_reel_pad = (int)IP_READ_U32(D_8020EED0_63A2B0,0x1E4);
+    if (s_reel_pad < 0 || s_reel_pad > 1) return;
+    if (s_reel_target == task && s_reel_count) {
+        edge = s_reel_presses[s_reel_head].pressed;
+        s_reel_head = (s_reel_head+1) % IP_PENDING_MAX; --s_reel_count;
+    }
+    if (!edge) return;
+    s_reel_system = D_8015C5C8_15D1C8;
+    s_reel_saved = IP_READ_U16(s_reel_system,0x3B07C+s_reel_pad*0x18);
+    s_reel_axis = IP_READ_U32(s_reel_system,0x3B088+s_reel_pad*0x18);
+    IP_WRITE_U16(s_reel_system,0x3B07C+s_reel_pad*0x18,s_reel_saved | edge);
+    /* A remote-only mash earns the native base increment, independent of
+     * the authority's stick. Simultaneous physical input keeps its bonus. */
+    if (!(s_reel_saved & 0xC030u)) IP_WRITE_F32(s_reel_system,0x3B088+s_reel_pad*0x18,0);
+}
+static void reel_end(void)
+{
+    if (s_reel_system && s_reel_system == D_8015C5C8_15D1C8) {
+        IP_WRITE_U16(s_reel_system,0x3B07C+s_reel_pad*0x18,s_reel_saved);
+        IP_WRITE_U32(s_reel_system,0x3B088+s_reel_pad*0x18,s_reel_axis);
+    }
+    s_reel_system = 0;
+}
+
+static void *s_fist_system;
+static int s_fist_pad;
+static unsigned short s_fist_axes[2];
+RECOMP_HOOK("func_801D9940_604D20")
+void anchor_impact_fist_begin(void *task, void *object)
+{
+    unsigned int i;
+    ImpactPress *source = attack_aim(task);
+    short x = 0, y = 0;
+    (void)object;
+    s_fist_system = 0;
+    if (!source || !anchor_impact_native_is_owner() || !pointer_valid(task) ||
+        !pointer_valid(D_8015C5C8_15D1C8)) return;
+    s_fist_pad = (int)IP_READ_U32(task,0x94);
+    if (s_fist_pad < 0 || s_fist_pad > 1) return;
+    for (i = 0; i < IP_CURSOR_MAX; ++i)
+        if (s_controls[i].cid == source->cid && s_controls[i].session == source->session &&
+            s_controls[i].age <= 9 && s_controls[i].axis_age <= 6) {
+            x = s_controls[i].axis_x; y = s_controls[i].axis_y; break;
+        }
+    s_fist_system = D_8015C5C8_15D1C8;
+    s_fist_axes[0] = IP_READ_U16(s_fist_system,0x3B07Eu +s_fist_pad*0x18);
+    s_fist_axes[1] = IP_READ_U16(s_fist_system,0x3B080+s_fist_pad*0x18);
+    IP_WRITE_U16(s_fist_system,0x3B07Eu +s_fist_pad*0x18,x);
+    IP_WRITE_U16(s_fist_system,0x3B080+s_fist_pad*0x18,y);
+}
+RECOMP_HOOK_RETURN("func_801D9940_604D20")
+void anchor_impact_fist_end(void)
+{
+    if (s_fist_system && s_fist_system == D_8015C5C8_15D1C8) {
+        IP_WRITE_U16(s_fist_system,0x3B07Eu +s_fist_pad*0x18,s_fist_axes[0]);
+        IP_WRITE_U16(s_fist_system,0x3B080+s_fist_pad*0x18,s_fist_axes[1]);
+    }
+    s_fist_system = 0;
+}
+static void *s_retract_system;
+static unsigned short s_retract_pressed[2];
+RECOMP_HOOK("func_801DAEC8_6062A8")
+void anchor_impact_retract_begin(void)
+{
+    int i;
+    s_retract_system = 0;
+    if (!anchor_impact_native_is_owner() || !pointer_valid(D_8015C5C8_15D1C8)) return;
+    s_retract_system = D_8015C5C8_15D1C8;
+    for (i = 0; i < 2; ++i) {
+        s_retract_pressed[i] = IP_READ_U16(s_retract_system,0x3B07C+i*0x18);
+        IP_WRITE_U16(s_retract_system,0x3B07C+i*0x18,s_retract_pressed[i] | (s_remote_frame_pressed&0x10));
+    }
+}
+RECOMP_HOOK_RETURN("func_801DAEC8_6062A8")
+void anchor_impact_retract_end(void)
+{
+    int i;
+    if (s_retract_system && s_retract_system == D_8015C5C8_15D1C8)
+        for (i = 0; i < 2; ++i)
+            IP_WRITE_U16(s_retract_system,0x3B07C+i*0x18,s_retract_pressed[i]);
+    s_retract_system = 0;
+}
+
+static void enqueue_shot(const float position[3], const float velocity[3])
+{
+    ImpactPending *pending;
+    if (s_pending_count >= IP_PENDING_MAX)
+        return;
+    pending = &s_pending[(s_pending_head + s_pending_count) % IP_PENDING_MAX];
+    pending->sequence = s_next_sequence++;
+    pending->row[0] = pending->sequence;
+    pending->row[1] = IP_SHOT_KIND;
+    pending->row[2] = float_bits(position[0]);
+    pending->row[3] = float_bits(position[1]);
+    pending->row[4] = float_bits(position[2]);
+    pending->row[5] = float_bits(velocity[0]);
+    pending->row[6] = float_bits(velocity[1]);
+    pending->row[7] = float_bits(velocity[2]);
+    ++s_pending_count;
+}
+
+/* Capture a successful native Ryo shot. func_801DAFCC is the shared shot
+ * constructor used by both the action dispatcher and func_801D8184. The task
+ * is only visible through func_8000E39C, so the constructor is bracketed and
+ * the callback identity is checked before the object position and the just
+ * written task velocity are read. */
+RECOMP_HOOK("func_801DAFCC_6063AC")
+void anchor_impact_shot_constructor_begin(void)
+{
+    s_ctor_bracket = 1;
+    s_ctor_captured = 0;
+    s_ctor_velocity_task = 0;
+}
+
+RECOMP_HOOK_RETURN("func_801DAFCC_6063AC")
+void anchor_impact_shot_constructor_end(void)
+{
+    if (s_ctor_captured)
+        enqueue_shot(s_ctor_position, s_ctor_velocity);
+    s_ctor_bracket = 0;
+    s_ctor_captured = 0;
+    s_ctor_velocity_task = 0;
+}
+
+RECOMP_HOOK("func_8000E39C_EF9C")
+void anchor_impact_shot_velocity_begin(float speed, float x, float y, float z,
+                                       void *task)
+{
+    (void)speed; (void)x; (void)y; (void)z;
+    if (!s_ctor_bracket || !linked(task))
+        return;
+    if (IP_READ_PTR(task, 0x0C) != (void *)(unsigned long)func_801DB200_6065E0)
+        return;
+    s_ctor_velocity_task = task;
+}
+
+RECOMP_HOOK_RETURN("func_8000E39C_EF9C")
+void anchor_impact_shot_velocity_end(void)
+{
+    void *task = s_ctor_velocity_task;
+    void *object;
+    if (!task)
+        return;
+    s_ctor_velocity_task = 0;
+    if (!linked(task))
+        return;
+    object = IP_READ_PTR(task, 0x18);
+    if (!pointer_valid(object))
+        return;
+    s_ctor_position[0] = IP_READ_F32(object, 0x08);
+    s_ctor_position[1] = IP_READ_F32(object, 0x0C);
+    s_ctor_position[2] = IP_READ_F32(object, 0x10);
+    s_ctor_velocity[0] = IP_READ_F32(task, 0x70);
+    s_ctor_velocity[1] = IP_READ_F32(task, 0x74);
+    s_ctor_velocity[2] = IP_READ_F32(task, 0x78);
+    if (finite_float(s_ctor_position[0]) && finite_float(s_ctor_position[1]) &&
+        finite_float(s_ctor_position[2]) && finite_float(s_ctor_velocity[0]) &&
+        finite_float(s_ctor_velocity[1]) && finite_float(s_ctor_velocity[2]))
+        s_ctor_captured = 1;
+}
+
+static void apply_cursors(const AnchorImpactPlayerStatus *status)
+{
+    int index, found;
+    for (index = 0; index < IP_CURSOR_MAX; ++index)
+        s_cursors[index].seen = 0;
+    for (index = 0; index < (int)status->cursor_count; ++index)
+    {
+        const unsigned int *row = status->cursors[index];
+        ImpactCursorSlot *slot = 0;
+        for (found = 0; found < IP_CURSOR_MAX; ++found)
+        {
+            if (s_cursors[found].cid == row[0] &&
+                s_cursors[found].session == row[1])
+            {
+                slot = &s_cursors[found];
+                break;
+            }
+        }
+        if (!slot)
+        {
+            for (found = 0; found < IP_CURSOR_MAX; ++found)
+            {
+                if (!s_cursors[found].seen && !s_cursors[found].cid)
+                {
+                    slot = &s_cursors[found];
+                    break;
+                }
+            }
+        }
+        if (!slot)
+            continue;
+        {
+            unsigned int i, pose[11] = {0};
+            if (slot->cid != row[0] || slot->session != row[1] || !slot->active)
+                slot->smooth.valid = 0;
+            for (i = 0; i < 3; ++i) { pose[i] = row[4+i]; pose[3+i] = row[7+i]; }
+            pose[10] = row[3] != 1;
+            impact_pose_offer(&slot->smooth, pose);
+            for (i = 0; i < 3; ++i) {
+                slot->position[i] = impact_pose_float(slot->smooth.current[i]);
+                slot->rotation[i] = (unsigned short)slot->smooth.current[3+i];
+            }
+        }
+        slot->cid = row[0];
+        slot->session = row[1];
+        slot->active = row[3] == 1u;
+        slot->seen = 1;
+        if ((slot->active && cursor_ensure(slot)) || slot->object)
+            cursor_render(slot);
+    }
+    for (index = 0; index < IP_CURSOR_MAX; ++index)
+    {
+        if (!s_cursors[index].seen && s_cursors[index].cid)
+        {
+            s_cursors[index].active = 0;
+            hide_slot_object(s_cursors[index].task, s_cursors[index].object,
+                             impact_cursor_update);
+            s_cursors[index].cid = s_cursors[index].session = 0;
+        }
+    }
+}
+
+static ImpactShotSlot *shot_lookup(unsigned int cid, unsigned int session,
+                                   unsigned int sequence)
+{
+    int index;
+    for (index = 0; index < IP_SHOT_MAX; ++index)
+        if (s_shots[index].cid == cid && s_shots[index].session == session &&
+            s_shots[index].sequence == sequence)
+            return &s_shots[index];
+    return 0;
+}
+
+static void apply_attacks(const AnchorImpactPlayerStatus *status)
+{
+    int index, found;
+    for (index = 0; index < (int)status->attack_count; ++index)
+    {
+        const unsigned int *row = status->attacks[index];
+        if (row[3] == 2u || row[3] == 3u)
+        {
+            receive_controls(row);
+            continue;
+        }
+        ImpactShotSlot *slot = shot_lookup(row[0], row[1], row[2]);
+        if (slot && slot->active)
+            continue;
+        if (!slot)
+        {
+            for (found = 0; found < IP_SHOT_MAX; ++found)
+            {
+                if (!s_shots[found].active)
+                {
+                    slot = &s_shots[found];
+                    break;
+                }
+            }
+        }
+        if (!slot)
+            continue;
+        slot->cid = row[0];
+        slot->session = row[1];
+        slot->sequence = row[2];
+        slot->active = 1;
+        slot->age = 0;
+        slot->position[0] = bits_float(row[4]);
+        slot->position[1] = bits_float(row[5]);
+        slot->position[2] = bits_float(row[6]);
+        slot->origin[0] = slot->position[0];
+        slot->origin[1] = slot->position[1];
+        slot->origin[2] = slot->position[2];
+        slot->velocity[0] = bits_float(row[7]);
+        slot->velocity[1] = bits_float(row[8]);
+        slot->velocity[2] = bits_float(row[9]);
+        if (shot_ensure(slot))
+            shot_simulate(slot);
+    }
+}
+
+void anchor_impact_players_tick(int active)
+{
+    AnchorImpactPlayerSample sample;
+    AnchorImpactPlayerStatus status;
+    char json_out[ANCHOR_IMPACT_PLAYER_JSON_SIZE];
+    char *json;
+    void *state, *manager, *cursor_task, *cursor_object;
+    unsigned int stage, encounter, visit;
+    int index, count;
+
+    s_remote_frame_pressed = 0;
+    if (!active)
+    {
+        anchor_impact_players_reset();
+        return;
+    }
+    state = D_8020EED0_63A2B0;
+    if (!pointer_valid(state))
+    {
+        anchor_impact_players_reset();
+        return;
+    }
+    manager = IP_READ_PTR(state, IP_STATE_MANAGER);
+    if (!pointer_valid(manager))
+    {
+        anchor_impact_players_reset();
+        return;
+    }
+    stage = anchor_impact_native_stage();
+    encounter = anchor_impact_native_encounter();
+    visit = anchor_impact_native_visit();
+    if (stage != s_scope_stage || encounter != s_scope_encounter || visit != s_scope_visit)
+    {
+        anchor_impact_players_reset();
+    }
+    if (manager != s_manager)
+    {
+        anchor_impact_players_reset();
+        for (index = 0; index < IP_CURSOR_MAX; ++index)
+            s_cursors[index].task = s_cursors[index].object = 0;
+        for (index = 0; index < IP_SHOT_MAX; ++index)
+            s_shots[index].task = s_shots[index].object = 0;
+        s_manager = manager;
+    }
+    s_scope_stage = stage;
+    s_scope_encounter = encounter;
+    s_scope_visit = visit;
+    /* Expire on every frame, including followers. A promotion must never
+     * replay presses accumulated under the former owner. */
+    for (index = 0; index < IP_CURSOR_MAX; ++index)
+    {
+        ImpactControls *control = &s_controls[index];
+        if (control->axis_age < 10) ++control->axis_age;
+        if (s_controls_owner != anchor_impact_native_is_owner() ||
+            (control->cid && ++control->age > 9))
+        {
+            control->cid = control->session = 0;
+            control->held = 0;
+        }
+    }
+    if (s_controls_owner != anchor_impact_native_is_owner())
+        s_press_head = s_press_count = s_action_remote = 0;
+    if (s_controls_owner != anchor_impact_native_is_owner() || !reeling(s_reel_target))
+        s_reel_head = s_reel_count = 0;
+    for (index = 0; index < s_reel_count; ++index)
+        ++s_reel_presses[(s_reel_head+index) % IP_PENDING_MAX].age;
+    while (s_reel_count && s_reel_presses[s_reel_head].age > 9) {
+        s_reel_head = (s_reel_head+1) % IP_PENDING_MAX; --s_reel_count;
+    }
+    for (index = 0; index < s_press_count; ++index)
+        ++s_presses[(s_press_head+index) % IP_PENDING_MAX].age;
+    while (s_press_count && s_presses[s_press_head].age > 9) {
+        s_press_head = (s_press_head+1) % IP_PENDING_MAX;
+        --s_press_count;
+    }
+    s_controls_owner = anchor_impact_native_is_owner();
+
+    for (index = 0; index < 7; ++index)
+        sample.cursor[index] = 0;
+    cursor_task = IP_READ_PTR(state, IP_STATE_CURSOR);
+    cursor_object = linked(cursor_task) ? IP_READ_PTR(cursor_task, 0x18) : 0;
+    if (pointer_valid(cursor_object) &&
+        IP_READ_U32(cursor_object, 0x2C) == IP_CURSOR_MODEL &&
+        !(IP_READ_U8(cursor_object, 0x64) & 1u))
+    {
+        sample.cursor[0] = 1;
+        for (index = 0; index < 3; ++index)
+        {
+            sample.cursor[1 + index] = float_bits(
+                IP_READ_F32(cursor_object, 0x08 + index * 4));
+            sample.cursor[4 + index] = IP_READ_U16(cursor_object, 0x14 + index * 2);
+        }
+    }
+    for (index = 0; index < 3; ++index)
+    {
+        if (finite_word(sample.cursor[index + 1]))
+            continue;
+        /* Position words must remain finite even when hidden. */
+        sample.cursor[0] = 0;
+        for (index = 1; index < 7; ++index)
+            sample.cursor[index] = 0;
+        break;
+    }
+
+    sample.attack_count = 0;
+    for (index = 0; index < s_pending_count; ++index)
+    {
+        ImpactPending *pending =
+            &s_pending[(s_pending_head + index) % IP_PENDING_MAX];
+        if (pending->sequence <= s_accepted)
+            continue;
+        if (sample.attack_count >= 16u)
+            break;
+        for (count = 0; count < 8; ++count)
+            sample.attacks[sample.attack_count][count] = pending->row[count];
+        ++sample.attack_count;
+    }
+    if (!anchor_impact_players_encode(&sample, json_out,
+                                      (unsigned int)sizeof(json_out)))
+        return;
+    json = anchor_impact_players_update(1, stage, encounter, visit, json_out);
+    if (!json)
+        return;
+    if (!anchor_impact_players_decode(json, &status))
+    {
+        recomp_free(json);
+        return;
+    }
+    recomp_free(json);
+    s_accepted = status.accepted;
+    while (s_pending_count > 0 &&
+           s_pending[s_pending_head].sequence <= s_accepted)
+    {
+        s_pending_head = (s_pending_head + 1) % IP_PENDING_MAX;
+        --s_pending_count;
+    }
+    apply_cursors(&status);
+    apply_attacks(&status);
+}
+
+/* The authoritative graph includes actual shot lifetime and impact effects. */
+void anchor_impact_players_hide_shots(void)
+{
+    int i;
+    for (i = 0; i < IP_SHOT_MAX; ++i)
+        hide_slot_object(s_shots[i].task, s_shots[i].object, impact_shot_update);
+}
+
+void anchor_impact_players_reel_begin(void *task) { reel_begin(task); }
+void anchor_impact_players_reel_end(void) { reel_end(); }
+void anchor_impact_players_source_aim_begin(void *attack) { anchor_impact_attack_task_begin(attack); }
+void anchor_impact_players_source_aim_end(void) { task_aim_restore(); }
+
+/* Some boss reactions read the initiator's physical stick rather than aim.
+ * Scope that input to the reader; local cameras keep their real controller. */
+static void *s_source_axes_system;
+static unsigned int s_source_axes_saved[2];
+static int s_source_axes_pad;
+void anchor_impact_players_source_axes_end(void)
+{
+    int i;
+    if (s_source_axes_system && s_source_axes_system == D_8015C5C8_15D1C8)
+        for (i = 0; i < 2; ++i)
+            IP_WRITE_U32(s_source_axes_system,0x3B084+s_source_axes_pad*0x18+i*4,s_source_axes_saved[i]);
+    s_source_axes_system = 0;
+}
+void anchor_impact_players_source_axes_begin(void *attack)
+{
+    ImpactPress *source;
+    int i, j;
+    anchor_impact_players_source_axes_end();
+    if (!attack_context_live() || !anchor_impact_native_is_owner() ||
+        !pointer_valid(D_8015C5C8_15D1C8) || !(source = attack_aim(attack))) return;
+    s_source_axes_pad = (int)IP_READ_U32(D_8020EED0_63A2B0,0x1E4);
+    if (s_source_axes_pad < 0 || s_source_axes_pad > 1) return;
+    s_source_axes_system = D_8015C5C8_15D1C8;
+    for (j = 0; j < 2; ++j) {
+        s_source_axes_saved[j] = IP_READ_U32(s_source_axes_system,0x3B084+s_source_axes_pad*0x18+j*4);
+        IP_WRITE_F32(s_source_axes_system,0x3B084+s_source_axes_pad*0x18+j*4,0);
+    }
+    for (i = 0; i < IP_CURSOR_MAX; ++i) {
+        ImpactControls *c = &s_controls[i];
+        if (c->cid != source->cid || c->session != source->session || c->axis_age > 9) continue;
+        IP_WRITE_F32(s_source_axes_system,0x3B084+s_source_axes_pad*0x18,c->axis_x/80.0f);
+        IP_WRITE_F32(s_source_axes_system,0x3B088+s_source_axes_pad*0x18,c->axis_y/80.0f);
+        break;
+    }
+}
