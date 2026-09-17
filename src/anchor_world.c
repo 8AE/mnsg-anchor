@@ -103,6 +103,7 @@ typedef struct {
   unsigned short entity;
   unsigned char kind, ready, generation, have;
   unsigned char has_path, talkable, variant, animated, door_local, local_motion;
+  unsigned char door_remote, door_closing;
   unsigned int clip, owner, cycle;
   unsigned char emit_pending;
   int net[ANCHOR_WORLD_WORDS];
@@ -134,6 +135,11 @@ static int find(void *actor) {
     if (s_actors[i].actor == actor)
       return (int)i;
   return -1;
+}
+static int travel_door(const WorldActor *w) {
+  /* 0x23A is a progression barrier that can permanently disappear. The
+   * other animated door families use local room-travel callbacks. */
+  return w->kind == WORLD_DOOR && w->animated && w->entity != 0x23a;
 }
 int anchor_world_actor_placed(void *actor) { return find(actor) >= 0; }
 int anchor_world_actor_authority(void *actor, unsigned int *placed_index) {
@@ -295,6 +301,9 @@ void anchor_world_register(void *actor, void *source) {
       s_actors[i].clip = 0;
       s_actors[i].applied_valid = 0;
       s_actors[i].emit_pending = 0;
+      s_actors[i].door_local = 0;
+      s_actors[i].door_remote = 0;
+      s_actors[i].door_closing = 0;
       return;
     }
 }
@@ -330,8 +339,7 @@ void anchor_world_animation(void *actor, unsigned int clip) {
 RECOMP_HOOK("func_80216CE0_5D21B0")
 void anchor_world_static_model(void *actor, void *object, unsigned int clip) {
   int i = find(actor);
-  (void)object;
-  if (i >= 0 && !s_applying && clip <= 255) {
+  if (i >= 0 && object == PTR(actor, 0x18) && !s_applying && clip <= 255) {
     s_actors[i].clip = clip;
     s_actors[i].animated = 0;
   }
@@ -410,8 +418,17 @@ void anchor_world_wall_end(void) {
 RECOMP_HOOK("func_801FB240_5B7150")
 void anchor_world_door_interaction(void) {
   int i = find(D_8016DAB4_16E6B4);
-  if (i >= 0 && s_actors[i].kind == WORLD_DOOR)
-    s_actors[i].door_local = 30;
+  if (i >= 0 && s_actors[i].kind == WORLD_DOOR) {
+    WorldActor *w = &s_actors[i];
+    if (travel_door(w) && (w->door_remote || w->door_closing)) {
+      /* A local traveller can reopen a closing door from its current pose.
+       * Only this native interaction may acquire player-control ownership. */
+      U32(w->actor, 0x60) &= ~0x01000000u;
+      U8(PTR(w->actor, 0x18), 0x7c) &= ~7u;
+    }
+    w->door_remote = w->door_closing = 0;
+    w->door_local = 30;
+  }
 }
 /* File 34 emitter callbacks fire exactly when their old countdown is zero.
  * Children carry independent live checkpoints; this counter identifies the
@@ -525,6 +542,7 @@ static int capture(unsigned int i, int *r) {
     r[3] = w->door_local != 0;
     r[29] |= (U32(a, 0x60) & 1u) ? 16 : 0;
     r[29] |= (U32(a, 0x60) & 0x80000000u) ? 4 : 0;
+    r[29] |= (U32(a, 0x60) & 0x01000000u) ? 2 : 0;
     if (w->door_local) {
       if ((U32(a, 0x60) & 1u) ||
           (D_8015C5C8_15D1C8 && U8(D_8015C5C8_15D1C8, 0x3ae23)))
@@ -722,13 +740,40 @@ static int apply(WorldActor *w) {
   U16(o, 0x7e) = (unsigned short)r[12];
   U8(o, 0x7c) = (unsigned char)((U8(o, 0x7c) & ~7u) | (unsigned int)r[13]);
   U32(a, 0x60) = (U32(a, 0x60) & ~0x20u) | ((r[29] & 1) ? 0x20u : 0u);
-  if (w->kind == WORLD_DOOR)
-    U32(a, 0x60) = (U32(a, 0x60) & ~0x80000001u) |
-                   ((r[29] & 4) ? 0x80000000u : 0u) | ((r[29] & 16) ? 1u : 0u);
+  if (w->kind == WORLD_DOOR) {
+    U32(a, 0x60) = (U32(a, 0x60) & ~0x81000001u) |
+                   ((r[29] & 4) ? 0x80000000u : 0u) |
+                   ((r[29] & 2) ? 0x01000000u : 0u) |
+                   ((r[29] & 16) ? 1u : 0u);
+    if (travel_door(w)) {
+      w->door_closing = (r[29] & 2) != 0;
+      w->door_remote = !w->door_closing && (r[3] || r[11] > 0);
+    }
+  }
   for (j = 0; j < ANCHOR_WORLD_WORDS; ++j)
     w->applied[j] = r[j];
   w->applied_valid = 1;
   return 1;
+}
+static void door_close(WorldActor *w, void *object) {
+  void *a = w->actor;
+  if (!travel_door(w) || w->door_local)
+    return;
+  if (w->door_remote && (!w->have || !w->net[3])) {
+    /* The traveller stopped advertising this interaction (including leaving
+     * the room). Reverse the existing clip through the native common post;
+     * never run a foreign travel/animation-complete callback. */
+    w->door_remote = 0;
+    w->door_closing = 1;
+    U32(a, 0x60) |= 0x01000001u;
+    U8(object, 0x7c) &= ~7u;
+  }
+  if (w->door_closing && F32(object, 0x28) <= 0.0f) {
+    F32(object, 0x28) = 0;
+    U32(a, 0x60) &= ~0x01000001u;
+    U8(object, 0x7c) &= ~7u;
+    w->door_closing = 0;
+  }
 }
 static void world_callback(void *actor, void *object) {
   int i = find(actor);
@@ -748,6 +793,7 @@ static void world_callback(void *actor, void *object) {
     /* Only presentation and mesh state travel. Native door callbacks own
      * local input, travel, fade/camera and player-control work independently.
      */
+    door_close(w, object);
     unsigned int was_animating = U32(actor, 0x60) & 1u;
     if (real)
       real(actor, object);
@@ -838,7 +884,8 @@ void anchor_world_scheduler_begin(void) {
     if (w->kind == WORLD_PICKUP) {
       if (!(s_dead[i >> 3] & (1u << (i & 7))))
         continue;
-    } else if (!w->have)
+    } else if (!w->have &&
+               !(w->kind == WORLD_DOOR && (w->door_remote || w->door_closing)))
       continue;
     w->saved_ai = PTR(a, 0x0c);
     PTR(a, 0x0c) = (void *)((unsigned long)world_callback |

@@ -38,6 +38,7 @@ static unsigned int system_words[0x40000 / 4];
 unsigned char *D_8015C5C8_15D1C8 = (unsigned char *)system_words;
 void *D_80236984_5F1E54[4];
 static int native_calls, talk_calls, anim_calls;
+static int travel_calls;
 int func_80220F70_5DC440(void *a) {
   (void)a;
   ++talk_calls;
@@ -86,6 +87,7 @@ static WorldActor *fixture(unsigned int id, unsigned int variant) {
   s_self = 2;
   s_active = 1;
   native_calls = talk_calls = anim_calls = 0;
+  travel_calls = 0;
   D_800C7AB2 = 0x161;
   D_801FC604_5B8514 = 0;
   U16(definition, 0) = id;
@@ -299,6 +301,86 @@ static void doors_and_walls_test(void) {
   w = fixture(0x23d, 0);
   assert(!w->kind); /* non-breakable native subtype */
 }
+static void travel_idle(void *a, void *o) {
+  (void)o;
+  ++native_calls;
+  if (U16(a, 0xda)) {
+    D_8016DAB4_16E6B4 = a;
+    anchor_world_door_interaction();
+    U32(a, 0x60) |= 1;
+    ++travel_calls;
+  }
+}
+static void door_post(void) {
+  /* Substitute the native common animation step 80216AB8. */
+  if ((U32(actor, 0x60) & 1) && !(U8(object, 0x7c) & 2)) {
+    float delta = (float)U16(object, 0x7e) * 2 / 256;
+    F32(object, 0x28) += (U32(actor, 0x60) & 0x01000000u) ? -delta : delta;
+    if (F32(object, 0x28) <= 0) {
+      F32(object, 0x28) = 0;
+      U8(object, 0x7c) |= 2;
+    }
+  }
+}
+static void remote_travel_door_closes_and_reopens_test(void) {
+  WorldActor *w = fixture(0x23c, 0);
+  int status[ANCHOR_WORLD_WORDS];
+  PTR(actor, 0xc) = travel_idle;
+  anchor_world_animation(actor, 0);
+  anchor_world_static_model(actor, player_object, 1);
+  assert(w->animated && w->clip == 0); /* linked decoration is not the door */
+  checkpoint(w);
+  w->net[3] = 1;
+  w->net[11] = 1500;
+  w->net[13] = 2; /* opening reached its last frame */
+  w->net[29] = 20;
+  tick();
+  assert(w->door_remote && !w->door_local && !travel_calls);
+  assert(F32(object, 0x28) == 15);
+  w->have = 0; /* traveller leaves; local authority has no incoming row */
+  tick();
+  assert(w->door_closing && (U32(actor, 0x60) & 0x01000001u) == 0x01000001u);
+  assert(!(U8(object, 0x7c) & 7));
+  assert(capture(0, status) && (status[29] & 18) == 18 && !status[3]);
+  for (int j = 0; j < 10; ++j) {
+    door_post();
+    tick();
+  }
+  assert(F32(object, 0x28) == 0 && !w->door_closing);
+  assert((U32(actor, 0x60) & 0x81000001u) == 0x80000000u);
+  assert(PTR(actor, 0xc) == (void *)travel_idle && !travel_calls);
+  assert(capture(0, status) && !(status[29] & 18) && !status[3]);
+
+  /* A late observer follows the reverse checkpoint between packets. */
+  w->have = 1;
+  w->net[3] = 0;
+  w->net[11] = 1200;
+  w->net[13] = 0;
+  w->net[29] = 22;
+  tick(); door_post();
+  assert(w->door_closing && F32(object, 0x28) == 10);
+  tick(); door_post();
+  assert(F32(object, 0x28) == 8 && !travel_calls);
+
+  /* Actual local input reverses direction and retains native travel. */
+  U16(actor, 0xda) = 1;
+  tick();
+  assert(travel_calls == 1 && w->door_local && !w->door_closing);
+  assert(!(U32(actor, 0x60) & 0x01000000u));
+  door_post();
+  assert(F32(object, 0x28) == 10);
+  U16(actor, 0xda) = 0;
+  w->net[11] = 200;
+  tick();
+  assert(F32(object, 0x28) == 10); /* stale remote close cannot override input */
+
+  w = fixture(0x23a, 0);
+  anchor_world_animation(actor, 0);
+  w->door_remote = 1;
+  F32(object, 0x28) = 15;
+  tick();
+  assert(!w->door_closing && F32(object, 0x28) == 15);
+}
 static void safety_test(void) {
   int n = 0;
   volatile union {
@@ -373,6 +455,7 @@ static void lifecycle_test(void) {
   assert(!w->actor);
 }
 int main(void) {
+  remote_travel_door_closes_and_reopens_test();
   npc_test();
   platform_test();
   mechanism_test();

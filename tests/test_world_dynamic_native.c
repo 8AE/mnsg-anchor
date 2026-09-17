@@ -1,5 +1,6 @@
 /* Real child hooks and restoration code with host native-call substitutes. */
 #include "impact_test_pointers.h"
+#include "item_sync.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,7 +35,16 @@ static unsigned int actors[8][64], objects[8][64], model[2];
 static unsigned int clips[20];
 static unsigned short resources[2] = {100, 101};
 static int used, loaded = 1, calls, awards, binds, talks;
+static unsigned int health, ryo, excluded_health, excluded_ryo;
+static unsigned int shadow_object[64];
 static float shine_x;
+
+unsigned int item_sync_local_player_health(void) { return health; }
+unsigned int item_sync_local_player_ryo(void) { return ryo; }
+void item_sync_exclude_loot_reward(unsigned int hp, unsigned int money) {
+  excluded_health += hp;
+  excluded_ryo += money;
+}
 
 int anchor_world_actor_placed(void *a) {
   (void)a;
@@ -65,8 +75,7 @@ void func_8021664C_5D1B1C(void *a, unsigned int c, float s, unsigned int f) {
   ++binds;
 }
 void func_80216DF8_5D22C8(void *a, unsigned int c) {
-  (void)a;
-  (void)c;
+  world_dynamic_static(a, DPTR(a, 0x18), c);
   ++binds;
 }
 void func_80218DCC_5D429C(void *a, unsigned int s) {
@@ -81,14 +90,17 @@ float func_8001B5AC_1C1AC(void *o) {
 void func_802145F0_5CFAC0(void *a) {
   (void)a;
   ++awards;
+  ryo = ryo + 5 > 9999 ? 9999 : ryo + 5;
 }
 void func_80213FF0_5CF4C0(void *a) {
   (void)a;
   ++awards;
+  health = health + 2 > 20 ? 20 : health + 2;
 }
-void func_801DCD48_598C58(unsigned int amount) {
-  (void)amount;
+int func_801DCD48_598C58(signed char amount) {
+  health = health + amount > 20 ? 20 : health + amount;
   ++awards;
+  return 0;
 }
 void func_80038B98_39798(unsigned int s) { (void)s; }
 void *func_8021804C_5D351C(void *a, unsigned int f) {
@@ -97,15 +109,25 @@ void *func_8021804C_5D351C(void *a, unsigned int f) {
   return NULL;
 }
 void func_80219E70_5D5340(void *a, unsigned char s, unsigned char o) {
+  unsigned short model = H(a, 0x5e);
   (void)s;
   (void)o;
   W(a, 0x60) |= 0x08000000u;
+  /* Native 80219E70 -> 80216E54 -> 80216CE0 reuses the parent task
+   * with a linked object and temporarily chooses model 1, slot 0. */
+  H(a, 0x5e) = 1;
+  world_dynamic_static(a, shadow_object, 0);
+  H(a, 0x5e) = model;
 }
 void func_80224ABC_5DFF8C(void *a, int i, float s, int f) {
-  (void)a;
   (void)i;
   (void)s;
-  (void)f;
+  B(a, 0xab) = 5;
+  B(a, 0xac) = 1;
+  B(a, 0xad) = 0;
+  B(a, 0xae) = 1;
+  if (f)
+    W(a, 0x60) |= 4;
 }
 void func_802268A8_5E1D78(void *a) {
   (void)a;
@@ -151,6 +173,9 @@ static void fixture(void) {
   used = 0;
   loaded = 1;
   calls = awards = binds = talks = 0;
+  health = 10;
+  ryo = 100;
+  excluded_health = excluded_ryo = 0;
   parent_authority = 1;
   placed_actor = 0;
   bridge_reply = NULL;
@@ -256,6 +281,7 @@ static void claim_test(void) {
   tick(d);
   tick(d);
   assert(awards == 1 && (W(d->actor, 0x68) & 2u));
+  assert(ryo == 105 && excluded_ryo == 5 && excluded_health == 0);
   fixture();
   row(r, WD_HEALTH, 3);
   d = reconstruct(r);
@@ -268,6 +294,102 @@ static void claim_test(void) {
   d->row[WD_OWNER] = 1;
   tick(d);
   assert(awards == 0 && (W(d->actor, 0x68) & 2u));
+  assert(health == 10 && excluded_health == 0 && excluded_ryo == 0);
+}
+static void capped_private_rewards_test(void) {
+  int r[WORLD_DYNAMIC_WORDS], kind;
+  for (kind = WD_COIN; kind <= WD_FOOD; ++kind) {
+    DynamicActor *d;
+    fixture();
+    row(r, kind, kind == WD_COIN ? 1 : kind == WD_HEALTH ? 3 : 4);
+    d = reconstruct(r);
+    assert(d);
+    d->have = 1;
+    d->owner = 1;
+    assert(apply(d));
+    assert(H(DPTR(d->actor, 0x18), 0x14) == 0x8000);
+    assert(H(DPTR(d->actor, 0x18), 0x16) == 0x8000);
+    assert(H(DPTR(d->actor, 0x18), 0x18) == 0x8000);
+    ryo = 9997;
+    health = 19;
+    d->claimed = 1;
+    d->row[WD_LIFE] = WD_REMOVED;
+    d->row[WD_OWNER] = 2;
+    tick(d);
+    tick(d);
+    assert(awards == 1);
+    if (kind == WD_COIN)
+      assert(ryo == 9999 && excluded_ryo == 2 && excluded_health == 0);
+    else
+      assert(health == 20 && excluded_health == 1 && excluded_ryo == 0);
+    d->granted = 0;
+    tick(d);
+    assert(awards == 2); /* another pickup at the cap excludes no extra gain */
+    assert(excluded_ryo == (kind == WD_COIN ? 2u : 0u));
+    assert(excluded_health == (kind == WD_COIN ? 0u : 1u));
+  }
+}
+static void native_drop_shadow_registration_test(void) {
+  unsigned int parent, kind;
+  /* Both container and enemy drops keep their parent's entity number. */
+  for (parent = 0; parent < 2; ++parent)
+    for (kind = WD_COIN; kind <= WD_HEALTH; ++kind) {
+      void *a;
+      DynamicActor *d;
+      fixture();
+      addresses();
+      a = func_802171A8_5D2678(actors[7], d_phases[kind == WD_COIN ? 0 : 2], 9);
+      H(a, 0x5c) = parent ? 0x1e : 0x192;
+      world_dynamic_child(actors[7], a);
+      func_80216DF8_5D22C8(a, kind == WD_COIN ? 4 : 3);
+      func_80219E70_5D5340(a, 5, 0);
+      world_dynamic_post(a);
+      d = lookup(a);
+      assert(d && d->ready && d->kind == kind && capture(d));
+      assert(d->row[WD_CLIP] == (kind == WD_COIN ? 4 : 3));
+      W(a, 0x68) = 0x200;
+      tick(d);
+      assert(d->claimed && awards == 0 && capture(d));
+      assert(d->row[WD_LIFE] == WD_CLAIM);
+    }
+}
+static void local_coin_spin_and_shared_lifetime_test(void) {
+  int r[WORLD_DYNAMIC_WORDS], owner, frame;
+  for (owner = 1; owner <= 2; ++owner) {
+    DynamicActor *d;
+    unsigned int loops = 0;
+    fixture();
+    row(r, WD_COIN, 1);
+    r[WD_TIMER] = 90;
+    r[WD_FLAGS_LO] = 2; /* Native texture stepping; loop choice stays local. */
+    d = reconstruct(r);
+    assert(d);
+    d->have = 1;
+    d->owner = owner;
+    for (frame = 0; frame < 80; ++frame) {
+      unsigned char cursor = B(d->actor, 0xad);
+      d->net[WD_TIMER] = 90 - frame;
+      d->dirty = 1;
+      tick(d);
+      assert(B(d->actor, 0xad) == cursor); /* snapshots do not reset spin */
+      assert(S(d->actor, 0x8a) == 90 - frame);
+      /* Native 80224B88/80224834 advance locally and test bit 4 at the
+       * end of the texture sequence. Use a short substitute sequence. */
+      assert((W(d->actor, 0x60) & 6) == 6 && B(d->actor, 0xac) == 1);
+      if (++B(d->actor, 0xad) == 8) {
+        if (W(d->actor, 0x60) & 4)
+          B(d->actor, 0xad) = 0;
+        else
+          B(d->actor, 0xac) = 0;
+        ++loops;
+      }
+    }
+    assert(loops == 10 && capture(d) && d->row[WD_TIMER] == 11);
+    d->row[WD_LIFE] = WD_REMOVED;
+    d->row[WD_OWNER] = 0; /* shared expiry, not a pickup */
+    tick(d);
+    assert((W(d->actor, 0x68) & 2) && awards == 0);
+  }
 }
 static void birth_and_reuse_test(void) {
   void *a;
@@ -400,6 +522,9 @@ static void frame_reconstruction_and_speculative_retirement_test(void) {
   bridge_reply = NULL;
 }
 int main(void) {
+  local_coin_spin_and_shared_lifetime_test();
+  native_drop_shadow_registration_test();
+  capped_private_rewards_test();
   frame_reconstruction_and_speculative_retirement_test();
   candidate_capacity_and_effect_pose_test();
   reconstruction_test();

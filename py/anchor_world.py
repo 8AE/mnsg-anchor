@@ -8,7 +8,7 @@ import json
 
 PACKET_TYPE = 'MNSG_WORLD'
 METADATA_KEY = 'worldSync'
-VERSION = 2
+VERSION = 3
 WORDS = 39
 MAX_ACTORS = 256
 ROWS_PER_PACKET = 24
@@ -220,7 +220,11 @@ class WorldTransport:
                     output.append([owner, int(max(0,now-peer['time'])*1000)] + state)
             else:
                 publish.append(row)
-        edge=(presence.hex()!=self.last_presence or self.dead.hex()!=self.last_dead or busy.hex()!=self.last_busy)
+        # Door reversal/stop changes must arrive promptly even though the
+        # remaining simulator is not a player interacting with the door.
+        door_motion = lambda rs: {r[0]:r[29]&18 for r in rs if r[2]==5}
+        edge=(presence.hex()!=self.last_presence or self.dead.hex()!=self.last_dead or
+              busy.hex()!=self.last_busy or door_motion(publish)!=door_motion(self.last_rows))
         changed = tuple(tuple(r) for r in publish) != self.last_rows
         packets=[]
         # Edge bypass has its own hard 20 Hz floor; steady checkpoints are 5 Hz.

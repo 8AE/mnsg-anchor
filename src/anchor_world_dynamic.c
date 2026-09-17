@@ -5,6 +5,7 @@
 #include "anchor.h"
 #include "anchor_dialog.h"
 #include "enemy_sync.h"
+#include "item_sync.h"
 #include "modding.h"
 #include "recomputils.h"
 #endif
@@ -36,7 +37,7 @@ extern void func_80218DCC_5D429C(void *, unsigned int);
 extern float func_8001B5AC_1C1AC(void *);
 extern void func_802145F0_5CFAC0(void *);
 extern void func_80213FF0_5CF4C0(void *);
-extern void func_801DCD48_598C58(unsigned int);
+extern int func_801DCD48_598C58(signed char);
 extern void func_80038B98_39798(unsigned int);
 extern void *func_8021804C_5D351C(void *, unsigned int);
 extern void func_80219E70_5D5340(void *, unsigned char, unsigned char);
@@ -260,8 +261,10 @@ void world_dynamic_animation(void *actor, unsigned int clip) {
 RECOMP_HOOK("func_80216CE0_5D21B0")
 void world_dynamic_static(void *actor, void *object, unsigned int clip) {
   DynamicActor *d = lookup(actor);
-  (void)object;
-  if (d && !d_binding && clip <= 255) {
+  /* The same binder builds linked objects: shadow setup temporarily selects
+   * model 1, clip 0 on this actor but supplies a different object. Only the
+   * primary object describes the actor we replicate. */
+  if (d && object == DPTR(actor, 0x18) && !d_binding && clip <= 255) {
     d->clip = (unsigned char)clip;
     d->animated = 0;
   }
@@ -530,6 +533,13 @@ static void bind(DynamicActor *d, const int *r) {
   d->clip = (unsigned char)r[WD_CLIP];
   d->animated = (unsigned char)r[WD_ANIMATED];
 }
+static unsigned short object_angle(const int *r, unsigned int axis) {
+  /* Every supported loot constructor calls 8021A310. Its exact 0x8000
+   * orientation cannot be represented by the ordinary 10-bit angle fields. */
+  return r[WD_KIND] >= WD_COIN && r[WD_KIND] <= WD_FOOD
+             ? 0x8000u
+             : (unsigned short)r[WD_PITCH + axis];
+}
 static int apply(DynamicActor *d) {
   int *r = d->net;
   void *a = d->actor, *o;
@@ -546,7 +556,7 @@ static int apply(DynamicActor *d) {
     bind(d, r);
   for (j = 0; j < 3; ++j) {
     F(o, 8 + j * 4) = (float)r[WD_X + j] / 100.0f;
-    H(o, 0x14 + j * 2) = (unsigned short)r[WD_PITCH + j];
+    H(o, 0x14 + j * 2) = object_angle(r, j);
     F(a, 0x78 + j * 4) = (float)r[WD_VX + j] / 1000.0f;
     F(o, 0x1c + j * 4) = (float)r[WD_SX + j] / 1000.0f;
   }
@@ -561,9 +571,13 @@ static int apply(DynamicActor *d) {
   /* These families use common scalar flags, not mesh/actor-pointer modes. */
   {
     unsigned int shadow = W(a, 0x60) & 0x08000000u;
+    /* Coin spin is a local texture sequence (+AB..+AE), not the lifetime
+     * timer at +8A. Preserve its native loop flag so the common post keeps
+     * advancing it instead of stopping the sequence after one revolution. */
+    unsigned int texture_loop = d->kind == WD_COIN ? 4u : 0;
     W(a, 0x60) =
-        ((unsigned int)r[WD_FLAGS_LO] | ((unsigned int)r[WD_FLAGS_HI] << 16)) &
-        (0x16e00febu | shadow);
+        (((unsigned int)r[WD_FLAGS_LO] | ((unsigned int)r[WD_FLAGS_HI] << 16)) &
+         (0x16e00febu | shadow)) | texture_loop;
   }
   W(a, 0x64) =
       ((unsigned int)r[WD_AUX_LO] | ((unsigned int)r[WD_AUX_HI] << 16)) &
@@ -643,9 +657,12 @@ static void npc_native(void *a, void *o) {
 }
 static void award(DynamicActor *d) {
   void *a = d->actor;
+  unsigned int hp, ryo, after_hp, after_ryo;
   if (!a || d->granted)
     return;
   d->granted = 1;
+  hp = item_sync_local_player_health();
+  ryo = item_sync_local_player_ryo();
   if (d->kind == WD_COIN)
     func_802145F0_5CFAC0(a);
   else if (d->kind == WD_HEALTH)
@@ -655,6 +672,12 @@ static void award(DynamicActor *d) {
     func_801DCD48_598C58(40);
     func_8021804C_5D351C(a, 0);
   }
+  after_hp = item_sync_local_player_health();
+  after_ryo = item_sync_local_player_ryo();
+  /* Removal is shared; native rewards belong only to the winning collector.
+   * Exclude the actual capped gains from legacy health/ryo delta sharing. */
+  item_sync_exclude_loot_reward(after_hp > hp ? after_hp - hp : 0,
+                                after_ryo > ryo ? after_ryo - ryo : 0);
 }
 static void dynamic_callback(void *actor, void *object) {
   DynamicActor *d = lookup(actor);
@@ -815,7 +838,7 @@ static DynamicActor *reconstruct(const int *r) {
   for (j = 0; j < 3; ++j) {
     void *o = DPTR(a, 0x18);
     F(o, 8 + j * 4) = (float)r[WD_X + j] / 100.0f;
-    H(o, 0x14 + j * 2) = (unsigned short)r[WD_PITCH + j];
+    H(o, 0x14 + j * 2) = object_angle(r, j);
     F(o, 0x1c + j * 4) = (float)r[WD_SX + j] / 1000.0f;
   }
   if (r[WD_FLAGS_HI] & 0x800)

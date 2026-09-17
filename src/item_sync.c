@@ -1158,6 +1158,22 @@ void item_sync_exclude_pvp_damage(unsigned int damage)
 static signed int s_ryo_prev = 0; /* ryo observed last frame     */
 static int s_ryo_initialized = 0; /* 0 until baseline captured   */
 
+unsigned int item_sync_local_player_ryo(void)
+{
+    return DS_RYO_READ();
+}
+
+void item_sync_exclude_loot_reward(unsigned int health, unsigned int ryo)
+{
+    /* Move the comparison baselines by just this pickup's actual award.
+     * Setting them to current values would swallow unrelated damage or
+     * spending in the same frame. Full-health/capped-ryo pickups add zero. */
+    if (s_ds_initialized && DS_CHAR_IDX() == s_ds_prev_char)
+        s_ds_prev_hp += (signed int)health;
+    if (s_ryo_initialized)
+        s_ryo_prev += (signed int)ryo;
+}
+
 /* Maximum SET_FLAG packets sent per frame during incremental monitoring.
  * Extra changes are deferred by leaving their cache un-updated. */
 #define MAX_SENDS_PER_FRAME 1
@@ -2688,7 +2704,8 @@ void item_sync_update(void)
 
     /* ── Race challenge: Ryo delta sync ───────────────────────────────── */
     /* During an active race, broadcast both positive and negative balance */
-    /* deltas so earning and spending ryo are mirrored by teammates.       */
+    /* deltas so earning and spending ryo are mirrored by teammates,      */
+    /* excluding the private loot awards accounted for above.             */
     if (!valid || !anchor_race_is_active() || !anchor_runtime_ryo_sync_enabled())
     {
         s_ryo_initialized = 0;

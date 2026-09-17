@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 from test_boss_invitation_transport import load_client, RecordingSocket
 from test_world_transport import row
+import anchor_world as world
 from test_world_dynamic import actor
 
 
@@ -42,7 +43,7 @@ class WorldBridgeTests(unittest.TestCase):
             b._sock=receiver
             with mock.patch.object(b,'_do_disconnect'):
                 b._recv_loop(receiver)
-            self.assertEqual(b._player_states[1]['worldSync'],[2,101,1,0x12e,42])
+            self.assertEqual(b._player_states[1]['worldSync'],[world.VERSION,101,1,0x12e,42])
             b._sock=RecordingSocket()
             answer=json.loads(b.update_world(0x12e,42,1,sample))
             self.assertEqual(answer['a'][0][0],1)

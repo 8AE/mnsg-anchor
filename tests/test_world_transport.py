@@ -145,6 +145,51 @@ class WorldTests(unittest.TestCase):
         result,_=self.tick(self.b,self.cb,1.02)
         self.assertFalse(result['a'])
 
+    def test_door_departure_handoff_and_reverse_checkpoint(self):
+        opening=row(entity=0x23c,kind=5)
+        opening[3]=1;opening[11]=1500;opening[12]=256;opening[29]=20
+        self.send(self.a,self.ca,self.b,self.cb,1,[opening])
+        local=row(entity=0x23c,kind=5)
+        result,_=self.tick(self.b,self.cb,1.02,[local])
+        self.assertEqual(result['a'][0][0],1)
+        self.assertEqual(result['a'][0][2:],opening)
+        # Room departure immediately drops the stale opening checkpoint.
+        self.cb['players'][1]['roomId']=0x12f
+        result,_=self.tick(self.b,self.cb,1.03,[local])
+        self.assertEqual(result['a'],[])
+        self.assertEqual(self.b.owners[0],2)
+        closing=copy.deepcopy(opening)
+        closing[3]=0;closing[11]=1200;closing[29]=22
+        self.send(self.b,self.cb,self.a,self.ca,1.1,[closing])
+        result,_=self.tick(self.a,self.ca,1.12,rows=[])
+        # Receivers without a placed actor defer binding until native load.
+        self.assertEqual(result['a'],[])
+        # A traveller's native input takes priority over passive closing.
+        result,_=self.tick(self.a,self.ca,1.13,[opening])
+        self.assertEqual(self.a.owners[0],1)
+
+    def test_door_close_and_stop_edges_bypass_steady_interval(self):
+        r=row(entity=0x23c,kind=5);r[11]=1500;r[29]=20
+        _,packets=self.tick(self.a,self.ca,1,[r])
+        self.a.sent(packets,True,1)
+        r[29]=22
+        _,blocked=self.tick(self.a,self.ca,1.02,[r])
+        self.assertFalse(blocked)
+        _,closing=self.tick(self.a,self.ca,1.06,[r])
+        self.assertTrue(closing)
+        self.a.sent(closing,True,1.06)
+        r[11]=1400
+        _,motion=self.tick(self.a,self.ca,1.12,[r])
+        self.assertFalse(motion)
+        r[11]=0;r[29]=4
+        _,closed=self.tick(self.a,self.ca,1.12,[r])
+        self.assertTrue(closed)
+
+    def test_old_world_version_is_ineligible(self):
+        peer=self.cb['players'][1]
+        peer['worldSync'][0]=2
+        self.assertIsNone(self.b._peer(self.cb,1))
+
 
 class CodecTests(unittest.TestCase):
     @classmethod
