@@ -10,6 +10,7 @@
 #include "recomputils.h"
 #endif
 #include "anchor_world.h"
+#include "anchor_world_dynamic.h"
 #include "anchor_world_paths.inc"
 
 extern unsigned short D_800C7AB2;
@@ -68,11 +69,26 @@ typedef void (*Callback)(void *, void *);
     X(func_080003AC_6FB5AC) \
     X(func_08000ADC_6FBCDC) \
     X(func_08000A98_6FBC98) \
-    X(func_0800091C_6FBB1C)
+    X(func_0800091C_6FBB1C) \
+    X(func_08005988_6C50D8) \
+    X(func_08005A0C_6C515C) \
+    X(func_08005BC0_6C5310) \
+    X(func_08005C34_6C5384) \
+    X(func_08005CA8_6C53F8) \
+    X(func_0800204C_6FD24C) \
+    X(func_08002180_6FD380) \
+    X(func_0800220C_6FD40C) \
+    X(func_08002298_6FD498) \
+    X(func_080022E8_6FD4E8) \
+    X(func_08001C70_6FCE70) \
+    X(func_08000108_6BF858) \
+    X(func_08000760_6BFEB0) \
+    X(func_08004F74_6C46C4) \
+    X(func_08004FDC_6C472C)
 /* clang-format on */
 #define DECLARE(f) extern void f(void *, void *);
 PLATFORM_STATES(DECLARE)
-static Callback platform_states[30];
+static Callback platform_states[45];
 static void platform_addresses(void) {
   unsigned int i = 0;
   /* Overlay imports must be resolved by running code. Static relocations
@@ -86,7 +102,7 @@ typedef struct {
   void *source, *actor, *saved_ai;
   unsigned short entity;
   unsigned char kind, ready, generation, have;
-  unsigned char has_path, talkable, variant;
+  unsigned char has_path, talkable, variant, animated, door_local, local_motion;
   unsigned int clip, owner, cycle;
   unsigned char emit_pending;
   int net[ANCHOR_WORLD_WORDS];
@@ -119,6 +135,17 @@ static int find(void *actor) {
       return (int)i;
   return -1;
 }
+int anchor_world_actor_placed(void *actor) { return find(actor) >= 0; }
+int anchor_world_actor_authority(void *actor, unsigned int *placed_index) {
+  int i = find(actor);
+  if (i < 0)
+    return -1;
+  if (placed_index)
+    *placed_index = (unsigned int)i + 1;
+  if (!s_actors[i].kind)
+    return -1;
+  return !s_active || !s_actors[i].have || s_actors[i].owner == s_self;
+}
 static void unhold(void) {
   unsigned int i;
   for (i = 0; i < s_count; ++i) {
@@ -149,6 +176,8 @@ static unsigned int mix(unsigned int h, unsigned int v) {
 void anchor_world_roster_begin(unsigned int room) {
   unsigned int i;
   unhold();
+  if (s_room != room)
+    anchor_world_dynamic_room();
   s_old_signature = s_signature;
   s_old_room = s_room;
   for (i = 0; i < 32; ++i) {
@@ -191,10 +220,44 @@ void anchor_world_roster_add(unsigned int index, void *source,
     w->kind = WORLD_PICKUP;
   if (w->entity == 0x19a && U8(definition, 8) <= 2)
     w->kind = WORLD_EMITTER;
+  /* Other physical mechanisms have their own native continuation families.
+   * Their pointer-bearing private work is never treated as rotor state. */
+  if (w->entity == 0x197) {
+    w->kind = WORLD_PLATFORM;
+    w->variant = 14;
+  }
+  if (w->entity == 0x1fc) {
+    w->kind = WORLD_PLATFORM;
+    w->variant = 15;
+  }
+  if (w->entity == 0x1fd) {
+    w->kind = WORLD_PLATFORM;
+    w->variant = 16;
+  }
+  if (w->entity == 0x1f7) {
+    w->kind = WORLD_PLATFORM;
+    w->variant = 17;
+  }
+  if (w->entity == 0x245) {
+    w->kind = WORLD_PLATFORM;
+    w->variant = 18;
+  }
+  if (w->entity == 0x34a) {
+    w->kind = WORLD_PLATFORM;
+    w->variant = 19;
+  }
+  if (w->entity == 0x23a || w->entity == 0x23c || w->entity == 0x23e ||
+      w->entity == 0x23f || w->entity == 0x241 || w->entity == 0x242 ||
+      w->entity == 0x24d || w->entity == 0x31f || w->entity == 0x321 ||
+      w->entity == 0x32f)
+    w->kind = WORLD_DOOR;
+  if (w->entity == 0x23d && (U8(definition, 4) == 1 || U8(definition, 4) == 3 ||
+                             U8(definition, 4) == 4))
+    w->kind = WORLD_PICKUP;
 }
 void anchor_world_roster_end(unsigned int count) {
   unsigned int i;
-  if (!count || count > ANCHOR_WORLD_MAX)
+  if (count > ANCHOR_WORLD_MAX)
     return;
   s_count = count;
   s_signature = mix(s_hash, count);
@@ -253,14 +316,25 @@ void anchor_world_path_init(void *actor, unsigned short route) {
   if (s_actors[i].entity == 0x2c2 || s_actors[i].entity == 0x2c3 ||
       s_actors[i].entity == 0x2c4)
     s_actors[i].kind = WORLD_NPC;
-  if (s_actors[i].kind == WORLD_NPC)
+  if (s_actors[i].kind == WORLD_NPC || s_actors[i].entity == 0x1f7)
     s_actors[i].has_path = 1;
 }
 RECOMP_HOOK("func_8021664C_5D1B1C")
 void anchor_world_animation(void *actor, unsigned int clip) {
   int i = find(actor);
-  if (i >= 0 && !s_applying && clip <= 255)
+  if (i >= 0 && !s_applying && clip <= 255) {
     s_actors[i].clip = clip;
+    s_actors[i].animated = 1;
+  }
+}
+RECOMP_HOOK("func_80216CE0_5D21B0")
+void anchor_world_static_model(void *actor, void *object, unsigned int clip) {
+  int i = find(actor);
+  (void)object;
+  if (i >= 0 && !s_applying && clip <= 255) {
+    s_actors[i].clip = clip;
+    s_actors[i].animated = 0;
+  }
 }
 RECOMP_HOOK("func_80218F30_5D4400")
 void anchor_world_post(void *actor) {
@@ -302,8 +376,12 @@ void anchor_world_delete(void) {
 }
 static void collected(void *actor) {
   int i = find(actor);
-  if (s_active && i >= 0 && s_actors[i].kind == WORLD_PICKUP)
+  if (s_active && i >= 0 && s_actors[i].kind == WORLD_PICKUP) {
     s_dead[i >> 3] |= (unsigned char)(1u << (i & 7));
+    /* A locally broken container owns the contents it is about to create. */
+    s_actors[i].owner = s_self;
+    s_actors[i].have = 1;
+  }
 }
 RECOMP_HOOK("func_802145F0_5CFAC0")
 void anchor_world_coin(void *actor) { collected(actor); }
@@ -319,9 +397,25 @@ void anchor_world_food(void *actor) {
 }
 RECOMP_HOOK("func_08000150_6B30F0")
 void anchor_world_container(void *actor) { collected(actor); }
+static void *s_wall_actor;
+RECOMP_HOOK("func_08003410_6F68F0")
+void anchor_world_wall_begin(void *actor) { s_wall_actor = actor; }
+RECOMP_HOOK_RETURN("func_08003410_6F68F0")
+void anchor_world_wall_end(void) {
+  void *actor = s_wall_actor;
+  s_wall_actor = 0;
+  if (actor && find(actor) >= 0 && (U32(actor, 0x68) & 2u))
+    collected(actor);
+}
+RECOMP_HOOK("func_801FB240_5B7150")
+void anchor_world_door_interaction(void) {
+  int i = find(D_8016DAB4_16E6B4);
+  if (i >= 0 && s_actors[i].kind == WORLD_DOOR)
+    s_actors[i].door_local = 30;
+}
 /* File 34 emitter callbacks fire exactly when their old countdown is zero.
- * Replicas reproduce a new cycle once; receiving a checkpoint never rewinds
- * their native callback and accidentally repeats an already emitted hazard. */
+ * Children carry independent live checkpoints; this counter identifies the
+ * emitter phase without replaying its child constructors on replicas. */
 static void emitter_cycle(void *actor) {
   int i = find(actor);
   if (!s_applying && s_active && i >= 0 && s_actors[i].kind == WORLD_EMITTER &&
@@ -358,6 +452,31 @@ static int paused(void) {
   return anchor_dialog_world_paused() || !D_8015C5C8_15D1C8 ||
          (U16(D_8015C5C8_15D1C8, 0x3ae24) & 1u) ||
          U16(D_8015C5C8_15D1C8, 0x3ae26) != 0;
+}
+int anchor_world_is_paused(void) { return paused(); }
+static int interacting(const WorldActor *w) {
+  void *player_object;
+  unsigned int p;
+  if (!w->actor || !PTR(w->actor, 0x18))
+    return 0;
+  if (D_801FC604_5B8514 && PTR(D_801FC604_5B8514, 0xa0) == PTR(w->actor, 0x18))
+    return 1;
+  /* The elevator can be called from the other floor without standing on it.
+   * Its local table is native immutable data, not imported private state. */
+  if (w->variant == 15 && D_801FC604_5B8514 &&
+      (player_object = PTR(D_801FC604_5B8514, 0x18)) && PTR(w->actor, 0xe0)) {
+    void *table = PTR(w->actor, 0xe0), *o = PTR(w->actor, 0x18);
+    p = (unsigned int)phase(w->saved_ai ? w->saved_ai : PTR(w->actor, 0xc));
+    if (w->local_motion && p >= 37 && p <= 40)
+      return 1;
+    if (p == 36 && ((F32(o, 0xc) == F32(table, 20) &&
+                     F32(player_object, 0xc) > S16(table, 0)) ||
+                    (F32(o, 0xc) == F32(table, 8) &&
+                     F32(player_object, 0xc) < S16(table, 0))))
+      return 1;
+  }
+  return (w->variant == 17 || w->variant == 18) &&
+         (U32(w->actor, 0x68) & 0x10000u);
 }
 static int scaled(float f, float scale, int lo, int hi, int *out) {
   /* Volatile bit access keeps this check intact under the mod's fast-math
@@ -402,19 +521,38 @@ static int capture(unsigned int i, int *r) {
   r[12] = U16(o, 0x7e);
   r[13] = U8(o, 0x7c) & 7u;
   r[29] = (U32(a, 0x60) & 0x20u) != 0;
+  if (w->kind == WORLD_DOOR) {
+    r[3] = w->door_local != 0;
+    r[29] |= (U32(a, 0x60) & 1u) ? 16 : 0;
+    r[29] |= (U32(a, 0x60) & 0x80000000u) ? 4 : 0;
+    if (w->door_local) {
+      if ((U32(a, 0x60) & 1u) ||
+          (D_8015C5C8_15D1C8 && U8(D_8015C5C8_15D1C8, 0x3ae23)))
+        w->door_local = 30;
+      else
+        --w->door_local;
+    }
+  }
   if (w->kind == WORLD_PLATFORM) {
-    if (w->variant == 12 && D_801FC604_5B8514 &&
-        PTR(D_801FC604_5B8514, 0xa0) == o)
-      r[3] = 1;
+    if (w->variant == 15 && phase(PTR(a, 0xc)) == 36)
+      w->local_motion = 0;
+    r[3] = interacting(w) != 0;
     r[29] |= (U32(a, 0x60) & 0x800000u) ? 2 : 0;
+    r[29] |= (U32(a, 0x60) & 0x80000000u) ? 4 : 0;
+    r[29] |= (U32(a, 0x60) & 0x100u) ? 8 : 0;
     for (j = 0; j < 3; ++j)
       r[34 + j] = S16(a, 0xc8 + j * 2);
     r[17] = S16(a, 0x8a);
     r[18] = phase(PTR(a, 0x0c));
     if (!r[18])
       return 0; /* Native initializer has not reached a supported state. */
-    for (j = 0; j < 7; ++j)
-      r[19 + j] = S16(a, 0xd0 + j * 2);
+    if (w->variant < 14) {
+      for (j = 0; j < 7; ++j)
+        r[19 + j] = S16(a, 0xd0 + j * 2);
+    } else if (w->variant == 14)
+      r[19] = S16(a, 0xa0);
+    else if (w->variant == 16)
+      r[19] = S16(a, 0xe4);
     if (w->variant == 9)
       r[31] = (int)w->cycle;
   }
@@ -422,7 +560,7 @@ static int capture(unsigned int i, int *r) {
     r[17] = S16(a, 0x8a);
     r[18] = (int)w->cycle;
   }
-  if (w->kind == WORLD_NPC) {
+  if (w->kind == WORLD_NPC || w->has_path) {
     r[30] = 163;
     if (w->has_path) {
       r[30] = U16(a, 0xc4);
@@ -447,6 +585,18 @@ static int changed(WorldActor *w) {
   return 0;
 }
 static int platform_phase_valid(const WorldActor *w, int phase) {
+  if (w->variant == 14)
+    return phase >= 31 && phase <= 35;
+  if (w->variant == 15)
+    return phase >= 36 && phase <= 40;
+  if (w->variant == 16)
+    return phase == 41;
+  if (w->variant == 17)
+    return phase == 42;
+  if (w->variant == 18)
+    return phase == 43;
+  if (w->variant == 19)
+    return phase == 44 || phase == 45;
   static const unsigned char first[14] = {1, 4,  3,  7,  7,  10, 1,
                                           3, 13, 16, 18, 22, 24, 27};
   static const unsigned char last[14] = {2, 6,  3,  9,  9,  12, 2,
@@ -481,9 +631,14 @@ static int apply(WorldActor *w) {
   unsigned int j;
   if (!changed(w))
     return 1;
-  if (w->kind == WORLD_NPC && !clip_valid(a, (unsigned int)r[10]))
+  if (w->kind == WORLD_DOOR && w->door_local)
+    return 1;
+  if (w->kind == WORLD_PLATFORM && interacting(w))
+    return 1;
+  if ((w->kind == WORLD_NPC || w->animated) &&
+      !clip_valid(a, (unsigned int)r[10]))
     return 0;
-  if (w->kind == WORLD_NPC) {
+  if (w->kind == WORLD_NPC || w->has_path) {
     unsigned int route = w->has_path ? U16(a, 0xc4) : 163,
                  pc = (unsigned int)r[33];
     if (route != (unsigned int)r[30] || route > 163 ||
@@ -509,6 +664,10 @@ static int apply(WorldActor *w) {
     /* Variant 1 divides by its immutable nonzero duration byte. */
     if (w->variant == 1 && ((r[19] & 255) == 0 || (r[19] & 255) != U8(a, 0xd1)))
       return 0;
+    if (w->variant == 14 && r[19] != S16(a, 0xa0))
+      return 0;
+    if (w->variant == 16 && (r[19] < -50 || r[19] > 50))
+      return 0;
     if (w->variant == 9) {
       if (r[31] < 0)
         return 0;
@@ -517,12 +676,19 @@ static int apply(WorldActor *w) {
       w->cycle = (unsigned int)r[31];
     }
     S16(a, 0x8a) = (short)r[17];
-    for (j = 0; j < 7; ++j)
-      S16(a, 0xd0 + j * 2) = (short)r[19 + j];
+    if (w->variant < 14) {
+      for (j = 0; j < 7; ++j)
+        S16(a, 0xd0 + j * 2) = (short)r[19 + j];
+    } else if (w->variant == 16) {
+      S16(a, 0xe4) = (short)r[19];
+    }
     w->saved_ai = (void *)platform_states[r[18] - 1];
     for (j = 0; j < 3; ++j)
       S16(a, 0xc8 + j * 2) = (short)r[34 + j];
     U32(a, 0x60) = (U32(a, 0x60) & ~0x800000u) | ((r[29] & 2) ? 0x800000u : 0u);
+    U32(a, 0x60) = (U32(a, 0x60) & ~0x80000100u) |
+                   ((r[29] & 4) ? 0x80000000u : 0u) |
+                   ((r[29] & 8) ? 0x100u : 0u);
   }
   if (w->kind == WORLD_EMITTER) {
     if (r[17] < 0 || r[17] > 150)
@@ -538,14 +704,14 @@ static int apply(WorldActor *w) {
     F32(a, 0x78 + j * 4) = (float)r[14 + j] / 1000.0f;
     F32(o, 0x1c + j * 4) = (float)r[26 + j] / 1000.0f;
   }
-  if (w->kind == WORLD_NPC && (unsigned int)r[10] != w->clip) {
+  if ((w->kind == WORLD_NPC || w->animated) && (unsigned int)r[10] != w->clip) {
     s_applying = 1;
     func_8021664C_5D1B1C(a, (unsigned int)r[10], (float)r[12] / 256.0f,
                          r[13] & 1);
     s_applying = 0;
     w->clip = (unsigned int)r[10];
   }
-  if (w->kind == WORLD_NPC) {
+  if (w->kind == WORLD_NPC || w->animated) {
     float frame = (float)r[11] / 100.0f, limit = func_8001B5AC_1C1AC(o);
     if (limit > 0.0f && frame >= limit)
       frame = limit - 1.0f;
@@ -556,6 +722,9 @@ static int apply(WorldActor *w) {
   U16(o, 0x7e) = (unsigned short)r[12];
   U8(o, 0x7c) = (unsigned char)((U8(o, 0x7c) & ~7u) | (unsigned int)r[13]);
   U32(a, 0x60) = (U32(a, 0x60) & ~0x20u) | ((r[29] & 1) ? 0x20u : 0u);
+  if (w->kind == WORLD_DOOR)
+    U32(a, 0x60) = (U32(a, 0x60) & ~0x80000001u) |
+                   ((r[29] & 4) ? 0x80000000u : 0u) | ((r[29] & 16) ? 1u : 0u);
   for (j = 0; j < ANCHOR_WORLD_WORDS; ++j)
     w->applied[j] = r[j];
   w->applied_valid = 1;
@@ -575,22 +744,29 @@ static void world_callback(void *actor, void *object) {
   if (w->have && !apply(w))
     w->have = 0;
   real = (Callback)((unsigned long)w->saved_ai & ~DISABLED);
-  if (!w->have || w->owner == s_self) {
+  if (w->kind == WORLD_DOOR) {
+    /* Only presentation and mesh state travel. Native door callbacks own
+     * local input, travel, fade/camera and player-control work independently.
+     */
+    unsigned int was_animating = U32(actor, 0x60) & 1u;
+    if (real)
+      real(actor, object);
+    if (!was_animating && (U32(actor, 0x60) & 1u))
+      w->door_local = 30;
+    return;
+  }
+  if (!w->have || w->owner == s_self ||
+      (w->kind == WORLD_PLATFORM && interacting(w))) {
+    if (w->kind == WORLD_PLATFORM && w->variant == 15 && interacting(w))
+      w->local_motion = 1;
     if (real)
       real(actor, object);
     return;
   }
   if (w->kind == WORLD_EMITTER) {
-    if (w->emit_pending && !w->net[38]) {
-      short timer = S16(actor, 0x8a);
-      S16(actor, 0x8a) = 0;
-      s_applying = 1;
-      if (real)
-        real(actor, object);
-      s_applying = 0;
-      S16(actor, 0x8a) = timer;
-      w->emit_pending = 0;
-    }
+    /* Child snapshots reconstruct the current live set, including hazards
+     * already in flight when a peer enters. Never replay the birth here. */
+    w->emit_pending = 0;
     if (!w->net[38] && S16(actor, 0x8a) > 0)
       --S16(actor, 0x8a);
     return;
@@ -600,8 +776,12 @@ static void world_callback(void *actor, void *object) {
       if (U32(actor, 0x68) & 0x100u) {
         if (real)
           real(actor, object);
-      } else
+      } else {
+        PTR(actor, 0x0c) = (void *)real;
         func_80220F70_5DC440(actor);
+        if (PTR(actor, 0x0c) == (void *)real)
+          PTR(actor, 0x0c) = (void *)world_callback;
+      }
     }
     if (w->net[3] || w->net[38])
       F32(actor, 0x78) = F32(actor, 0x7c) = F32(actor, 0x80) = 0;
@@ -625,18 +805,17 @@ static void world_callback(void *actor, void *object) {
         w->saved_ai = (void *)platform_states[0];
       }
     } else if (p == 17) {
-      if (w->emit_pending) {
-        unsigned short angle = U16(actor, 0xd8);
-        U16(actor, 0xd8) = 1016;
-        s_applying = 1;
-        if (real)
-          real(actor, object);
-        s_applying = 0;
-        U16(actor, 0xd8) = angle;
-        w->emit_pending = 0;
-      }
+      w->emit_pending = 0;
       F32(object, 0xc) = func_80003E10_4A10(U16(actor, 0xd8)) * 20.0f - 70.0f;
       U16(actor, 0xd8) = (U16(actor, 0xd8) + 8) & 1023;
+    } else if (p >= 31) {
+      /* Falling traps retain their one native local-contact pass. The other
+       * allowed continuations here only integrate verified mechanical motion.
+       * Elevator triggers, tilting under a rider, and path VM actions belong
+       * to the interacting owner; they are not replayed from a checkpoint. */
+      if ((p >= 31 && p <= 35) || (p >= 37 && p <= 39) || p == 43 || p == 45)
+        if (real)
+          real(actor, object);
     } else if (p != 24) {
       /* These verified continuations only move/rotate the platform,
        * update its own phase, and play local mechanical audio. They
@@ -675,9 +854,9 @@ void anchor_world_frame(void) {
   char *reply;
   unhold();
   active = anchor_is_connected() && !anchor_is_disabled() &&
-           item_sync_save_is_loaded() && s_signature && s_count &&
-           s_room == D_800C7AB2;
+           item_sync_save_is_loaded() && s_signature && s_room == D_800C7AB2;
   if (!active) {
+    anchor_world_dynamic_frame(0, 0, 0, 0);
     if (s_active) {
       reply = anchor_update_world(0, 0, 0, "{}");
       if (reply)
@@ -729,4 +908,5 @@ void anchor_world_frame(void) {
   }
   if (reply)
     recomp_free(reply);
+  anchor_world_dynamic_frame(s_room, s_signature, s_visit, 1);
 }

@@ -8,4 +8,9 @@ trap 'rm -rf "$WORLD_TEST_DIR"' EXIT
     -Iinclude tests/test_world_native.c src/utils/anchor_world_codec.c \
     src/utils/string_utils.c -lm -o "$WORLD_TEST_DIR/native"
 "$WORLD_TEST_DIR/native"
+"${HOST_CC:-cc}" -std=c99 -Wall -Wextra -Werror -Wno-misleading-indentation \
+    -O2 -ffast-math -fno-unsafe-math-optimizations -fsanitize=undefined \
+    -Iinclude tests/test_world_dynamic_native.c src/utils/anchor_world_dynamic_codec.c \
+    src/utils/string_utils.c -lm -o "$WORLD_TEST_DIR/children"
+"$WORLD_TEST_DIR/children"
 PYTHONPATH=py python3 -m unittest discover -s tests -p 'test_world*.py'

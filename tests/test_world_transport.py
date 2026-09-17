@@ -96,7 +96,7 @@ class WorldTests(unittest.TestCase):
         changes=[{'clientId':True},{'clientId':99},{'targetTeamId':'other'},
                  {'targetClientId':2},{'addToQueue':True},{'q':True},
                  {'q':0},{'parts':12},{'part':1},{'p':'0'},{'d':'x'*64},
-                 {'m':[1,10,2,0x12e,42]},{'a':[row(),row()]},
+                 {'m':[w.VERSION,10,2,0x12e,42]},{'a':[row(),row()]},
                  {'a':[[0]*39]},{'a':[[False]+row()[1:]]}]
         for change in changes:
             with self.subTest(change=change):
@@ -108,7 +108,7 @@ class WorldTests(unittest.TestCase):
         _,packets=self.tick(self.a,self.ca,1)
         peer=self.cb['players'][1]
         for key,value in [('roomId',0x12d),('interactionSession',11),('teamId','other'),
-                          ('isSaveLoaded',False),('online',False),('worldSync',[1,10,1,0x12e,99])]:
+                          ('isSaveLoaded',False),('online',False),('worldSync',[w.VERSION,10,1,0x12e,99])]:
             old=peer[key];peer[key]=value
             self.assertFalse(self.b.receive(self.cb,packets[0],1));peer[key]=old
 
@@ -135,10 +135,10 @@ class WorldTests(unittest.TestCase):
         self.assertTrue(packets)
 
     def test_metadata_monotonic_and_non_integer_rejected(self):
-        old=[1,10,5,302,42]
-        self.assertEqual(w.merge_metadata(old,[1,10,4,302,42],10),old)
+        old=[w.VERSION,10,5,302,42]
+        self.assertEqual(w.merge_metadata(old,[w.VERSION,10,4,302,42],10),old)
         self.assertIsNone(w.metadata([True,10,1,302,42]))
-        self.assertIsNone(w.metadata([1,11,1,302,42],10))
+        self.assertIsNone(w.metadata([w.VERSION,11,1,302,42],10))
 
     def test_identity_mismatch_never_applied(self):
         self.send(self.a,self.ca,self.b,self.cb,1,[row(entity=0x2c1,kind=1)])

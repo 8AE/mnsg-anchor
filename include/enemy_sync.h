@@ -4,6 +4,8 @@
 /* Handle one packet already dequeued by item_sync's sole Anchor poller.
  * Returns non-zero when the packet belongs to enemy synchronization. */
 int enemy_sync_handle_packet(const char *json);
+/* Child births use the same simulator as their ordinary-enemy parent. */
+int enemy_sync_actor_authority(void *actor);
 
 /* Flush compact outgoing enemy state and retry failed sends. */
 void enemy_sync_update(void);

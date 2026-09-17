@@ -7,7 +7,7 @@ import sys
 import uuid
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'py'))
 from test_impact_anchor_local import Peer
-from anchor_world import WorldTransport, PACKET_TYPE
+from anchor_world import WorldTransport, PACKET_TYPE, VERSION
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
         for t,p in ((tx,host),(rx,guest)):t.update(ctx(p),302,42,1,rows,'00'*32,0)
         for p in peers:
             state=dict(online=True,isSaveLoaded=True,teamId=p.team,currentRoomId=302,interactionSession=p.session,
-                       worldSync=[1,p.session,1,302,42])
+                       worldSync=[VERSION,p.session,1,302,42])
             players[p.cid]=dict(state,roomId=302)
             p.send(dict(type='UPDATE_CLIENT_STATE',clientId=p.cid,state=state))
         for p in peers:p.read(.1)
@@ -54,7 +54,7 @@ def main():
         # Peer expiry releases control without converting culling into death.
         result,_=tx.update(ctx(host),302,42,1,local,'00'*32,4)
         assert not result['a'] and result['d']=='01'+'00'*31
-        print(json.dumps(dict(ok=True,actors=256,parts=11,max_packet_bytes=max(len(json.dumps(p,separators=(',',':')).encode())+1 for p in incoming),checks=['NUL framing','atomic reordered batch','authoritative root identity','sender exclusion','team isolation','pickup tombstones','interaction ownership','peer expiry'])))
+        print(json.dumps(dict(ok=True,actors=256,parts=11,max_packet_bytes=max(len(json.dumps(p,separators=(',',':')).encode())+1 for p in incoming),checks=['NUL framing','atomic reordered batch','roster-validated root identity','sender exclusion','team isolation','pickup tombstones','interaction ownership','peer expiry'])))
     finally:
         for p in peers:p.socket.close()
 

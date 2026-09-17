@@ -8,7 +8,7 @@ import json
 
 PACKET_TYPE = 'MNSG_WORLD'
 METADATA_KEY = 'worldSync'
-VERSION = 1
+VERSION = 2
 WORDS = 39
 MAX_ACTORS = 256
 ROWS_PER_PACKET = 24
@@ -59,10 +59,10 @@ def row_valid(row):
     if (not isinstance(row, list) or len(row) != WORDS or
             not all(integer(v, -0x80000000, 0x7fffffff) for v in row)):
         return False
-    bounds = [(0,255),(1,0x7ff),(1,4),(0,1)] + [(-3276800,3276700)]*3
+    bounds = [(0,255),(1,0x7ff),(1,5),(0,1)] + [(-3276800,3276700)]*3
     bounds += [(0,1023)]*3 + [(0,255),(0,1000000),(0,65535),(0,7)]
     bounds += [(-100000,100000)]*3 + [(-32768,32767),(0,0x7fffffff)]
-    bounds += [(-32768,32767)]*7 + [(0,64000)]*3 + [(0,3)]
+    bounds += [(-32768,32767)]*7 + [(0,64000)]*3 + [(0,31)]
     bounds += [(0,163),(-32768,32767),(0,7),(0,255)]
     bounds += [(-32768,32767)]*3 + [(0,255),(0,1)]
     return all(lo <= v <= hi for v, (lo, hi) in zip(row, bounds))
@@ -74,6 +74,7 @@ class WorldTransport:
 
     def reset(self):
         self.scope = None
+        self.owners = {}
         self.visit = 0
         self.room = 0
         self.signature = 0
@@ -199,6 +200,7 @@ class WorldTransport:
         for row in rows:
             presence[row[0]//8] |= 1 << (row[0]%8)
         output, publish = [], []
+        self.owners = {}
         busy = bytearray(32)
         for row in rows:
             if row[3]:busy[row[0]//8] |= 1 << (row[0]%8)
@@ -210,6 +212,7 @@ class WorldTransport:
                     remote=p['rows'].get(i)
                     candidates.append((cid,bit(p['b'],i),bool(remote and remote[38])))
             owner,_,_=min(candidates,key=lambda p:(p[2] if not p[1] else False,-p[1],p[0]))
+            self.owners[i] = owner
             if owner != ctx['cid']:
                 peer=self.peers[owner]
                 state=peer['rows'].get(i)

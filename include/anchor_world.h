@@ -7,6 +7,7 @@
 #define WORLD_PLATFORM 2
 #define WORLD_PICKUP 3
 #define WORLD_EMITTER 4
+#define WORLD_DOOR 5
 /* Called by the existing, resource-guarded actor-data enumeration. */
 void anchor_world_roster_begin(unsigned int room);
 void anchor_world_roster_add(unsigned int index, void *source,

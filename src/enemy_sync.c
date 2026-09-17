@@ -436,6 +436,13 @@ static int find_live_actor(void *actor)
     return -1;
 }
 
+int enemy_sync_actor_authority(void *actor)
+{
+    if (find_live_actor(actor) < 0)
+        return -1;
+    return !s_session_active || s_role != ENEMY_ROLE_REPLICA;
+}
+
 static void forget_actor_pointer(void *actor)
 {
     unsigned int i;
@@ -1948,6 +1955,14 @@ void enemy_sync_prepare_room_roster(void)
     if ((unsigned int)room >= ENEMY_ROOM_METADATA_COUNT)
         return;
     metadata = D_80231300_5EC7D0[room];
+    if (metadata && !metadata->actor_instances && metadata->actor_data_file_id == 0)
+    {
+        /* Script-only rooms have no placed actor wave to resolve. They still
+         * need a room identity for dynamically created NPCs and pickups. */
+        anchor_world_roster_begin(room);
+        anchor_world_roster_end(0);
+        return;
+    }
     if (!metadata || metadata->actor_data_file_id == 0 ||
         func_800141C4_14DC4(
             (unsigned int)metadata->actor_data_file_id) == -1)

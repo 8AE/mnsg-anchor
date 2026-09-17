@@ -1,7 +1,8 @@
 # Shared room NPCs and world objects
 
-The world-sync layer uses the same guarded normal-plus-partition actor roster as
-regular enemies. It also runs in rooms with **zero enemies**, including towns.
+The world-sync layer combines the guarded normal-plus-partition actor roster with
+a separate native-child lifecycle. It runs in rooms with **zero enemies**,
+including towns, and script-only rooms without a placed actor wave.
 Only peers with the same room, team, save-loaded state and actor-layout signature
 exchange state. Both players need this version of the mod.
 
@@ -12,10 +13,13 @@ exchange state. Both players need this version of the mod.
 | Placed NPCs using native NPC setup | Position, all three angles, scale/visibility, animation clip/frame/rate, velocity and path checkpoint. This includes ordinary town NPCs, named NPCs using that setup, and signposts. |
 | Placed birds/dogs `0x2C2–0x2C4` | Native path-based movement and animation, without trying to start dialogue on animals. |
 | Moving platform `0x3E0`, variants `0–13` | Native phase, timers, motion, angles, saved origin and fall state. Rectangular, orbiting, bobbing and rotating variants retain local motion between checkpoints. The player riding a falling platform can take ownership of that actor. |
-| Ryo `0x82/0x83`, health `0x84/0x85` | Actual collection removes the placed object on other clients and later same-room entrants. Rewards remain governed by native item/race rules. Known remote collection suppresses the local award callback. |
+| Placed and dropped ryo/health/food | Shared identity, current motion and lifetime; a pickup claim goes to one arbiter before a single winner executes the native award. Placed pickups keep their roster identity across proximity culling. Food retains its native shine child and safe cleanup. |
 | Breakable item containers `0x192` | Actual break marks the placed container removed for other clients and later entrants. Distance culling does not count as breaking. |
-| Timed emitters `0x19A`, subtypes `0–2` | Shared countdown and emission counter. A newly observed cycle runs the local native emission once; duplicate checkpoints do not respawn it. |
-| Platform variant 9 child hazards | Shared cycle counter reproduces a newly observed native emission once, independently of smooth bobbing motion. |
+| Timed emitters `0x19A`, subtypes `0–2` | Shared countdown and cycle. Their existing rock/flame children carry independent current-state snapshots; a late entrant reconstructs those children without replaying the emitter. |
+| Platform variant 9 child hazards | Current live child set, position, phase, timer, bounce/orbit state and lifetime, including late entry and ownership handoff. |
+| Dynamic NPCs using common native NPC/path setup | Stable birth identity, matching to an existing local task, or reconstruction using resident native model, dialogue and path state. Independently allocated copies of the same NPC are coalesced. |
+| Other mechanisms | Falling traps `0x197`, elevators `0x1FC`, tilting platforms `0x1FD`, path crates `0x1F7`, pushable blocks `0x245`, and rising platforms `0x34A` have distinct phase adapters. Riders/pushers and opposite-floor elevator callers can take ownership. |
+| Doors and breakable walls | Door animation/mesh/pose checkpoints preserve local input and travel callbacks. Actual breaks of wall `0x23D` subtypes 1/3/4 propagate removal; subtype 3/4 progression flags retain the existing durable path. |
 | Existing progression objects | Save flags, dolls, keys, upgrades, relevant doors and boss rewards continue through their existing synchronization modules. |
 
 A player talking to an NPC temporarily owns that NPC. Dialogue, camera/control
@@ -31,9 +35,12 @@ a missing actor is never interpreted as a collection or destruction event.
 
 ## Transport
 
-`MNSG_WORLD` is a quiet, transient `targetTeamId` packet with **no offline queue**.
-The server supplies the authoritative root `clientId`. Metadata is
-`worldSync = [version, interactionSession, visit, rawRoom, rosterSignature]`.
+`MNSG_WORLD` and `MNSG_WORLD_ACTORS` are quiet, transient `targetTeamId` packets
+with **no offline queue**. The client supplies its assigned root `clientId`;
+Anchor relays it without authenticating or injecting it. Receivers check roster,
+team, session and room eligibility. Metadata is
+`worldSync = [2, interactionSession, visit, rawRoom, rosterSignature]`.
+Version 1 peers are intentionally incompatible with the new child lifecycle.
 Every packet also carries this metadata, a sequence, part index/count, presence,
 interaction and removal bitmaps, and compact scalar actor rows.
 
@@ -51,34 +58,74 @@ interaction and removal bitmaps, and compact scalar actor rows.
   indices into a native callback allowlist. Native source descriptors identify
   placed actors, not allocation order or pool pointers.
 
-Fields `0–3` identify the actor and interaction; `4–16` encode transform,
+In a placed row, fields `0–3` identify the actor and interaction; `4–16` encode transform,
 animation and velocity; `17–25` hold verified platform phase/timer scalars;
-`26–29` encode scale/visibility/gravity; `30–37` hold NPC path scalars (platform
+`26–29` encode scale/visibility/gravity/mesh/terrain/door animation state; `30–37` hold NPC path scalars (platform
 variant 9 reuses field 31 for its emission counter); field 38 is world-pause state.
 Emitter actors reuse field 18 for their emission counter. Position uses hundredths,
 velocity/scale thousandths, animation frame hundredths, and angles 1/1024 turns.
 
-## Evidence and remaining scope
+## Dynamic lifetime and claims
 
-The supplied recording/log led to town rooms `0x161`/`0x15F` and Fuji rooms
-`0x12D`/`0x12E`. Native tracing additionally covered all platform-family variants,
-the large-food shine-child cleanup, breakable containers and periodic emitters.
-Static Fuji props `0x33B/0x33C` are collision geometry whose initial visibility is
-set locally; they do not have a moving state to stream.
+`MNSG_WORLD_ACTORS` carries at most 128 records, 74 integers each, in batches of
+12 rows (at most 11 parts). Parts are capped at 8,192 bytes including NUL and
+applied atomically. Peer/pending caches are bounded to 32 and expire after 1.5 s.
+Owner motion sends at most 5 Hz, replica presence at 1 Hz. Lifecycle, ownership,
+interaction and claim edges can bypass that cadence with a 50 ms floor.
 
-This is **not yet universal synchronization of every native object**:
+Dynamic hazard identity is `(birth client, session, visit, serial)`, independent
+of the current simulator. Initial speculative emitter births wait for placed
+presence and retire locally when another peer owns the parent. Native NPC birth
+descriptors identify duplicate local NPC allocations; placed pickups use the
+room roster slot, and parented loot uses the parent slot, kind and birth ordinal.
+Simultaneous copies of a container's contents therefore share their identities. Native pointers,
+model-resource bindings and callbacks are never supplied by network data.
+Reconstruction checks local asset residency, clip and collision-list bounds,
+route instruction boundaries and a family-specific continuation allowlist.
+A failed resource check defers reconstruction. Shadows and food's shine child
+are created through their own native setup.
 
-- Dynamic NPCs created outside the placed room roster are not identified here.
-- Existing emitted hazards are not reconstructed for a late entrant. New
-  emission cycles are shared; child trajectories/contact still run locally.
-- Container contents are spawned by the breaking client; their dynamically
-  allocated child actors are not assigned shared identities by this layer.
-- Other object families, scripted controllers, minigames, pushable objects and
-  room-specific switches need their own verified adapters. Durable progression
-  flags alone do not prove that every already-loaded object refreshes correctly.
-- Two near-simultaneous native collections can still precede the removal packet;
-  this protocol does not provide transactional single-award arbitration.
-- Native callback/path validation uses the US actor data. A modified NPC path
+A contacted pickup is held while its claim is resolved. The arbiter commits one
+winner and broadcasts a removal containing both winner and committer identity.
+Native award/removal waits for a successful local TCP send of that commit; a
+throttle or failed write retains the retry. A silent but still eligible arbiter
+does not automatically lose its award lease merely because its hot snapshot
+expired. Actual roster departure permits handoff. This is a client protocol,
+not a server transaction or a guarantee under arbitrary malicious peers.
+
+Removal history is bounded to 4,096 identities per occupied-room scope and fails
+closed if exhausted. Nothing persists an empty room's dynamic actors offline.
+The dynamic maximum is independent of the 256-slot placed roster. At maximum
+capacity a sender can burst 11 packets; with `T` active team members and a batch
+size of `B` bytes, owner-motion server egress is `5 * B * (T - 1)` bytes/s per
+owner sender, plus replica refreshes at `B * (T - 1)` each second. A full
+multi-owner worst case multiplies the first term by `T`. This is a bounded
+protocol budget, not evidence that a 32-client maximum-load game is playable.
+
+## Evidence and coverage boundary
+
+The recording/log identified towns `0x161`/`0x15F` and Fuji `0x12D`/`0x12E`.
+The wider ROM inventory inspected 800 metadata slots, finding 333 rooms with
+placed actor data and 255 distinct placed entity types. The adapters above were
+traced against their real native initializers, continuations and cleanup paths.
+Static Fuji props `0x33B/0x33C` have no moving state to stream.
+
+The original gaps for common dynamic NPCs, container/enemy loot and late-entry
+emitter/platform hazards now have implementations. That does **not** establish
+universal support for every native actor:
+
+- Minigame and cutscene controls stay local. A reconstructed NPC uses the common
+  dialogue/path continuation; custom scene-controller pointers and private quest
+  continuations are not reconstructed.
+- Room-specific puzzle controllers and other unaudited actor families still
+  need explicit adapters. In particular, shared progression flags alone do not
+  synchronize every temporary room flag or already-loaded puzzle state.
+- The tracked hazard recipes are the File_34 emitter children and File_44
+  platform children listed above, not arbitrary projectiles or visual effects.
+- The live-set and removal-history limits are explicit. Repeated scripted NPC
+  births at an identical descriptor need game testing beyond the current
+  simultaneous-copy/ordinal tests.
+- Native callback/path validation uses the US actor data. A modified path
   program requires regenerating/reviewing its instruction-boundary masks.
 
 ## Validation and playtest
@@ -103,11 +150,20 @@ Before calling this game-verified, use two fresh clients to check:
    other player's culling range, pause, return, disconnect and reconnect.
 3. Collect food/ryo and break a container; confirm removal, late-entry behavior
    and normal room respawn after both leave. Check large-food shine cleanup.
-4. Observe several emitter/platform-hazard cycles; check duplicate emissions,
-   ownership handoff and the documented late-entry child limitation.
-5. Exercise falling/orbiting/rectangular platforms and scripted NPC progression.
+4. Enter after several emitter/platform-hazard cycles and after a container
+   breaks; compare existing children, then disconnect the original simulator.
+   Simultaneously touch the same pickup and confirm exactly one native reward.
+5. Call elevators from both floors, push a block from either client, and check
+   falling/tilting platforms. Open slow doors while the other player watches.
+6. Exercise dynamic NPC talk/path handoff and room-specific scripted progression;
+   record any unsupported controller instead of treating generic pose sync as
+   proof that its complete native state is shared.
 
-Current evidence: the full Python suite passes (293 tests, one existing skip),
-the world native harness passes under UBSan, the three-client loopback probe
-passes, and release/debug packaging passes. A fresh two-client in-game run has
-**not** been performed; these checks do not establish visual or collision parity.
+Current validation results are recorded in `world-sync-validation-2026-09-16.json`.
+A fresh two-client in-game run has **not** been performed; host native mocks,
+loopback TCP checks and successful packages do not establish visual, collision,
+or universal room coverage.
+
+`tools/test_world_dynamic_anchor_local.py --port PORT` adds a three-client
+128-child/11-part probe: atomic current-state late entry, claims/commit,
+sender/team isolation, duplicate rejection and origin disconnect/handoff.

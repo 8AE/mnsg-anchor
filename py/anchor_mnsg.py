@@ -87,6 +87,7 @@ import anchor_impact
 import anchor_impact_visual
 import anchor_impact_sound
 import anchor_world
+import anchor_world_dynamic
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -176,6 +177,7 @@ _impact_players = anchor_impact.ImpactPlayerTransport()
 _impact_visuals = anchor_impact_visual.ImpactVisualTransport()
 _impact_sounds = anchor_impact_sound.ImpactSoundTransport()
 _world = anchor_world.WorldTransport()
+_world_actors = anchor_world_dynamic.DynamicTransport(_world)
 _impact_debug_str: str = ""
 
 ###############################################################################
@@ -215,6 +217,7 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     anchor_tsurami.PACKET_TYPE: 8 * 1024,
     anchor_impact.PACKET_TYPE: 8 * 1024,
     anchor_world.PACKET_TYPE: anchor_world.PACKET_BYTES,
+    anchor_world_dynamic.PACKET_TYPE: anchor_world_dynamic.PACKET_BYTES,
     anchor_impact.PLAYER_PACKET_TYPE: anchor_impact.PLAYER_PACKET_BYTES,
     anchor_impact_visual.PACKET_TYPE: anchor_impact_visual.PACKET_BYTES,
     anchor_impact_sound.PACKET_TYPE: anchor_impact_sound.PACKET_BYTES,
@@ -1063,6 +1066,10 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_boss_arena(packet)
                     continue
 
+                if ptype == anchor_world_dynamic.PACKET_TYPE:
+                    with _player_states_lock:
+                        _world_actors.receive(_boss_context(), packet, time.monotonic())
+                    continue
                 if ptype == anchor_world.PACKET_TYPE:
                     with _player_states_lock:
                         _world.receive(_boss_context(), packet, time.monotonic())
@@ -1211,6 +1218,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _impact_visuals.reset()
         _impact_sounds.reset()
         _world.reset()
+        _world_actors.reset()
 
 
 ###############################################################################
@@ -3774,6 +3782,27 @@ def _decode_png_rgba(png: bytes) -> bytes:
 
     import struct as _struct
     return _struct.pack(">II", width, height) + bytes(rgba)
+
+
+def update_world_actors(state_json: str) -> str:
+    supplied = {}
+    if isinstance(state_json, str) and len(state_json.encode()) <= anchor_world_dynamic.STATE_BYTES:
+        try:
+            supplied = json.loads(state_json)
+        except (ValueError, RecursionError):
+            pass
+    if not isinstance(supplied, dict):
+        supplied = {}
+    now = time.monotonic()
+    with _player_states_lock:
+        result, packets = _world_actors.update(_boss_context(), supplied.get('a', []), now)
+    success = True
+    for packet in packets:
+        success = _send_raw(packet) and success
+    with _player_states_lock:
+        _world_actors.sent(packets, success, now)
+        result = _world_actors.native_result(result)
+    return json.dumps(result, separators=(',', ':'))
 
 
 def update_world(room: int, signature: int, visit: int, state_json: str) -> str:
