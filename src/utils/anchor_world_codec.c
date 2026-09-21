@@ -12,6 +12,7 @@
 
 #include "anchor_world_gate64.h"
 #include "anchor_world_doll.h"
+#include "anchor_world_counterweight.h"
 
 int anchor_world_row_valid(const int *r) {
   static const int lo[ANCHOR_WORLD_WORDS] = {
@@ -31,6 +32,7 @@ int anchor_world_row_valid(const int *r) {
       32767,  32767, 32767,      32767,   32767,   32767,   32767,   32767,
       2147483647, 2147483647};
   unsigned int i;
+  if (r[2] == WORLD_COUNTERWEIGHT) return anchor_world_counterweight_valid(r);
   if (r[2] == WORLD_CRANE) {
     /* Room 0x31 crane/pad/reward checkpoint. Validated independently of the
      * actor/NPC table, whose kind range excludes 7. */

@@ -809,6 +809,24 @@ class CodecTests(unittest.TestCase):
         ok=self.lib.anchor_world_decode(value.encode(),rows,ctypes.byref(count),dead)
         return ok,rows,count.value,bytes(dead)
 
+    def test_counterweight_codec_parity_and_atomic_round_trip(self):
+        cw=w.counterweight
+        for index,pose in cw.POSES.items():
+            base=[0]*w.WORDS
+            base[:3]=[index,cw.ENTITY,cw.KIND]
+            base[4:10]=pose;base[10:16]=[base[5]]*6;base[16]=63
+            self.assertTrue(w.row_valid(base))
+            good=json.dumps({'a':[[2,0]+base],'d':'00'*32})
+            ok,result,count,_=self.decode(good)
+            self.assertTrue(ok);self.assertEqual(count,1)
+            self.assertEqual(list(result[0])[2:],base)
+            for col in range(w.WORDS):
+                for value in (-3276801,-18001,-18000,-8000,-1,0,1,2,3,4,8,13,
+                              14,15,16,31,32,63,64,256,512,800,1600,2400,0x7fffffff):
+                    altered=list(base);altered[col]=value
+                    self.assertEqual(bool(self.lib.anchor_world_row_valid(self.Row(*altered))),
+                                     w.row_valid(altered),(index,col,value))
+
     def test_cross_language_round_trip(self):
         rows=(self.Row*256)(*[self.Row(*row(i)) for i in range(256)])
         out=ctypes.create_string_buffer(w.STATE_BYTES);dead=(ctypes.c_ubyte*32)(1)

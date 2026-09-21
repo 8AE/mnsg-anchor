@@ -39,6 +39,24 @@ static char *anchor_update_world(unsigned int r, unsigned int s, unsigned int v,
 #define WORLD_NPC_DISABLED 0ul
 #include "../src/anchor_world.c"
 #include "../src/anchor_world_npc.c"
+/* Counterweight lifecycle has a dedicated native harness. */
+static int cw_capture_ready,cw_capture_row[ANCHOR_WORLD_WORDS];
+static int cw_confirmed,cw_remote,cw_applies;
+static unsigned int cw_inputs;
+void anchor_world_counterweight_reset(int changed) { (void)changed; }
+void anchor_world_counterweight_register(void *a) { (void)a; }
+unsigned int anchor_world_counterweight_local_inputs(void *a) { (void)a;return 0; }
+int anchor_world_counterweight_needs_restore(void *a) { (void)a;return 0; }
+int anchor_world_counterweight_capture(void *a,int *r) {
+  (void)a;if(!cw_capture_ready)return 0;
+  for(unsigned int i=3;i<WORLD_INSTANCE;++i)r[i]=cw_capture_row[i];return 1;
+}
+int anchor_world_counterweight_apply(void *a,const int *r) { (void)a;(void)r;++cw_applies;return 1; }
+void anchor_world_counterweight_control(void *a,int remote,int paused,int confirmed,unsigned int mask) {
+  (void)a;(void)paused;cw_confirmed=confirmed;cw_remote=remote;cw_inputs=mask;
+}
+void anchor_world_counterweight_begin(void) {}
+void anchor_world_counterweight_end(void) {}
 /* The coupled crane implementation has its own native lifecycle harness. */
 static int crane_apply_calls, crane_restore, crane_control_remote, crane_control_paused;
 static unsigned int crane_inputs, crane_control_inputs;
@@ -1738,6 +1756,30 @@ static void bridge_frame_bootstrap_test(void) {
   assert(!w->have);
 }
 
+static void counterweight_core_test(void) {
+  fixture(WORLD_COUNTERWEIGHT_ENTITY,0);
+  D_800C7AB2=WORLD_COUNTERWEIGHT_ROOM;
+  anchor_world_roster_begin(WORLD_COUNTERWEIGHT_ROOM);
+  anchor_world_roster_add(13,source,definition);anchor_world_roster_end(14);
+  anchor_world_register(actor,source);anchor_world_post(actor);
+  WorldActor *w=&s_actors[13];assert(w->kind==WORLD_COUNTERWEIGHT);
+  memset(cw_capture_row,0,sizeof(cw_capture_row));cw_capture_ready=1;
+  cw_capture_row[5]=-8000;cw_capture_row[6]=-2000;cw_capture_row[8]=256;
+  for(int j=10;j<=15;++j)cw_capture_row[j]=-8000;cw_capture_row[16]=63;
+  int row[ANCHOR_WORLD_WORDS];assert(capture(13,row));
+  assert(anchor_world_row_valid(row)&&controller_progress(row)==0);
+  tick();assert(!cw_confirmed);
+  memcpy(w->net,row,sizeof(row));w->net[47]=33;w->have=1;w->owner=s_self;
+  cw_applies=0;tick();assert(cw_confirmed&&!cw_remote&&cw_inputs==33&&!cw_applies);
+  w->owner=s_self+1;w->net[WORLD_RECEIPT]=WORLD_BOOTSTRAP|99;
+  tick();assert(cw_remote&&cw_applies==1&&w->receipt==(WORLD_BOOTSTRAP|99));
+  w->net[WORLD_INSTANCE]++;tick();assert(!w->have&&w->receipt==WORLD_APPLY_FAILED);
+  /* Culled roots retain their atomic heights but release all local inputs. */
+  cw_capture_ready=0;w->actor=0;w->ready=0;
+  assert(capture(13,row)&&row[38]&&!row[3]&&!row[46]&&!row[47]);
+  anchor_world_reset();
+}
+
 static void gate64_core_test(void) {
   WorldActor *w=fixture(WORLD_GATE64_ENTITY,0);assert(!w->kind);
   D_800C7AB2=WORLD_GATE64_ROOM;
@@ -2010,6 +2052,7 @@ int main(void) {
   file40_checkpoint_test();
   rope_checkpoint_test();
   spike_checkpoint_test();
+  counterweight_core_test();
   gate64_core_test();
   doll_core_test();
   shutter_checkpoint_test();

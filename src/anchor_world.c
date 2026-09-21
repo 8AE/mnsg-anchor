@@ -16,6 +16,7 @@
 #include "anchor_world_bridge.h"
 #include "anchor_world_gate64.h"
 #include "anchor_world_doll.h"
+#include "anchor_world_counterweight.h"
 #include "anchor_world_paths.inc"
 
 extern unsigned short D_800C7AB2;
@@ -278,9 +279,11 @@ static int retained_actor(const WorldActor *w) {
   return controller(w) || linked_platform(w) || physics(w) ||
          autonomous_platform(w) ||
          w->kind == WORLD_CRANE || w->kind == WORLD_SHUTTER || w->kind == WORLD_BRIDGE ||
-         w->kind == WORLD_GATE64 || w->kind == WORLD_DOLL_CONTAINER;
+         w->kind == WORLD_GATE64 || w->kind == WORLD_DOLL_CONTAINER ||
+         w->kind == WORLD_COUNTERWEIGHT;
 }
 static int controller_progress(const int *r) {
+  if (r[2] == WORLD_COUNTERWEIGHT) return 0;
   if (r[2] == WORLD_PLATFORM && (r[1] == WORLD_SPIKE_ENTITY || r[1] == WORLD_ROPE_ENTITY ||
                                r[1] == WORLD_TOP_ENTITY || r[1] == WORLD_ROTOR_ENTITY))
     return 0; /* A repeated wait/open/retract cycle has no permanent progress. */
@@ -360,6 +363,7 @@ void anchor_world_reset(void) {
   anchor_world_bridge_reset(0);
   anchor_world_gate64_reset(0);
   anchor_world_doll_reset(0);
+  anchor_world_counterweight_reset(0);
   s_active = 0;
   for (i = 0; i < s_count; ++i) {
     if (physics(&s_actors[i])) {
@@ -389,6 +393,7 @@ void anchor_world_roster_begin(unsigned int room) {
   anchor_world_bridge_reset(1);
   anchor_world_gate64_reset(1);
   anchor_world_doll_reset(1);
+  anchor_world_counterweight_reset(1);
   if (s_room != room)
     anchor_world_dynamic_room();
   s_old_signature = s_signature;
@@ -414,6 +419,10 @@ void anchor_world_roster_add(unsigned int index, void *source,
   w = &s_actors[index];
   w->source = source;
   w->entity = U16(definition, 0);
+  if (s_room == WORLD_COUNTERWEIGHT_ROOM && w->entity == WORLD_COUNTERWEIGHT_ENTITY &&
+      index >= 13 && index <= 15 && !U32(definition,4) &&
+      !U32(definition,8) && !U32(definition,12))
+    w->kind = WORLD_COUNTERWEIGHT;
   if (s_room == WORLD_GATE64_ROOM && w->entity == WORLD_GATE64_ENTITY &&
       !U32(definition,4) && !U32(definition,8) && !U32(definition,12))
     w->kind = WORLD_GATE64;
@@ -642,6 +651,10 @@ void anchor_world_register(void *actor, void *source) {
           w->retained_valid = 0;
         }
         w->restore_controller = w->retained_valid;
+      }
+      if (s_actors[i].kind == WORLD_COUNTERWEIGHT) {
+        anchor_world_counterweight_register(actor);
+        s_actors[i].have = 0;s_actors[i].restore_controller = s_actors[i].retained_valid;
       }
       if (s_actors[i].kind == WORLD_GATE64) {
         anchor_world_gate64_register(actor);
@@ -1067,6 +1080,16 @@ static int capture(unsigned int i, int *r) {
     r[0] = (int)i;r[1] = w->entity;r[2] = w->kind;
     if (anchor_world_gate64_capture(a,r)) goto capture_complete;
   }
+  if (w->kind == WORLD_COUNTERWEIGHT) {
+    for (j = 0; j < ANCHOR_WORLD_WORDS; ++j) r[j] = 0;
+    r[0] = (int)i;r[1] = w->entity;r[2] = w->kind;
+    if (anchor_world_counterweight_capture(a,r)) goto capture_complete;
+    if (!w->retained_valid) return 0;
+    for (j = 0; j < ANCHOR_WORLD_WORDS; ++j) r[j] = w->retained[j];
+    r[3] = 0;r[38] = 1;r[46] = r[47] = 0;
+    r[WORLD_INSTANCE] = (int)w->instance;r[WORLD_RECEIPT] = (int)w->receipt;
+    w->restore_controller = 1;return 1;
+  }
   if (w->kind == WORLD_DOLL_CONTAINER) {
     for (j = 0; j < ANCHOR_WORLD_WORDS; ++j) r[j] = 0;
     r[0] = (int)i;r[1] = w->entity;r[2] = w->kind;
@@ -1340,7 +1363,7 @@ static int capture(unsigned int i, int *r) {
   }
 capture_complete:
   r[38] = paused();
-  if (w->kind == WORLD_CRANE && r[38])
+  if ((w->kind == WORLD_CRANE || w->kind == WORLD_COUNTERWEIGHT) && r[38])
     r[WORLD_CRANE_INPUT] = 0;
   if (physics(w) && r[18] == WORLD_PHYSICS_FIRST && !D_8015C5E4)
     r[38] = 1;
@@ -1362,6 +1385,10 @@ capture_complete:
         r[WB_INPUT] = (int)anchor_world_bridge_local_inputs();
         r[WB_AGGREGATE] = 0;
       }
+      if (w->kind == WORLD_COUNTERWEIGHT) {
+        r[46] = r[38] ? 0 : (int)anchor_world_counterweight_local_inputs(a);
+        r[47] = 0;r[3] = r[46]!=0;
+      }
       w->restore_controller = 1;
     } else {
       for (j = 0; j < ANCHOR_WORLD_WORDS; ++j)
@@ -1378,7 +1405,8 @@ static int changed(WorldActor *w) {
   if (!w->applied_valid)
     return 1;
   for (j = 0; j < WORLD_INSTANCE; ++j)
-    if ((w->kind != WORLD_CRANE && w->kind != WORLD_BRIDGE) ||
+    if ((w->kind != WORLD_CRANE && w->kind != WORLD_BRIDGE &&
+         w->kind != WORLD_COUNTERWEIGHT) ||
         (j != WORLD_CRANE_INPUT && j != WORLD_CRANE_AGGREGATE))
     if (w->applied[j] != w->net[j])
       return 1;
@@ -1623,6 +1651,16 @@ static int apply(WorldActor *w) {
   unsigned int j;
   if ((unsigned int)r[WORLD_INSTANCE] != w->instance)
     return 0;
+  if (w->kind == WORLD_COUNTERWEIGHT) {
+    if (!anchor_world_row_valid(r)) return 0;
+    int bootstrap = (r[WORLD_RECEIPT] & WORLD_BOOTSTRAP) &&
+                    w->receipt != (unsigned int)r[WORLD_RECEIPT];
+    if ((changed(w) || bootstrap || w->restore_controller ||
+         anchor_world_counterweight_needs_restore(a)) &&
+        !anchor_world_counterweight_apply(a,r)) return 0;
+    for (j = 0; j < ANCHOR_WORLD_WORDS; ++j) w->applied[j] = r[j];
+    w->applied_valid = 1;w->receipt = (unsigned int)r[WORLD_RECEIPT];return 1;
+  }
   if (w->kind == WORLD_GATE64) {
     if (!anchor_world_row_valid(r)) return 0;
     int bootstrap = (r[WORLD_RECEIPT] & WORLD_BOOTSTRAP) &&
@@ -2210,6 +2248,7 @@ void anchor_world_scheduler_begin(void) {
   anchor_world_bridge_control(0, 0, 0, 0);
   anchor_world_gate64_control(0, 0, 0, 0);
   anchor_world_doll_control(0, 0, 0, 0);
+  anchor_world_counterweight_control(0, 0, 0, 0, 0);
   if (!s_active || s_room != D_800C7AB2 || paused())
     return;
   for (i = 0; i < s_count; ++i) {
@@ -2236,6 +2275,25 @@ void anchor_world_scheduler_begin(void) {
     }
     if (!valid(i))
       continue;
+    if (w->kind == WORLD_COUNTERWEIGHT) {
+      if (w->retained_valid &&
+          (w->restore_controller || anchor_world_counterweight_needs_restore(a))) {
+        for (unsigned int j = 0; j < ANCHOR_WORLD_WORDS; ++j) w->net[j] = w->retained[j];
+        w->net[WORLD_INSTANCE] = (int)w->instance;
+        if (!w->have) w->net[WORLD_RECEIPT] = 0;
+        w->applied_valid = 0;
+        if (apply(w)) w->restore_controller = 0;
+      }
+      int bootstrap = (w->net[WORLD_RECEIPT] & WORLD_BOOTSTRAP) &&
+                      w->receipt != (unsigned int)w->net[WORLD_RECEIPT];
+      if (w->have && (w->owner != s_self || bootstrap) && !apply(w)) {
+        w->have = 0;w->receipt = WORLD_APPLY_FAILED;
+      }
+      unsigned int inputs = w->have ? (unsigned int)w->net[47] : 0;
+      anchor_world_counterweight_control(a, w->have && w->owner != s_self,
+                                         w->have && w->net[38], w->have, inputs);
+      continue;
+    }
     if (w->kind == WORLD_BRIDGE) {
       if (w->retained_valid && (w->restore_controller || anchor_world_bridge_needs_restore())) {
         for (unsigned int j = 0; j < ANCHOR_WORLD_WORDS; ++j) w->net[j] = w->retained[j];
@@ -2311,10 +2369,12 @@ void anchor_world_scheduler_begin(void) {
   anchor_world_bridge_begin();
   anchor_world_gate64_begin();
   anchor_world_doll_begin();
+  anchor_world_counterweight_begin();
 }
 RECOMP_HOOK_RETURN("func_80034734_35334")
 void anchor_world_scheduler_end(void) {
   unhold();anchor_world_crane_end();anchor_world_bridge_end();
+  anchor_world_counterweight_end();
 }
 RECOMP_HOOK_RETURN("func_80002040_2C40")
 void anchor_world_frame(void) {

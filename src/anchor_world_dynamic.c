@@ -15,6 +15,9 @@
 #include "anchor_world_doll.h"
 #include "anchor_world.h"
 #include "anchor_world_npc.h"
+#include "anchor_world_slicer.h"
+#include "anchor_world_random.h"
+#include "anchor_world_bomb.h"
 #include "anchor_world_paths.inc"
 
 #define B(p, o) (*(unsigned char *)((char *)(p) + (o)))
@@ -61,6 +64,13 @@ extern void func_080027AC_723DCC(void *, void *);
 extern void func_08000514_6AECF4(void *, void *);
 extern void func_080005F8_6AEDD8(void *, void *);
 extern void func_080006E0_6AEEC0(void *, void *);
+extern void func_08004550_6C3CA0(void *, void *);
+extern void func_08004594_6C3CE4(void *, void *);
+extern void func_08004654_6C3DA4(void *, void *);
+extern void func_08004694_6C3DE4(void *, void *);
+extern void func_0800488C_6C3FDC(void *, void *);
+extern void func_08007B28_6C7278(void *, void *);
+extern void func_08007BDC_6C732C(void *, void *);
 
 /* Exact native continuation addresses, resolved in code for overlay imports. */
 /* clang-format off */
@@ -97,6 +107,9 @@ typedef struct {
   unsigned char stable_ordinal;
   unsigned char shutter_birth, enemy_initialized, death_started;
   unsigned char doll_birth, doll_initialized, doll_scene;
+  unsigned char slicer_birth, slicer_initialized, slicer_frozen;
+  unsigned char random_birth, random_initialized, random_frozen;
+  unsigned char bomb_birth, bomb_initialized, bomb_frozen, bomb_particles;
   unsigned short parent;
   int row[WORLD_DYNAMIC_WORDS];
   int net[WORLD_DYNAMIC_WORDS];
@@ -118,6 +131,27 @@ static int resource_valid(const int *);
 static int apply(DynamicActor *);
 static DynamicActor *reconstruct(const int *);
 static int capture(DynamicActor *);
+static DynamicActor *slicer_register_root(void *);
+static int slicer_capture(DynamicActor *);
+static int slicer_callback(DynamicActor *, void *, void *);
+static void slicer_native(void *, void *);
+static DynamicActor *random_register_root(void *);
+static void random_child_birth(DynamicActor *, DynamicActor *);
+static int random_capture(DynamicActor *);
+static int random_callback(DynamicActor *, void *, void *);
+static void random_native(void *, void *);
+static DynamicActor *bomb_register_root(void *);
+static DynamicActor *bomb_child(DynamicActor *, DynamicActor *, DynamicCallback);
+static int bomb_capture(DynamicActor *);
+static int bomb_resource_valid(const int *);
+static int bomb_apply_extra(DynamicActor *,const int *);
+static int bomb_callback(DynamicActor *,void *,void *);
+static void bomb_native(void *,void *);
+static void bomb_damage(void *);
+static void bomb_detach(DynamicActor *);
+static int family_actor(const DynamicActor *d) {
+  return d->kind==WD_SLICER || d->kind==WD_RANDOM || d->kind==WD_BOMB;
+}
 static void clear(void *p, unsigned int size) {
   unsigned int i;
   for (i = 0; i < size; ++i)
@@ -150,6 +184,9 @@ static void restore(void) {
 }
 void anchor_world_dynamic_room(void) {
   restore();
+  if (d_room==D_800C7AB2)
+    for (unsigned int i=0;i<WORLD_DYNAMIC_MAX;++i)
+      if (d_actors[i].used && d_actors[i].kind==WD_BOMB) bomb_detach(&d_actors[i]);
   clear(d_actors, sizeof(d_actors));
   clear(d_loot_ordinals, sizeof(d_loot_ordinals));
   d_active = 0;
@@ -230,6 +267,41 @@ void world_dynamic_child(void *parent, void *child) {
   if (p && p->kind)
     authority = p->eligible && (!p->have || p->owner == d_self);
   d->parent = (unsigned short)index;
+  if (p && p->kind==WD_BOMB && !p->row[WB_ROLE]) {
+    d->parent=p->parent;d->bomb_birth=d->stable_ordinal=1;
+    bomb_child(p,d,0);
+    authority=p->row[WD_LIFE]==WD_REMOVED && (unsigned int)p->row[WD_COMMITTER]==d_self;
+  }
+  if (p && p->kind==WD_RANDOM) {
+    d->parent=p->parent;
+    if (!p->row[WR_ROLE] &&
+        ((unsigned long)DPTR(child,0xc)&~DDISABLED)==(unsigned long)func_08007B28_6C7278) {
+      random_child_birth(p,d);
+      d->row[WR_ROLE]=1;
+    } else if (p->row[WR_ROLE]) {
+      d->stable_ordinal=1;
+      d->row[WD_BASE_Y]=3;d->row[WD_ORDINAL]=p->row[WD_ORDINAL];
+      if (p->row[WD_LIFE]==WD_REMOVED)
+        authority=(unsigned int)p->row[WD_COMMITTER]==d_self;
+    }
+  }
+  if (p && p->kind == WD_SLICER) {
+    d->parent = p->parent;
+    d->stable_ordinal = 1;
+    d->row[WD_ORDINAL] = p->row[WS_ROLE] ? p->row[WD_ORDINAL] : 0;
+    /* Mark loot before generic placed-loot identity packing. A blade birth
+     * has a different initializer and carries the emitter's current ordinal. */
+    d->row[WD_BASE_Y] = p->row[WS_ROLE] + 2;
+    if (!p->row[WS_ROLE] &&
+        ((unsigned long)DPTR(child,0xc)&~DDISABLED)==(unsigned long)func_08004694_6C3DE4) {
+      d->slicer_birth = 1;
+      d->row[WD_BASE_Y] = 0;
+      d->row[WD_ORDINAL] = p->row[WD_ORDINAL];
+      d->row[WS_ROLE] = 1;
+      for (unsigned int j=WS_SUBTYPE;j<=WS_INITIAL;++j) d->row[j]=p->row[j];
+    } else if (p->row[WD_LIFE] == WD_REMOVED)
+      authority = (unsigned int)p->row[WD_COMMITTER] == d_self;
+  }
   if (parent == d_doll_helper && anchor_world_doll_parent()) {
     d->parent = (unsigned short)anchor_world_doll_parent();
     d->doll_birth = d->stable_ordinal = d->eligible = 1;
@@ -263,6 +335,11 @@ void world_dynamic_reuse(void *actor) {
   DynamicActor *d = lookup(actor);
   if (!d)
     return;
+  if (family_actor(d) && !d->row[WS_ROLE]) {
+    if (alive(d) && d->row[WD_LIFE] != WD_REMOVED) capture(d);
+    d->actor=0;d->saved=0;d->row[WS_PRESENT]=0;d->row[WD_PAUSED]=1;
+    return; /* A placed emitter's proximity unload is not a shared kill. */
+  }
   d->actor = 0;
   d->saved = 0;
   if (d->kind == WD_DOLL) {
@@ -272,11 +349,13 @@ void world_dynamic_reuse(void *actor) {
     return;
   }
   if (d->kind && d->eligible && d->ready && !d->placed &&
-      (d->kind != WD_SHUTTER_ENEMY || !d->have || d->owner == d_self ||
+      ((d->kind != WD_SHUTTER_ENEMY && !family_actor(d)) || !d->have || d->owner == d_self ||
        d->row[WD_LIFE] == WD_REMOVED)) {
+    if (family_actor(d) && d->row[WD_LIFE]!=WD_REMOVED)
+      d->row[WD_COMMITTER]=(int)d_self;
     d->row[WD_LIFE] = WD_REMOVED;
     d->row[WD_OWNER] = 0;
-    if (d->kind == WD_SHUTTER_ENEMY && !d->row[WD_COMMITTER])
+    if ((d->kind == WD_SHUTTER_ENEMY || family_actor(d)) && !d->row[WD_COMMITTER])
       d->row[WD_COMMITTER] = (int)d_self;
   } else
     clear(d, sizeof(*d));
@@ -352,6 +431,21 @@ static void detect(DynamicActor *d) {
   void *a = d->actor;
   if (d->kind == WD_NPC)
     return;
+  if (d->random_birth && H(a,0x5c)==WR_ENTITY && H(a,0x5e)==WR_CHILD_MODEL &&
+      d->animated && !d->clip &&
+      ((unsigned long)DPTR(a,0xc)&~DDISABLED)==(unsigned long)func_08007BDC_6C732C) {
+    d->kind=WD_RANDOM;d->random_initialized=1;
+    d->row[WD_PHASE]=WR_CHILD;d->row[WR_ROLE]=1;
+    d->row[WR_INSTANCE]=(int)d->serial;d->row[WR_PRESENT]=1;return;
+  }
+  if (d->slicer_birth && H(a,0x5c)==0x19d && H(a,0x5e)==0x19d &&
+      d->animated && !d->clip &&
+      ((unsigned long)DPTR(a,0xc)&~DDISABLED)==(unsigned long)func_0800488C_6C3FDC) {
+    d->kind=WD_SLICER;d->slicer_initialized=1;
+    d->row[WD_PHASE]=WS_FLIGHT;d->row[WS_INSTANCE]=(int)d->serial;
+    d->row[WS_PRESENT]=1;
+    return;
+  }
   if (d->doll_birth && !H(a, 0x5c) && !H(a, 0x5e) &&
       H(a, 0xd0) == 0xee && d->clip == 2 && !d->animated &&
       ((unsigned long)DPTR(a, 0xc) & ~DDISABLED) == (unsigned long)func_080005F8_6AEDD8) {
@@ -393,6 +487,9 @@ static void detect(DynamicActor *d) {
 RECOMP_HOOK("func_80218F30_5D4400")
 void world_dynamic_post(void *actor) {
   DynamicActor *d = lookup(actor);
+  if (!d && !d_building) d=slicer_register_root(actor);
+  if (!d && !d_building) d=random_register_root(actor);
+  if (!d && !d_building) d=bomb_register_root(actor);
   if (!d && actor && DPTR(actor, 0x18) && anchor_world_actor_placed(actor) &&
       (H(actor, 0x5c) == 0x82 || H(actor, 0x5c) == 0x83 ||
        H(actor, 0x5c) == 0x84 || H(actor, 0x5c) == 0x85)) {
@@ -409,6 +506,7 @@ void world_dynamic_post(void *actor) {
   }
   if (!d || d_building || !DPTR(actor, 0x18))
     return;
+  if (d->kind==WD_BOMB && d->bomb_birth && !d->proxy) d->bomb_initialized=1;
   if (!d->ready) {
     detect(d);
     if (!d->kind) {
@@ -429,6 +527,7 @@ void world_dynamic_post(void *actor) {
         DynamicActor *other = &d_actors[i];
         if (other != d && other->used && other->ready &&
             (other->eligible || other->have) && other->kind == d->kind &&
+            (!family_actor(d) || other->row[WS_ROLE]==d->row[WS_ROLE]) &&
             other->parent == d->parent && other->row[WD_ORDINAL] == d->row[WD_ORDINAL]) {
           /* A takeover may revisit an already published reward boundary.
            * Keep the existing native copy and its claim, without a new death. */
@@ -462,6 +561,10 @@ void world_dynamic_post(void *actor) {
     W(actor, 0x68) |= 2u; /* a locally repeated remote death/emission */
   if (d->kind == WD_DOLL && !(W(actor,0x68)&2u)) capture(d);
   if (W(actor, 0x68) & 2u) {
+    if (family_actor(d) && !d->row[WS_ROLE]) {
+      world_dynamic_reuse(actor);
+      return;
+    }
     if (d->kind == WD_DOLL && d->row[WD_LIFE] != WD_REMOVED) {
       /* A durable save bit can precede the room tombstone. Do not turn a
        * local unavailability or that packet race into a second award. */
@@ -476,7 +579,7 @@ void world_dynamic_post(void *actor) {
         (!d->have || d->owner == d_self)) {
       d->row[WD_LIFE] = WD_REMOVED;
       d->row[WD_OWNER] = 0;
-      if (d->kind == WD_SHUTTER_ENEMY)
+      if (d->kind == WD_SHUTTER_ENEMY || family_actor(d))
         d->row[WD_COMMITTER] = (int)d_self;
     }
     d->actor = 0;
@@ -493,6 +596,13 @@ static int capture(DynamicActor *d) {
   int *r = d->row;
   if (!d->kind || !d->eligible)
     return 0;
+  if (d->kind==WD_BOMB) return bomb_capture(d);
+  if (d->kind==WD_RANDOM && (!alive(d) || !d->random_initialized))
+    return d->ready && anchor_world_dynamic_row_valid(r);
+  if (d->kind==WD_SLICER && (!alive(d) || !d->slicer_initialized))
+    return d->ready && anchor_world_dynamic_row_valid(r);
+  if (family_actor(d) && !r[WS_ROLE] && r[WD_CID] && !r[WS_RECEIPT])
+    return anchor_world_dynamic_row_valid(r);
   if (d->kind == WD_DOLL && !alive(d) && func_800240DC_24CDC(0xee) &&
       r[WD_LIFE] != WD_REMOVED) {
     /* A Doll collected during offline play has already finished its local
@@ -502,6 +612,13 @@ static int capture(DynamicActor *d) {
   if (r[WD_LIFE] == WD_REMOVED) {
     if (d->kind == WD_DOLL && !r[WD_COMMITTER] && d_active && func_800240DC_24CDC(0xee))
       r[WD_COMMITTER]=(int)d_self;
+    return anchor_world_dynamic_row_valid(r);
+  }
+  if ((d->kind==WD_SLICER && d->slicer_frozen) ||
+      (d->kind==WD_RANDOM && d->random_frozen)) {
+    r[WD_LIFE]=d->claimed ? WD_CLAIM : WD_LIVE;
+    r[WD_LANDED]=d->claimed!=0;r[WD_PAUSED]=anchor_world_is_paused()!=0;
+    r[WS_PRESENT]=alive(d);r[WS_INSTANCE]=(int)d->serial;
     return anchor_world_dynamic_row_valid(r);
   }
   if (d->kind == WD_SHUTTER_ENEMY && d->proxy && !d->enemy_initialized)
@@ -604,8 +721,29 @@ static int capture(DynamicActor *d) {
   r[WD_SHADOW_OFFSET] = B(a, 0x6f);
   r[WD_MASK94] = H(a, 0x94);
   r[WD_BODY_OFFSET2] = S(a, 0x42);
+  if (d->kind==WD_SLICER && !slicer_capture(d)) return 0;
+  if (d->kind==WD_RANDOM && !random_capture(d)) return 0;
   return anchor_world_dynamic_row_valid(r);
 }
+#include "anchor_world_slicer.inc"
+#include "anchor_world_random.inc"
+#include "anchor_world_bomb.inc"
+
+static void bomb_child_traits(void *a,DynamicCallback initializer) {
+  DynamicActor *d=lookup(a);
+  if (d_building || !d || !d->bomb_birth) return;
+  for (unsigned int i=0;i<WORLD_DYNAMIC_MAX;++i) {
+    DynamicActor *root=&d_actors[i];
+    if (root->used && root->kind==WD_BOMB && !root->row[WB_ROLE] && root->parent==d->parent) {
+      bomb_child(root,d,initializer);
+      return;
+    }
+  }
+}
+RECOMP_HOOK("func_08000984_6E9AD4")
+void world_dynamic_bomb_ring_traits(void *a) { bomb_child_traits(a,func_08000984_6E9AD4); }
+RECOMP_HOOK("func_08000C74_6E9DC4")
+void world_dynamic_bomb_particle_traits(void *a) { bomb_child_traits(a,func_08000C74_6E9DC4); }
 /* Both asset waves and every requested list entry must be resident. Calling
  * the native binder with a missing resource deliberately faults the game. */
 static int resource_valid(const int *r) {
@@ -613,6 +751,17 @@ static int resource_valid(const int *r) {
   const unsigned short *files;
   const unsigned int *clips;
   unsigned int i, highest = (unsigned int)r[WD_CLIP];
+  if (r[WD_KIND]==WD_BOMB) return bomb_resource_valid(r);
+  if (r[WD_KIND]==WD_RANDOM) {
+    if (!anchor_world_random_scope(r,D_800C7AB2) || func_800141C4_14DC4(30)==-1) return 0;
+    if (!r[WR_ROLE]) return 1;
+  }
+  if (r[WD_KIND]==WD_SLICER) {
+    if (!anchor_world_slicer_scope(r,D_800C7AB2) ||
+        func_800141C4_14DC4(30)==-1) return 0;
+    /* Placed emitters have no model/clip binding. */
+    if (!r[WS_ROLE]) return 1;
+  }
   if (r[WD_KIND] == WD_SHUTTER_ENEMY)
     highest = 4; /* Live clip0 and the two native death fragment resources3/4. */
   if (r[WD_MODEL] > 1025 || r[WD_MODEL] < 0)
@@ -627,6 +776,11 @@ static int resource_valid(const int *r) {
   if (!files || !clips || func_800141C4_14DC4(files[0]) == -1 ||
       func_800141C4_14DC4(files[1]) == -1 || func_800141C4_14DC4(0x152) == -1)
     return 0;
+  if (r[WD_KIND]==WD_RANDOM &&
+      (files[0]!=0x18f || files[1]!=0x19f || clips[0]!=0x080009f8u)) return 0;
+  if (r[WD_KIND]==WD_SLICER &&
+      (files[0]!=0x1d6 || files[1]!=0x180 || clips[0]!=0x0800001cu ||
+       clips[1]!=0x080001d8u)) return 0;
   if (r[WD_SPHERE] != 17 && (unsigned int)r[WD_SPHERE] > highest)
     highest = (unsigned int)r[WD_SPHERE];
   for (i = 0; i <= highest; ++i)
@@ -702,6 +856,40 @@ static int apply(DynamicActor *d) {
     return 1;
   if (!alive(d) || !resource_valid(r))
     return 0;
+  if (d->kind==WD_BOMB) {
+    int claimed_cause=d->row[WB_CAUSE];
+    if (!r[WB_RECEIPT] || r[WB_INSTANCE]!=(int)d->serial || r[WB_ROLE]!=d->row[WB_ROLE] ||
+        (!d->bomb_initialized && D_8016DAB4_16E6B4!=a) || !bomb_apply_extra(d,r)) return 0;
+    for (j=0;j<WORLD_DYNAMIC_WORDS;++j) d->row[j]=r[j];
+    if (d->claimed) {
+      d->row[WD_LIFE]=WD_CLAIM;d->row[WD_LANDED]=1;
+      d->row[WB_CAUSE]=claimed_cause;d->row[WD_PHASE]=WB_EXPLODE;
+    }
+    d->row[WB_PRESENT]=1;d->row[WB_INSTANCE]=(int)d->serial;
+    B(a,0x75)=(unsigned char)r[WD_GRAVITY];
+    H(a,0x3c)=(unsigned short)r[WD_RADIUS];H(a,0x3e)=(unsigned short)r[WD_HEIGHT];
+    S(a,0x40)=(short)r[WD_OFFSET];H(a,0x96)=(unsigned short)r[WD_MASK];
+    H(a,0x94)=(unsigned short)r[WD_MASK94];S(a,0x42)=(short)r[WD_BODY_OFFSET2];
+    for (j=0;j<4;++j) B(a,0x98+j)=(unsigned char)r[WD_DIM0+j];
+    o=DPTR(a,0x18);
+    F(o,0x68)=(float)r[WD_OBJECT_RADIUS]/1000.f;F(o,0x6c)=(float)r[WD_OBJECT_HEIGHT]/1000.f;
+    d->native=(void *)bomb_native;
+    if (d->saved) d->saved=d->native;else DPTR(a,0xc)=d->native;
+    if (!r[WD_OWNER] || r[WD_PAUSED] || d->claimed) {
+      d->bomb_frozen=1;W(a,0x60)=0;F(a,0x78)=F(a,0x7c)=F(a,0x80)=0;
+    }
+    d->dirty=0;
+    return 1;
+  }
+  if (d->kind==WD_RANDOM &&
+      (!d->random_initialized || !r[WR_RECEIPT] || r[WR_INSTANCE]!=(int)d->serial ||
+       r[WR_ROLE]!=d->row[WR_ROLE] || !anchor_world_random_scope(r,D_800C7AB2) ||
+       (!r[WR_ROLE] && d->row[WD_ORDINAL]>r[WD_ORDINAL]))) return 0;
+  if (d->kind==WD_SLICER &&
+      (!d->slicer_initialized || !r[WS_RECEIPT] || r[WS_INSTANCE]!=(int)d->serial ||
+       r[WS_ROLE]!=d->row[WS_ROLE] || !anchor_world_slicer_scope(r,D_800C7AB2) ||
+       (!r[WS_ROLE] && d->row[WD_ORDINAL]>r[WD_ORDINAL])))
+    return 0;
   if (d->kind == WD_DOLL) {
     if (!d->doll_initialized || d->doll_scene) return 0;
     o = DPTR(a, 0x18);
@@ -741,7 +929,9 @@ static int apply(DynamicActor *d) {
      * timer at +8A. Preserve its native loop flag so the common post keeps
      * advancing it instead of stopping the sequence after one revolution. */
     unsigned int texture_loop = d->kind == WD_COIN ? 4u : 0;
-    if (d->kind == WD_SHUTTER_ENEMY)
+    if (d->kind==WD_RANDOM) W(a,0x60)=r[WR_ROLE] ? 0x002006e7u : 0;
+    else if (d->kind==WD_SLICER) W(a,0x60)=0x002006e1u;
+    else if (d->kind == WD_SHUTTER_ENEMY)
       W(a, 0x60) = 0x002e8261u | shadow;
     else W(a, 0x60) =
         (((unsigned int)r[WD_FLAGS_LO] | ((unsigned int)r[WD_FLAGS_HI] << 16)) &
@@ -777,7 +967,39 @@ static int apply(DynamicActor *d) {
       d_binding = 0;
     }
   }
-  if (d->kind == WD_SHUTTER_ENEMY) {
+  if (d->kind==WD_RANDOM) {
+    d->row[WD_COMMITTER]=r[WD_COMMITTER];
+    for (j=WR_ROLE;j<=WR_RESERVED1;++j) d->row[j]=r[j];
+    d->row[WD_PHASE]=r[WD_PHASE];d->row[WD_ORDINAL]=r[WD_ORDINAL];
+    for (j=WD_X;j<=WD_SZ;++j) d->row[j]=r[j];
+    d->row[WD_TIMER]=r[WD_TIMER];d->row[WR_RECEIPT]=r[WR_RECEIPT];d->row[WR_PRESENT]=1;
+    d->native = (void *)(r[WR_ROLE] && d->proxy ? random_native : random_phase(r[WD_PHASE]));
+    if (d->saved) d->saved=d->native;
+    else DPTR(a,0xc)=d->native;
+    if (!r[WD_OWNER] || r[WD_PAUSED] || d->claimed) {
+      d->random_frozen=1;W(a,0x60)=0;F(a,0x78)=F(a,0x7c)=F(a,0x80)=0;
+    }
+  } else if (d->kind==WD_SLICER) {
+    d->row[WD_COMMITTER]=r[WD_COMMITTER];
+    for (j=WS_ROLE;j<=WS_INITIAL;++j) d->row[j]=r[j];
+    d->row[WD_PHASE]=r[WD_PHASE];d->row[WD_ORDINAL]=r[WD_ORDINAL];
+    /* Keep an exact checkpoint while native prediction is frozen; do not
+     * publish the zero velocity used only to suppress the local post. */
+    for (j=WD_X;j<=WD_SZ;++j) d->row[j]=r[j];
+    d->row[WD_TIMER]=r[WD_TIMER];
+    d->row[WS_RECEIPT]=r[WS_RECEIPT];d->row[WS_PRESENT]=1;
+    B(a,0xd0)=(unsigned char)r[WS_SUBTYPE];B(a,0xd1)=(unsigned char)r[WS_REPEAT];
+    B(a,0xd2)=(unsigned char)r[WS_INITIAL];B(a,0xd3)=(unsigned char)r[WS_SPEED];
+    if (r[WS_ROLE]) DPTR(a,0xdc)=a;
+    d->native = (void *)slicer_phase(r[WD_PHASE]);
+    if (d->saved) d->saved=d->native;
+    else DPTR(a,0xc)=d->native;
+    if (!r[WD_OWNER] || r[WD_PAUSED] || d->claimed) {
+      d->slicer_frozen=1;
+      W(a,0x60)=0;
+      F(a,0x78)=F(a,0x7c)=F(a,0x80)=0;
+    }
+  } else if (d->kind == WD_SHUTTER_ENEMY) {
     H(a, 0xc4) = 57;
     S(a, 0xc6) = (short)r[WD_PATH_TIMER];
     B(a, 0xce) = (unsigned char)r[WD_PATH_STATE];
@@ -993,6 +1215,9 @@ static void dynamic_callback(void *actor, void *object) {
   if (d_room != D_800C7AB2)
     return;
   if (d->kind == WD_DOLL) { doll_callback(actor,object);return; }
+  if (d->kind == WD_SLICER) { slicer_callback(d,actor,object);return; }
+  if (d->kind == WD_RANDOM) { random_callback(d,actor,object);return; }
+  if (d->kind == WD_BOMB) { bomb_callback(d,actor,object);return; }
   if (d->kind == WD_SHUTTER_ENEMY && !d->enemy_initialized) {
     /* This pure D4=1 setup binds model/route/display-list/shadow resources.
      * It uses the current native task when scheduling its continuation, so
@@ -1069,13 +1294,20 @@ static void dynamic_callback(void *actor, void *object) {
  * return hook. Cooldown matches the native surviving-hit bookkeeping. */
 RECOMP_HOOK("func_80218350_5D3820")
 void world_dynamic_enemy_damage(void *actor) {
+  bomb_damage(actor);
   DynamicActor *d = lookup(actor);
   unsigned int status;
-  if (!d_active || d_room != D_800C7AB2 || !d || d->kind != WD_SHUTTER_ENEMY || !alive(d) ||
-      !d->enemy_initialized || d->row[WD_LIFE] == WD_REMOVED ||
-      H(actor, 0x5e) != 0xfb || H(actor, 0xc4) != 57 ||
-      W(actor, 0xd4) != 1 || B(actor, 0x8d) != 1)
+  if (!d_active || d_room != D_800C7AB2 || !d || !alive(d) ||
+      d->row[WD_LIFE] == WD_REMOVED || B(actor,0x8d)!=1)
     return;
+  if (d->kind==WD_SHUTTER_ENEMY) {
+    if (!d->enemy_initialized || H(actor,0x5e)!=0xfb || H(actor,0xc4)!=57 ||
+        W(actor,0xd4)!=1) return;
+  } else if (d->kind==WD_RANDOM) {
+    if (!d->random_initialized || !d->row[WR_ROLE] ||
+        !anchor_world_random_scope(d->row,D_800C7AB2)) return;
+  } else if (d->kind!=WD_SLICER || !d->slicer_initialized ||
+             !anchor_world_slicer_scope(d->row,D_800C7AB2)) return;
   status = W(actor, 0x68);
   if (!(status & 0x40000u) &&
       !((status & 0x80u) && !(status & 1u) && DPTR(actor, 0x38)))
@@ -1088,10 +1320,18 @@ void world_dynamic_enemy_damage(void *actor) {
 RECOMP_HOOK("func_80218E7C_5D434C")
 void world_dynamic_enemy_commit(void *actor) {
   DynamicActor *d = lookup(actor);
-  if (!d_active || d_room != D_800C7AB2 || !d || d->kind != WD_SHUTTER_ENEMY || !alive(d) ||
-      !d->enemy_initialized || d->death_started ||
+  if (!d_active || d_room != D_800C7AB2 || !d || !alive(d) || d->death_started ||
       d->row[WD_LIFE] != WD_REMOVED || !d->row[WD_LANDED])
     return;
+  if (family_actor(d)) {
+    if (d->kind==WD_BOMB) return; /* Its own callback commits the explosion. */
+    if (d->kind==WD_SLICER ? !d->slicer_initialized :
+        (!d->random_initialized || !d->row[WR_ROLE])) return;
+    d->death_started=1;B(actor,0x8d)=1;W(actor,0x68)|=0x40000u;
+    if ((unsigned int)d->row[WD_COMMITTER]!=d_self) W(actor,0x64)|=0x8000u;
+    return; /* Native common fast death, no robot-specific fragments. */
+  }
+  if (d->kind!=WD_SHUTTER_ENEMY || !d->enemy_initialized) return;
   d->death_started = 1;
   /* Fast native death has no presentation. Reuse the two non-attacking
    * category8 fragment constructors from the ordinary robot death branch;
@@ -1150,10 +1390,15 @@ static DynamicActor *match(const int *r) {
     if (equal_key(d->row, r) || (!d->row[WD_CID] && r[WD_CID] == (int)d_self &&
                                  r[WD_SERIAL] == (int)d->serial))
       return d;
+    if (!d->row[WD_CID] && family_actor(d) && r[WD_KIND]==d->kind &&
+        d->parent==r[WD_PARENT] && d->row[WS_ROLE]==r[WS_ROLE] &&
+        (!r[WS_ROLE] || d->row[WD_ORDINAL]==r[WD_ORDINAL])) return d;
     if (!d->row[WD_CID] && d->placed && r[WD_ORDINAL] == 0x7fffffff &&
         r[WD_PARENT] == d->parent)
       return d;
-    if (!d->row[WD_CID] && (r[WD_CID] == 0x7ffffffd || r[WD_CID] == 0x7ffffffb) && r[WD_KIND] == d->kind &&
+    if (!d->row[WD_CID] && (r[WD_CID] == 0x7ffffffd || r[WD_CID] == 0x7ffffffb ||
+        ((r[WD_CID]==WS_LOOT_ORIGIN || r[WD_CID]==WR_LOOT_ORIGIN) &&
+         r[WD_ENTITY]==d->row[WD_ENTITY] && r[WD_BASE_Y]==d->row[WD_BASE_Y])) && r[WD_KIND] == d->kind &&
         r[WD_KIND] >= WD_COIN && r[WD_KIND] <= WD_FOOD &&
         r[WD_PARENT] == d->parent && r[WD_ORDINAL] == d->row[WD_ORDINAL])
       return d;
@@ -1189,8 +1434,10 @@ static DynamicActor *reconstruct(const int *r) {
   DynamicActor *d;
   unsigned int j;
   if (r[WD_LIFE] != WD_LIVE ||
+      ((r[WD_KIND]==WD_SLICER || r[WD_KIND]==WD_RANDOM || r[WD_KIND]==WD_BOMB) && !r[WS_ROLE]) ||
       (r[WD_ORDINAL] == 0x7fffffff && r[WD_KIND] != WD_SHUTTER_ENEMY &&
-       r[WD_CID] != 0x7ffffffb) ||
+       r[WD_KIND]!=WD_SLICER && r[WD_KIND]!=WD_RANDOM &&
+       r[WD_CID]!=WR_LOOT_ORIGIN && r[WD_CID]!=WS_LOOT_ORIGIN && r[WD_CID] != 0x7ffffffb) ||
       !D_801FC604_5B8514 || !resource_valid(r))
     return 0;
   d = allocate(0);
@@ -1198,7 +1445,9 @@ static DynamicActor *reconstruct(const int *r) {
     return 0;
   d_building = 1;
   a = func_802171A8_5D2678(D_801FC604_5B8514, dynamic_callback,
-                           (unsigned char)(r[WD_KIND] == WD_NPC      ? 1
+                           (unsigned char)(r[WD_KIND]==WD_BOMB ?
+                                             (r[WB_ROLE]==WB_ROLE_V4 || r[WB_ROLE]==WB_ROLE_V8 ? 1 : 8)
+                                           : r[WD_KIND] == WD_NPC || r[WD_KIND]==WD_SLICER || r[WD_KIND]==WD_RANDOM ? 1
                                            : r[WD_KIND] == WD_SHUTTER_ENEMY ? 6
                                            : r[WD_KIND] == WD_HAZARD ? 12
                                                                      : 9));
@@ -1227,7 +1476,24 @@ static DynamicActor *reconstruct(const int *r) {
   for (j = 0; j < WORLD_DYNAMIC_WORDS; ++j)
     d->row[j] = d->net[j] = r[j];
   d->dirty = 1;
-  if (d->kind == WD_DOLL) {
+  if (family_actor(d)) {
+    if (d->kind==WD_SLICER) d->slicer_birth=1;
+    else if (d->kind==WD_BOMB) d->bomb_birth=1;
+    else d->random_birth=1;
+    d->stable_ordinal=1;
+    d->row[WS_INSTANCE]=(int)d->serial;d->row[WS_RECEIPT]=0;
+    d->row[WS_ESTABLISHED]=0;d->row[WS_PRESENT]=1;
+    unsigned int code=d->kind==WD_BOMB ? 40 : 30;
+    H(a,0x28)=(unsigned short)code;W(a,0x2c)=(unsigned int)func_800141C4_14DC4(code);
+    DPTR(a,0x84)=0;DPTR(a,0x90)=0;
+    DPTR(a,0x8)=(void *)func_8021925C_5D472C;
+    DPTR(a,0x10)=(void *)func_80218F30_5D4400;
+    /* Inherited collision fields are restored from the typed row by apply;
+     * suppress common work until scheduled native initialization and receipt. */
+    W(a,0x60)=0;W(a,0x64)=0;W(a,0x48)=0;
+    d->native=(void *)(d->kind==WD_SLICER ? slicer_native : d->kind==WD_BOMB ? bomb_native : random_native);
+    DPTR(a,0xc)=(void *)dynamic_callback;
+  } else if (d->kind == WD_DOLL) {
     /* Exact fields written by File62 before scheduled File26 initialization.
      * CD00+8 is the native byte generation counter at 8015CD08. */
     H(a,0x28)=26;W(a,0x2c)=(unsigned int)func_800141C4_14DC4(26);
@@ -1255,7 +1521,7 @@ static DynamicActor *reconstruct(const int *r) {
     H(o, 0x14 + j * 2) = object_angle(r, j);
     F(o, 0x1c + j * 4) = (float)r[WD_SX + j] / 1000.0f;
   }
-  if ((r[WD_FLAGS_HI] & 0x800) && d->kind != WD_SHUTTER_ENEMY && d->kind != WD_DOLL)
+  if ((r[WD_FLAGS_HI] & 0x800) && d->kind != WD_SHUTTER_ENEMY && d->kind != WD_DOLL && !family_actor(d))
     func_80219E70_5D5340(a, (unsigned char)r[WD_SHADOW_SCALE],
                          (unsigned char)r[WD_SHADOW_OFFSET]);
   if (d->kind == WD_COIN && r[WD_MODEL] == 1 && r[WD_CLIP] == 4)
@@ -1293,8 +1559,16 @@ void anchor_world_dynamic_frame(unsigned int room, unsigned int signature,
       for (i = 0; i < WORLD_DYNAMIC_MAX; ++i) {
         d_actors[i].have = 0;
         d_actors[i].claimed = 0;
-        if (alive(&d_actors[i]) && d_actors[i].proxy)
-          DPTR(d_actors[i].actor, 0xc) = d_actors[i].native;
+        if (d_actors[i].kind==WD_BOMB) {
+          bomb_detach(&d_actors[i]);
+          continue;
+        }
+        if (alive(&d_actors[i]) && d_actors[i].proxy) {
+          if ((d_actors[i].kind==WD_SLICER && !d_actors[i].slicer_initialized) ||
+              (d_actors[i].kind==WD_RANDOM && !d_actors[i].random_initialized))
+            W(d_actors[i].actor,0x68)|=2u;
+          else DPTR(d_actors[i].actor, 0xc) = d_actors[i].native;
+        }
       }
     }
     return;
@@ -1321,6 +1595,7 @@ void anchor_world_dynamic_frame(unsigned int room, unsigned int signature,
       int *r = d_incoming[i];
       DynamicActor *d = match(r);
       if (d && r[WD_LIFE] == WD_LIVE && !alive(d) &&
+          !(family_actor(d) && !d->row[WS_ROLE]) &&
           d->row[WD_LIFE] != WD_REMOVED) {
         /* A replica may have been culled or its pool slot reused locally.
          * Presence at the authority requires a new local task, not a stale
@@ -1346,14 +1621,20 @@ void anchor_world_dynamic_frame(unsigned int room, unsigned int signature,
         d->row[WD_LIFE] = WD_REMOVED;
         d->row[WD_OWNER] = r[WD_OWNER];
         d->row[WD_COMMITTER] = r[WD_COMMITTER];
-        if (d->kind == WD_SHUTTER_ENEMY)
+        if (d->kind == WD_SHUTTER_ENEMY || family_actor(d))
           d->row[WD_LANDED] = r[WD_LANDED];
-        if (!d->actor)
+        if (!d->actor && !family_actor(d))
           clear(d, sizeof(*d));
         continue;
       }
       if (r[WD_KIND] != d->kind || r[WD_ENTITY] != d->row[WD_ENTITY])
         continue;
+      if (family_actor(d) &&
+          (d->kind==WD_SLICER ? d->slicer_initialized :
+           d->kind==WD_BOMB ? d->bomb_initialized : d->random_initialized) &&
+          (r[WS_INSTANCE]!=(int)d->serial || !r[WS_RECEIPT] ||
+           (!r[WS_ROLE] && r[WD_ORDINAL]<d->row[WD_ORDINAL])))
+        continue; /* Do not replace a usable checkpoint with a stale offer. */
       d->eligible = 1;
       d->parent = (unsigned short)r[WD_PARENT];
       if (r[WD_CID] == 0x7ffffffd && r[WD_KIND] >= WD_COIN &&
@@ -1370,9 +1651,9 @@ void anchor_world_dynamic_frame(unsigned int room, unsigned int signature,
       }
       d->have = 1;
       d->owner = (unsigned int)r[WD_OWNER];
-      if (d->proxy && !d->saved)
+      if (d->proxy && !d->saved && d->actor)
         DPTR(d->actor, 0xc) = (void *)dynamic_callback;
-      if (d->owner != d_self || d->proxy)
+      if (d->owner != d_self || d->proxy || family_actor(d))
         apply(d);
     }
   } else

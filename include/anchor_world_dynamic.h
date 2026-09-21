@@ -83,7 +83,7 @@ enum {
   WD_GRAVITY,
   WD_NPC_CHECKPOINT
 };
-enum { WD_NPC = 1, WD_COIN, WD_HEALTH, WD_FOOD, WD_HAZARD, WD_SHUTTER_ENEMY, WD_DOLL };
+enum { WD_NPC = 1, WD_COIN, WD_HEALTH, WD_FOOD, WD_HAZARD, WD_SHUTTER_ENEMY, WD_DOLL, WD_SLICER, WD_RANDOM, WD_BOMB, WD_WAVE };
 enum { WD_LIVE, WD_CLAIM, WD_REMOVED };
 int anchor_world_dynamic_row_valid(const int *row);
 int anchor_world_dynamic_encode(const int rows[][WORLD_DYNAMIC_WORDS],

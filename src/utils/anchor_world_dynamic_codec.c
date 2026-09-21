@@ -1,5 +1,9 @@
 #include "anchor_world_dynamic.h"
 #include "anchor_world_npc.h"
+#include "anchor_world_slicer.h"
+#include "anchor_world_random.h"
+#include "anchor_world_bomb.h"
+#include "anchor_world_wave.h"
 #include "utils/string_utils.h"
 
 int anchor_world_dynamic_row_valid(const int *r) {
@@ -17,13 +21,13 @@ int anchor_world_dynamic_row_valid(const int *r) {
       -32768, -32768, 0};
   static const int hi[WORLD_DYNAMIC_WORDS] = {
       2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2,
-      7,          256,        1025,       1025,       255,        1,
+      11,         256,        1025,       1025,       255,        1,
       3276700,    3276700,    3276700,    1023,       1023,       1023,
       1000000,    65535,      7,          100000,     100000,     100000,
       64000,      64000,      64000,      65535,      65535,      65535,
       65535,      32767,      163,        32767,      7,          255,
       32767,      32767,      32767,      255,        1,          65535,
-      17,         100000,     1,          32767,      1023,       65535,
+      35,         100000,     1,          32767,      1023,       65535,
       65535,      32767,      65535,      65535,      32767,      255,
       65535,      255,        255,        255,        255,        100000,
       100000,     3276700,    3276700,    3276700,    2147483647, 1,
@@ -31,9 +35,26 @@ int anchor_world_dynamic_row_valid(const int *r) {
       2147483647, 255,        22,         32767,      32767,      32767,
       32767,      32767,      32767,      32767,      6};
   unsigned int i;
-  for (i = 0; i < WORLD_DYNAMIC_WORDS; ++i)
-    if (r[i] < lo[i] || r[i] > hi[i])
-      return 0;
+  for (i = 0; i < WORLD_DYNAMIC_WORDS; ++i) {
+    int min=lo[i],max=hi[i];
+    if ((r[WD_KIND]==WD_SLICER || r[WD_KIND]==WD_RANDOM || r[WD_KIND]==WD_BOMB || r[WD_KIND]==WD_WAVE) &&
+        (i==WS_INSTANCE || i==WS_RECEIPT)) { min=0;max=2147483647; }
+    if (r[WD_KIND]==WD_RANDOM && (i==WR_TARGET_X || i==WR_TARGET_Z)) {
+      min=-WR_TARGET_LIMIT;max=WR_TARGET_LIMIT;
+    }
+    if (r[WD_KIND]==WD_WAVE && i>=WW_TARGET_X && i<=WW_TARGET_Z) {
+      min=-WW_TARGET_LIMIT;max=WW_TARGET_LIMIT;
+    }
+    if (r[i]<min || r[i]>max) return 0;
+  }
+  if (r[WD_KIND]==WD_WAVE)
+    return r[WD_SERIAL]>0 && anchor_world_wave_valid(r);
+  if (r[WD_KIND]==WD_BOMB)
+    return r[WD_SERIAL]>0 && anchor_world_bomb_valid(r);
+  if (r[WD_KIND]==WD_RANDOM)
+    return r[WD_SERIAL]>0 && anchor_world_random_valid(r);
+  if (r[WD_KIND]==WD_SLICER)
+    return r[WD_SERIAL]>0 && anchor_world_slicer_valid(r);
   if (!anchor_world_npc_valid(r[WD_ENTITY], r[WD_MODEL],
                               r + WD_NPC_CHECKPOINT) ||
       (r[WD_KIND] != WD_NPC && r[WD_NPC_CHECKPOINT]))

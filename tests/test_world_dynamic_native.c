@@ -22,6 +22,7 @@ static char *anchor_update_world_actors(const char *s) {
   return result;
 }
 static int parent_authority = 1, placed_actor;
+static unsigned int placed_index=3;
 static int enemy_sync_actor_authority(void *a) {
   (void)a;
   return -1;
@@ -108,7 +109,7 @@ int anchor_world_loot_ordinal(void *parent, unsigned int *ordinal) {
 }
 int anchor_world_actor_authority(void *a, unsigned int *index) {
   (void)a;
-  *index = 3;
+  *index = placed_index;
   return parent_authority;
 }
 #define DSTUB(f)                                                               \
@@ -121,6 +122,35 @@ DYNAMIC_PHASES(DSTUB)
 WORLD_NPC_PHASES(DSTUB)
 DSTUB(func_802130C8_5CE598)
 DSTUB(func_8021332C_5CE7FC)
+void func_08004550_6C3CA0(void *a,void *o) {
+  (void)o;S(a,0x8a)-=2;
+  if (!S(a,0x8a)) DPTR(a,0xc)=(void *)func_08004594_6C3CE4;
+}
+void func_08004594_6C3CE4(void *a,void *o) {
+  (void)o;world_dynamic_slicer_birth(a);
+  S(a,0x8a)=B(a,0xd1);DPTR(a,0xc)=(void *)func_08004654_6C3DA4;
+}
+void func_08004654_6C3DA4(void *a,void *o) {
+  (void)o;short old=S(a,0x8a);--S(a,0x8a);
+  if (!old) DPTR(a,0xc)=(void *)func_08004594_6C3CE4;
+}
+void func_08004694_6C3DE4(void *a,void *o) {
+  assert(D_8016DAB4_16E6B4==a && DPTR(a,0xdc)==a);
+  H(a,0x5e)=0x19d;W(a,0x60)=0x2006e1;S(a,0x8a)=120;
+  world_dynamic_animation(a,0);world_dynamic_sphere(a,1);
+  W(o,0x30)=0x28007c30;H(o,0x7e)=256;B(o,0x7c)=0;
+  for(int j=0;j<3;++j) F(o,0x1c+4*j)=.1f;
+  B(a,0x4c)=1;F(a,0x78)=2.f*(B(a,0xd3)+1);
+  DPTR(a,0xc)=(void *)func_0800488C_6C3FDC;
+}
+void func_0800488C_6C3FDC(void *a,void *o) {
+  (void)o;assert(DPTR(a,0xdc)==a);
+  short old=S(a,0x8a);--S(a,0x8a);
+  if (!old) world_dynamic_reuse(a);
+}
+int func_8021B988_5D6E58(void *a,float x,float y,float z,float speed) {
+  (void)a;(void)x;(void)y;(void)z;(void)speed;return 1;
+}
 static int robot_inits, robot_ai, robot_deaths, robot_drops;
 void func_08001EA4_6D0F84(void *a, void *o) {
   assert(D_8016DAB4_16E6B4 == a && W(a, 0xd0) == 57 && W(a, 0xd4) == 1);
@@ -286,6 +316,7 @@ static void fixture(void) {
   excluded_health = excluded_ryo = 0;
   parent_authority = 1;
   placed_actor = 0;
+  placed_index=3;resources[0]=100;resources[1]=101;
   bridge_owned_actor = 0;
   stable_loot_ordinal = -1;
   shutter_ordinal = 0;
@@ -889,7 +920,127 @@ static void nested_doll_test(void) {
   world_dynamic_post(a);assert(d->ready && d->kind==WD_DOLL && d->doll_initialized);
   assert(DPTR(a,0xc)==doll_callback && capture(d));
 }
+static DynamicActor *slicer_root_fixture(unsigned int room,unsigned int parent) {
+  fixture();D_800C7AB2=d_room=room;placed_index=parent;placed_actor=1;
+  void *a=actors[6], *o=objects[6];int p[4];
+  assert(anchor_world_slicer_params(room,parent,p));
+  DPTR(a,0x18)=o;DPTR(a,0xc)=(void *)func_08004550_6C3CA0;
+  H(a,0x5c)=H(a,0x5e)=0x19d;B(a,0x74)=3;B(a,0x8d)=1;
+  B(a,0xd0)=p[0];B(a,0xd1)=p[2];B(a,0xd2)=p[3];B(a,0xd3)=p[1];
+  S(a,0x8a)=p[3];W(a,0x60)=0x2006e1;W(a,0x48)=0xffffffffu;
+  W(o,0x30)=0x28007c30;
+  for(int j=0;j<3;++j) F(o,0x1c+4*j)=.1f;
+  world_dynamic_post(a);
+  DynamicActor *d=lookup(a);assert(d && capture(d));return d;
+}
+static void slicer_offer(DynamicActor *d,int owner,int token) {
+  assert(capture(d));
+  memcpy(d->net,d->row,sizeof(d->row));
+  d->net[WS_INSTANCE]=(int)d->serial;d->net[WS_RECEIPT]=token;
+  d->net[WD_OWNER]=owner;d->owner=owner;d->dirty=d->have=1;
+}
+static void slicer_lifecycle_test(void) {
+  for(unsigned int i=0;i<6;++i) {
+    DynamicActor *d=slicer_root_fixture(i<2?0xab:0xac,i<2?i+6:i+4);
+    void *a=d->actor;int initial=S(a,0x8a);
+    tick(d);assert(S(a,0x8a)==initial && d->row[WD_ORDINAL]==0);
+    slicer_offer(d,2,17);assert(apply(d) && d->row[WS_RECEIPT]==17);
+    for(int n=0;n<initial/2;++n) tick(d);
+    assert(d->row[WD_PHASE]==WS_BIRTH && d->row[WD_ORDINAL]==0);
+    tick(d);assert(d->row[WD_ORDINAL]==1 && d->row[WD_PHASE]==WS_REPEAT_WAIT);
+    int repeat=d->row[WS_REPEAT];
+    for(int n=0;n<repeat+1;++n) tick(d);
+    assert(d->row[WD_PHASE]==WS_BIRTH && d->row[WD_ORDINAL]==1);
+    tick(d);assert(d->row[WD_ORDINAL]==2);
+    /* Culling retains phase/ordinal; a new incarnation cannot echo an old receipt. */
+    d->row[WD_CID]=WS_ROOT_ORIGIN;d->row[WD_SESSION]=42;d->row[WD_VISIT]=i<2?0xac:0xad;
+    d->row[WD_SERIAL]=d->parent;
+    world_dynamic_reuse(a);assert(!d->actor && !d->row[WS_PRESENT] && d->row[WD_LIFE]==WD_LIVE);
+    unsigned int old_instance=d->serial;int timer=d->row[WD_TIMER];
+    DPTR(a,0xc)=(void *)func_08004550_6C3CA0;S(a,0x8a)=initial;
+    assert(slicer_register_root(a)==d && capture(d));
+    assert(d->serial!=old_instance && !d->row[WS_RECEIPT] && d->row[WD_TIMER]==timer);
+    slicer_offer(d,2,18);d->net[WS_INSTANCE]=(int)old_instance;
+    assert(!apply(d) && !d->row[WS_RECEIPT]);
+    d->net[WS_INSTANCE]=(int)d->serial;assert(apply(d) && S(a,0x8a)==timer);
+  }
+  DynamicActor *root=slicer_root_fixture(0xac,6);slicer_offer(root,2,1);assert(apply(root));
+  root->row[WD_ORDINAL]=7;
+  void *a=func_802171A8_5D2678(root->actor,func_08004694_6C3DE4,1);
+  world_dynamic_child(root->actor,a);DynamicActor *blade=lookup(a);
+  assert(blade && blade->slicer_birth && blade->row[WD_ORDINAL]==7);
+  H(a,0x5c)=0x19d;B(a,0x8d)=1;D_8016DAB4_16E6B4=a;
+  world_dynamic_slicer_traits(a);func_08004694_6C3DE4(a,DPTR(a,0x18));world_dynamic_post(a);
+  assert(blade->kind==WD_SLICER && capture(blade) && DPTR(a,0xdc)==a);
+  /* Destroying the emitter cannot invalidate blade movement traits. */
+  world_dynamic_reuse(root->actor);B(actors[6],0xd0)=255;
+  assert(B(DPTR(a,0xdc),0xd0)==2);
+  resources[0]=0x1d6;resources[1]=0x180;clips[0]=0x0800001c;clips[1]=0x080001d8;
+  slicer_offer(blade,2,9);assert(apply(blade));
+  W(a,0x68)=0x80;DPTR(a,0x38)=actors[7];world_dynamic_enemy_damage(a);
+  assert(blade->claimed && B(a,0x8d)==1 && !(W(a,0x68)&0x40080));
+  tick(blade);assert(!(W(a,0x68)&2)); /* no death before send/commit */
+  blade->row[WD_LIFE]=WD_REMOVED;blade->row[WD_LANDED]=1;blade->row[WD_COMMITTER]=1;
+  world_dynamic_enemy_commit(a);
+  assert(blade->death_started && (W(a,0x68)&0x40000) && (W(a,0x64)&0x8000));
+  assert(used==1); /* no unrelated robot fragments */
+  void *drop=func_802171A8_5D2678(a,d_phases[0],9);world_dynamic_child(a,drop);
+  DynamicActor *loot=lookup(drop);
+  assert(loot && !loot->eligible && loot->row[WD_ORDINAL]==7 && loot->row[WD_BASE_Y]==3);
+
+  /* Late-entry constructor runs once, then waits for a current-instance offer. */
+  int r[WORLD_DYNAMIC_WORDS];memcpy(r,blade->row,sizeof(r));r[WD_LIFE]=WD_LIVE;
+  r[WD_LANDED]=r[WD_COMMITTER]=0;r[WS_INSTANCE]=r[WS_RECEIPT]=0;
+  r[WD_TIMER]=31;r[WD_OWNER]=2;r[WD_CID]=WS_BLADE_ORIGIN;r[WD_SERIAL]=7;
+  DynamicActor *copy=reconstruct(r);assert(copy && !copy->slicer_initialized);
+  copy->have=1;copy->owner=2;tick(copy);
+  assert(copy->slicer_initialized && !copy->row[WS_RECEIPT] && W(copy->actor,0x60)==0);
+  assert(DPTR(copy->actor,0xdc)==copy->actor && !DPTR(copy->actor,0x84));
+  memcpy(copy->net,r,sizeof(r));copy->net[WS_INSTANCE]=(int)copy->serial;
+  copy->dirty=1;
+  assert(!apply(copy) && W(copy->actor,0x60)==0 && !copy->row[WS_RECEIPT]);
+  copy->net[WS_RECEIPT]=23;copy->dirty=1;
+  assert(apply(copy) && copy->row[WS_RECEIPT]==23 && S(copy->actor,0x8a)==31);
+  copy->net[WD_PAUSED]=1;copy->dirty=1;
+  assert(apply(copy) && W(copy->actor,0x60)==0 && F(copy->actor,0x78)==0);
+  copy->net[WD_PAUSED]=0;copy->dirty=1;assert(apply(copy));
+  copy->have=0;tick(copy);assert(copy->slicer_frozen && F(copy->actor,0x78)==0);
+  copy->have=1;copy->dirty=0;tick(copy);
+  assert(!copy->slicer_frozen && F(copy->actor,0x78)!=0);
+  copy->row[WD_TIMER]=0;S(copy->actor,0x8a)=0;copy->dirty=0;
+  tick(copy);assert(!copy->actor && copy->row[WD_LIFE]==WD_REMOVED && !copy->row[WD_LANDED]);
+  assert(copy->row[WD_COMMITTER]==2);
+  r[WD_LIFE]=WD_REMOVED;int before=used;assert(!reconstruct(r) && used==before);
+  r[WD_LIFE]=WD_LIVE;clips[1]=0;assert(!reconstruct(r));
+}
+/* Bomb gameplay has a separate native harness. These imports keep the shared
+ * lifecycle harness linked while exercising its other actor families. */
+#define BOMB_STUB(f) void f(void *a,void *o) { (void)a;(void)o; }
+BOMB_STUB(func_08000508_6E9658)
+BOMB_STUB(func_08000560_6E96B0)
+BOMB_STUB(func_080005F8_6E9748)
+BOMB_STUB(func_080006D4_6E9824)
+BOMB_STUB(func_08000950_6E9AA0)
+BOMB_STUB(func_08000984_6E9AD4)
+BOMB_STUB(func_08000AD0_6E9C20)
+BOMB_STUB(func_08000C74_6E9DC4)
+BOMB_STUB(func_08000E24_6E9F74)
+#undef BOMB_STUB
+unsigned char D_8020CBF0_5C8B00[8];
+void func_8000F420_10020(unsigned int s,unsigned char *p,void *o,float distance) {
+  (void)s;(void)p;(void)o;(void)distance;
+}
+int func_8021B7AC_5D6C7C(void *a,float radius) { (void)a;(void)radius;return 0; }
+#define BOMB_COLOUR(f) void *f(void *a,unsigned int alpha,unsigned int r,unsigned int g,unsigned int b) { \
+  (void)alpha;(void)r;(void)g;(void)b;return (char *)DPTR(a,0x18)+0x80; }
+BOMB_COLOUR(func_8021A26C_5D573C)
+BOMB_COLOUR(func_8021DD4C_5D921C)
+BOMB_COLOUR(func_8021DF60_5D9430)
+#undef BOMB_COLOUR
+#include "test_world_random_native.c"
 int main(void) {
+  random_lifecycle_test();
+  slicer_lifecycle_test();
   nested_doll_test();
   bridge_cohort_exclusion_test();
   shutter_enemy_test();

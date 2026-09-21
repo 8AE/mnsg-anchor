@@ -6,10 +6,11 @@ peer state atomically. Call under anchor_mnsg's player-state lock.
 """
 import json
 from anchor_world_npc import valid as npc_valid
+import anchor_world_counterweight as counterweight
 
 PACKET_TYPE = 'MNSG_WORLD'
 METADATA_KEY = 'worldSync'
-VERSION = 15
+VERSION = 16
 WORDS = 50
 INSTANCE = 48
 RECEIPT = 49
@@ -111,18 +112,20 @@ def bit(bits, index):
     return bool(bits[index // 8] & (1 << (index % 8)))
 
 
-def pad_inputs(value):
-    """Bounded crane input list: [placedIndex, padMask], at most one entry."""
-    if not isinstance(value, list) or len(value) > 1:
+def pad_inputs(value, room=None):
+    """Bounded per-root rider/latch inputs for the current room."""
+    coupled = room == counterweight.ROOM
+    if not isinstance(value, list) or len(value) > (3 if coupled else 1):
         return None
     seen = set()
     entries = []
     for entry in value:
         if (not isinstance(entry, list) or len(entry) != 2 or
                 not integer(entry[0], 0, MAX_ACTORS-1) or
-                not integer(entry[1], 0, CRANE_INPUT_MAX)):
+                not integer(entry[1], 0, 63 if coupled else CRANE_INPUT_MAX) or
+                (coupled and entry[0] not in counterweight.POSES)):
             return None
-        key = (entry[0], entry[1])
+        key = entry[0]
         if key in seen:
             return None
         seen.add(key)
@@ -206,6 +209,8 @@ def row_valid(row):
     if (not isinstance(row, list) or len(row) != WORDS or
             not all(integer(v, -0x80000000, 0x7fffffff) for v in row)):
         return False
+    if row[2] == counterweight.KIND:
+        return counterweight.valid(row)
     if row[2] == CRANE:
         # Early return keeps the dedicated crane words out of the actor/NPC
         # bounds below; kind word 7 also fails that table's kind range.
@@ -349,6 +354,8 @@ def row_valid(row):
 
 
 def controller_progress(row):
+    if row[2] == counterweight.KIND:
+        return 0
     if row[2] == 2 and row[1] in (0x3ca,0x1aa,0x365,0x366):
         return 0  # Wait/open/retract repeats; established receipts choose authority.
     # Doll container progress is the emission cycle plus the phase step, so a
@@ -419,7 +426,7 @@ class WorldTransport:
 
     @staticmethod
     def needs_bootstrap(row):
-        return row[2] in (1,2,4,5,CRANE,SHUTTER,BRIDGE,GATE64,DOLL) and row[1] not in (0x324,0x326)
+        return row[2] in (1,2,4,5,CRANE,SHUTTER,BRIDGE,GATE64,DOLL,counterweight.KIND) and row[1] not in (0x324,0x326)
 
     def _pad_mask(self, index, row):
         """OR of live same-room pad inputs for one crane, paused rows excluded.
@@ -553,15 +560,17 @@ class WorldTransport:
         paused = bitmap(packet.get('z'))
         established = bitmap(packet.get('h'))
         rows = packet.get('a')
-        inputs = pad_inputs(packet.get('u'))
+        inputs = pad_inputs(packet.get('u'), self.room)
         if (not integer(q,1,0x7fffffff) or not integer(parts,1,MAX_PARTS) or
                 not integer(part,0,parts-1) or presence is None or dead is None or busy is None or paused is None or established is None or
-                inputs is None or (inputs and self.room not in (CRANE_ROOM,BRIDGE_ROOM)) or
+                inputs is None or (inputs and self.room not in (CRANE_ROOM,BRIDGE_ROOM,counterweight.ROOM)) or
                 any((b|z|h) & ~p for b,z,h,p in zip(busy,paused,established,presence)) or
                 not isinstance(rows,list) or len(rows)>ROWS_PER_PACKET or
                 not all(row_valid(r) and not r[INSTANCE] and not r[RECEIPT] and
                         not (r[2]==CRANE and (r[CRANE_INPUT] or r[CRANE_AGGREGATE])) and
                         not (r[2]==BRIDGE and (r[WB_INPUT] or r[WB_AGGREGATE])) and
+                        not (r[2]==counterweight.KIND and
+                             (self.room != counterweight.ROOM or r[46] or r[47])) and
                         not (r[2]==SHUTTER and self.room != SHUTTER_ROOM) and
                         not (r[2]==BRIDGE and self.room != BRIDGE_ROOM) and
                         not (r[2]==GATE64 and self.room != GATE64_ROOM) and
@@ -622,7 +631,8 @@ class WorldTransport:
                 (self.room != SHUTTER_ROOM and any(r[2]==SHUTTER for r in rows)) or
                 (self.room != BRIDGE_ROOM and any(r[2]==BRIDGE for r in rows)) or
                 (self.room != GATE64_ROOM and any(r[2]==GATE64 for r in rows)) or
-                (self.room not in DOLL_ROOMS and any(r[2]==DOLL for r in rows))):
+                (self.room not in DOLL_ROOMS and any(r[2]==DOLL for r in rows)) or
+                (self.room != counterweight.ROOM and any(r[2]==counterweight.KIND for r in rows))):
             return {'a':[], 'd':self.dead.hex()}, []
         removed = bitmap(removed)
         if removed is None:
@@ -655,6 +665,9 @@ class WorldTransport:
                         best=(row[0],row[WB_INPUT])
             if best:
                 inputs=[[best[0],best[1]]]
+        elif self.room == counterweight.ROOM:
+            inputs = [[r[0],r[46]] for r in rows
+                      if r[2]==counterweight.KIND and not r[38]]
         output, publish = [], []
         indices = {r[0] for r in rows}
         self.established.intersection_update(indices)
@@ -697,6 +710,8 @@ class WorldTransport:
                 # its ownership across pause instead of starting a second
                 # camera-free simulation that it cannot safely adopt.
                 order=lambda p:(-p[1],-p[3],-p[4],p[2],p[0])
+            elif row[2] == counterweight.KIND:
+                order=lambda p:(-p[4],p[2],p[0])
             elif row[2] == BRIDGE:
                 # Established native receipt outranks progress here, so a fresh
                 # save-1 constructor pose on a lower-ID client cannot outrank a
@@ -711,7 +726,7 @@ class WorldTransport:
             if owner != ctx['cid']:
                 delivered = self._native_offer(row,owner,now,bootstrap and i not in self.established)
                 if delivered:
-                    if row[2] == CRANE:
+                    if row[2] in (CRANE,counterweight.KIND):
                         # The receipt key stays bound to the real authoritative
                         # row; the aggregate goes only onto this delivery copy.
                         delivered[DELIVERY_ROW+CRANE_INPUT] = row[CRANE_INPUT]
@@ -725,7 +740,14 @@ class WorldTransport:
                     self.established.add(i)
                 wire = list(row)
                 wire[INSTANCE] = wire[RECEIPT] = 0
-                if row[2] == CRANE:
+                if row[2] == counterweight.KIND:
+                    wire[46] = wire[47] = 0
+                    if not waiting:
+                        echo = list(row)
+                        echo[47] = self._pad_mask(i,row)
+                        echo[RECEIPT] = 0
+                        output.append([ctx['cid'],0]+echo)
+                elif row[2] == CRANE:
                     wire[CRANE_INPUT] = wire[CRANE_AGGREGATE] = 0
                     # The owner also needs its own row back so remote pad input
                     # reaches the local actor; zero receipt claims no bootstrap.

@@ -15,6 +15,11 @@ trap 'rm -rf "$WORLD_TEST_DIR"' EXIT
 "$WORLD_TEST_DIR/children"
 "${HOST_CC:-cc}" -std=c99 -Wall -Wextra -Werror -Wno-misleading-indentation \
     -O2 -ffast-math -fno-unsafe-math-optimizations -fsanitize=undefined \
+    -Iinclude tests/test_world_bomb_native.c src/utils/anchor_world_dynamic_codec.c \
+    src/utils/string_utils.c -lm -o "$WORLD_TEST_DIR/bomb"
+"$WORLD_TEST_DIR/bomb"
+"${HOST_CC:-cc}" -std=c99 -Wall -Wextra -Werror -Wno-misleading-indentation \
+    -O2 -ffast-math -fno-unsafe-math-optimizations -fsanitize=undefined \
     -Iinclude tests/test_world_crane_native.c src/utils/anchor_world_codec.c \
     src/utils/string_utils.c -lm -o "$WORLD_TEST_DIR/crane"
 "$WORLD_TEST_DIR/crane"
