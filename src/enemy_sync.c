@@ -3,8 +3,8 @@
  * @brief Compact, occupied-room synchronization for defeated regular enemies.
  *
  * Static room actors have a deterministic 0x14-byte ActorInstance descriptor.
- * A unified normal-plus-partition source index stays stable across clients even
- * when several enemies use the same entity or randomization replaces their
+ * A source index spanning normal, partition and resident lists stays stable
+ * across clients even when enemies share an entity or randomization replaces their
  * definitions.  A live death packet therefore needs only the raw room, that
  * one-byte index, and a small signature that rejects mismatched room layouts.
  *
@@ -1223,14 +1223,12 @@ static void clear_room_state(void)
     s_setup_yield_pending = 0;
 }
 
-static void record_roster_source(EnemyActorInstance *source,
-                                 unsigned short file_id,
-                                 unsigned int index,
-                                 unsigned short *hash,
-                                 unsigned int *enemy_count)
+static void record_roster_definition(EnemyActorInstance *source,
+                                     EnemyActorDefinition *definition,
+                                     unsigned int index,
+                                     unsigned short *hash,
+                                     unsigned int *enemy_count)
 {
-    EnemyActorDefinition *definition =
-        resolve_definition(source->definition, file_id);
     unsigned short entity_id = definition ? definition->actor_id : 0;
 
     anchor_world_roster_add(index, source, definition);
@@ -1245,6 +1243,17 @@ static void record_roster_source(EnemyActorInstance *source,
         s_entity_ids[index] = entity_id;
         ++*enemy_count;
     }
+}
+
+static void record_roster_source(EnemyActorInstance *source,
+                                 unsigned short file_id,
+                                 unsigned int index,
+                                 unsigned short *hash,
+                                 unsigned int *enemy_count)
+{
+    record_roster_definition(source,
+        resolve_definition(source->definition, file_id),
+        index, hash, enemy_count);
 }
 
 static void build_room_roster(void)
@@ -1276,35 +1285,39 @@ static void build_room_roster(void)
     if ((unsigned int)s_room >= ENEMY_ROOM_METADATA_COUNT)
         goto invalid_roster;
     metadata = D_80231300_5EC7D0[s_room];
-    if (!metadata || !metadata->actor_instances)
+    if (!metadata)
         goto invalid_roster;
 
     /* The native pointer resolver crashes intentionally if this wave is not
      * present.  func_8020D848 is retried while actor data is loading, so leave
      * an invalid roster and rebuild from its next invocation instead. */
-    if (metadata->actor_data_file_id == 0 ||
-        func_800141C4_14DC4(
-            (unsigned int)metadata->actor_data_file_id) == -1)
+    if ((metadata->actor_instances || metadata->actor_partitions ||
+         metadata->actor_partition_configuration) &&
+        (metadata->actor_data_file_id == 0 ||
+         func_800141C4_14DC4(
+             (unsigned int)metadata->actor_data_file_id) == -1))
         goto invalid_roster;
 
-    instances = (EnemyActorInstance *)resolve_actor_data_pointer(
-        metadata->actor_instances, metadata->actor_data_file_id);
-    if (!instances)
-        goto invalid_roster;
-
-    for (i = 0; i < ENEMY_MAX_INSTANCES; ++i)
+    if (metadata->actor_instances)
     {
-        if (!instances[i].definition)
+        instances = (EnemyActorInstance *)resolve_actor_data_pointer(
+            metadata->actor_instances, metadata->actor_data_file_id);
+        if (!instances)
+            goto invalid_roster;
+        for (i = 0; i < ENEMY_MAX_INSTANCES; ++i)
         {
-            terminated = 1;
-            break;
+            if (!instances[i].definition)
+            {
+                terminated = 1;
+                break;
+            }
+            record_roster_source(&instances[i], metadata->actor_data_file_id,
+                                 total_count, &hash, &enemy_count);
+            ++total_count;
         }
-        record_roster_source(&instances[i], metadata->actor_data_file_id,
-                             total_count, &hash, &enemy_count);
-        ++total_count;
+        if (!terminated)
+            goto invalid_roster;
     }
-    if (!terminated)
-        goto invalid_roster;
 
     partition_config = 0;
     partition_grid = 0;
@@ -1404,11 +1417,11 @@ static void build_room_roster(void)
     for (i = 1; i < grouped_count; ++i)
     {
         EnemyActorInstance *source = grouped_sources[i];
-        unsigned int source_address = (unsigned int)source;
+        unsigned long source_address = (unsigned long)source;
         unsigned int insert = i;
 
         while (insert > 0 &&
-               (unsigned int)grouped_sources[insert - 1u] > source_address)
+               (unsigned long)grouped_sources[insert - 1u] > source_address)
         {
             grouped_sources[insert] = grouped_sources[insert - 1u];
             --insert;
@@ -1421,6 +1434,40 @@ static void build_room_roster(void)
         record_roster_source(grouped_sources[i], metadata->actor_data_file_id,
                              total_count, &hash, &enemy_count);
         ++total_count;
+    }
+
+    /* The native manager also walks metadata+0 before its wave-backed lists.
+     * These source/definition pointers are already resident; it never resolves
+     * them through the room wave. Append them after the established indices so
+     * normal/partition identities (including randomizer replacements) stay put.
+     * The US ROM supplies two 0x1FC platforms in room0x30 and five 0xFC/0xFE
+     * enemies in room0x131 through this otherwise-missed list. */
+    instances = metadata->persistent_actor_instances;
+    if (instances)
+    {
+        terminated = 0;
+        for (i = 0; i < ENEMY_MAX_INSTANCES; ++i)
+        {
+            unsigned int existing;
+            if (!instances[i].definition)
+            {
+                terminated = 1;
+                break;
+            }
+            for (existing = 0; existing < total_count; ++existing)
+                if (s_source_instances[existing] == &instances[i])
+                    break;
+            if (existing < total_count)
+                continue;
+            if (total_count >= ENEMY_MAX_INSTANCES)
+                goto invalid_roster;
+            record_roster_definition(&instances[i],
+                (EnemyActorDefinition *)instances[i].definition,
+                total_count, &hash, &enemy_count);
+            ++total_count;
+        }
+        if (!terminated)
+            goto invalid_roster;
     }
 
     anchor_world_roster_end(total_count);
@@ -1955,19 +2002,16 @@ void enemy_sync_prepare_room_roster(void)
     if ((unsigned int)room >= ENEMY_ROOM_METADATA_COUNT)
         return;
     metadata = D_80231300_5EC7D0[room];
-    if (metadata && !metadata->actor_instances && metadata->actor_data_file_id == 0)
-    {
-        /* Script-only rooms have no placed actor wave to resolve. They still
-         * need a room identity for dynamically created NPCs and pickups. */
-        anchor_world_roster_begin(room);
-        anchor_world_roster_end(0);
-        return;
-    }
-    if (!metadata || metadata->actor_data_file_id == 0 ||
-        func_800141C4_14DC4(
-            (unsigned int)metadata->actor_data_file_id) == -1)
+    if (!metadata ||
+        ((metadata->actor_instances || metadata->actor_partitions ||
+          metadata->actor_partition_configuration) &&
+         (metadata->actor_data_file_id == 0 ||
+          func_800141C4_14DC4(
+              (unsigned int)metadata->actor_data_file_id) == -1)))
         return;
 
+    /* Resident-only and script-only rooms need no segmented wave. The latter
+     * still publish an empty world roster to scope dynamic NPCs and pickups. */
     build_room_roster();
 }
 

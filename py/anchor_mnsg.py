@@ -112,6 +112,7 @@ _server_message: str = ""
 
 # Map of clientId -> client state dict, updated from ALL_CLIENT_STATE packets.
 _player_states: "dict[int, dict]" = {}
+_world_roster_session: int = 0
 _player_states_lock = threading.Lock()
 
 # Lock protecting _sock writes to prevent concurrent send races.
@@ -657,7 +658,7 @@ def _merge_client_state(
 
 def _replace_all_client_states(states: list) -> None:
     """Apply membership metadata without popping live same-room transforms."""
-    global _client_id
+    global _client_id, _world_roster_session
 
     with _player_states_lock:
         previous_players = dict(_player_states)
@@ -669,6 +670,8 @@ def _replace_all_client_states(states: list) -> None:
             if member.get("self"):
                 _client_id = cid
             client_state = member.get("clientState", member)
+            if member.get("self") and client_state.get("interactionSession") == _interaction_session:
+                _world_roster_session = _interaction_session
             room_id = int(client_state.get("currentRoomId", -1))
             previous = previous_players.get(cid, {})
             name = (client_state.get("name", "") or
@@ -3817,7 +3820,8 @@ def update_world(room: int, signature: int, visit: int, state_json: str) -> str:
         supplied = {}
     now = time.monotonic()
     with _player_states_lock:
-        result, packets = _world.update(_boss_context(), room, signature, visit,
+        context = dict(_boss_context(),worldRosterReady=_world_roster_session == _interaction_session)
+        result, packets = _world.update(context, room, signature, visit,
             supplied.get('a', []), supplied.get('d', '00' * 32), now)
         dirty = _world.dirty
     if dirty and _connected:

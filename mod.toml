@@ -71,6 +71,7 @@ data_reference_syms_files = ["Goemon64RecompSyms/mnsg.datasyms.toml"]
 additional_files = [
     "py/anchor_mnsg.py",
     "py/anchor_world.py",
+    "py/anchor_world_npc.py",
     "py/anchor_world_dynamic.py",
     "py/anchor_boss_transport.py",
     "py/anchor_congo.py",

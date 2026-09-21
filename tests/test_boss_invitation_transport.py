@@ -42,6 +42,8 @@ def load_client(cid=1, session=101, team="blue", room=10):
     client._connected = True
     client._client_id = cid
     client._interaction_session = session
+    # Fixtures represent a connection after its initial membership snapshot.
+    client._world_roster_session = session
     client._team_id = team
     client._player_name = f"Player {cid}"
     client.set_save_loaded(True)

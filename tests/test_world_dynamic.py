@@ -24,6 +24,20 @@ def actor(serial=1,kind=2):
     return r
 
 
+def robot(ordinal=1,parent=3,base_y=0,pause=0,life=None,serial=None):
+    r=[0]*d.WORDS
+    r[:12]=[0,0,0,ordinal if serial is None else serial,0,
+            d.LIVE if life is None else life,d.SHUTTER_ENEMY,
+            parent,0xFC,0xFB,0,1]
+    r[24:27]=[1000]*3
+    r[32]=57
+    r[42]=15
+    r[45]=base_y
+    r[64]=ordinal
+    r[66]=pause
+    return r
+
+
 class DynamicTests(unittest.TestCase):
     def setUp(self):
         self.wa=w.WorldTransport();self.wb=w.WorldTransport()
@@ -59,6 +73,24 @@ class DynamicTests(unittest.TestCase):
         self.assertEqual(result['a'][0][4],2)
         self.assertEqual(result['a'][0][:4],state[0][:4])
         self.assertFalse(self.b.receive(self.cb,packets[0],1.11))
+
+    def test_puzzle_reward_slot_survives_takeover_and_collection(self):
+        for kind in (2,3):
+            self.setUp()
+            r=actor(serial=17,kind=kind);r[8]=0x3d0;r[64]=0xff08
+            state,_=self.send(self.a,self.ca,self.b,self.cb,[r],1+kind)
+            duplicate=list(r);duplicate[3]=99
+            result,_=self.b.update(self.cb,[duplicate],1.02+kind)
+            matching=[x for x in result['a'] if x[6]==kind]
+            self.assertEqual(len(matching),1)
+            self.assertEqual(matching[0][:4],state[0][:4])
+            claim=copy.deepcopy(matching);claim[0][5]=d.CLAIM
+            self.send(self.b,self.cb,self.a,self.ca,claim,1.1+kind)
+            committed,_=self.send(self.a,self.ca,self.b,self.cb,state,1.2+kind)
+            result,_=self.b.update(self.cb,[duplicate],1.3+kind)
+            same=[x for x in result['a'] if x[:4]==committed[0][:4]]
+            self.assertEqual(len(same),1)
+            self.assertEqual(same[0][5],d.REMOVED)
 
     def test_scripted_npc_births_deduplicate_across_allocation_orders(self):
         first=actor(17,1);first[8]=0x2bd;first[61:64]=[100,200,300]
@@ -202,6 +234,10 @@ class DynamicTests(unittest.TestCase):
     def test_worst_case_packet_size(self):
         r=[hi if abs(hi)>=abs(lo) else lo for lo,hi in d.BOUNDS]
         r[d.LIFE]=d.REMOVED
+        # The probe only needs maximum-width scalars. Kind 6 is room scoped, so
+        # keep a placed-safe kind; a removal skips every recipe anyway.
+        r[d.KIND]=5
+        r[74:]=[0]*9
         rows=[]
         for i in range(d.MAX_ACTORS):
             row=list(r);row[d.SERIAL]=i+1;rows.append(row)
@@ -244,6 +280,158 @@ class DynamicTests(unittest.TestCase):
         self.assertEqual(len(result['a']),2)
         self.assertEqual({tuple(r[:4]) for r in result['a']},{tuple(r[:4]) for r in state})
 
+    def setup_room(self,room):
+        # Rebuild both sides in another room. Shutter enemies are room scoped.
+        self.wa.reset();self.wb.reset()
+        self.a.reset();self.b.reset()
+        self.ca['room']=self.cb['room']=room
+        self.ca['players']={};self.cb['players']={}
+        for t,c in ((self.wa,self.ca),(self.wb,self.cb)):
+            t.update(c,room,42,1,[],'00'*32,0)
+        for c,other,t in ((self.ca,self.cb,self.wb),(self.cb,self.ca,self.wa)):
+            c['players'][other['cid']]=dict(online=True,isSaveLoaded=True,teamId='default',
+                roomId=room,interactionSession=other['session'],
+                worldSync=t.advertisement(other))
+        self.a.update(self.ca,[],0);self.b.update(self.cb,[],0)
+        for tx,c,rx,rc in ((self.wa,self.ca,self.wb,self.cb),(self.wb,self.cb,self.wa,self.ca)):
+            _,packets=tx.update(c,room,42,1,[],'00'*32,0)
+            for packet in packets:self.assertTrue(rx.receive(rc,packet,0))
+
+    def test_shutter_enemy_identity_coalesces_and_separates_cycles(self):
+        self.setup_room(0xb2)
+        first=robot(1)
+        expected=[0x7ffffffc,42,(3<<10)|(0xb2+1),1]
+        state,packets=self.a.update(self.ca,[first],1)
+        self.assertTrue(packets)
+        self.assertEqual(state['a'][0][:4],expected)
+        for packet in packets:self.assertTrue(self.b.receive(self.cb,packet,1.001))
+        # The other client watches the same birth and coalesces onto that key
+        # instead of advertising a second copy of the same enemy.
+        local=list(first);local[3]=99
+        result,packets=self.b.update(self.cb,[local],1.01)
+        self.assertEqual(len(result['a']),1)
+        self.assertEqual(result['a'][0][:4],expected)
+        self.assertTrue(all(not p['a'] for p in packets))
+        # A later emission cycle is a different enemy, not a reused identity.
+        result,_=self.a.update(self.ca,[first,robot(2)],1.1)
+        self.assertEqual({tuple(r[:4]) for r in result['a']},
+                         {tuple(expected),tuple([0x7ffffffc,42,(3<<10)|(0xb2+1),2])})
+
+    def test_shutter_enemy_claim_single_committer_and_retry(self):
+        self.setup_room(0xb2)
+        state,packets=self.a.update(self.ca,[robot(1)],1)
+        self.assertEqual(state['a'][0][d.OWNER],1)
+        key=tuple(state['a'][0][:4])
+        for packet in packets:self.assertTrue(self.b.receive(self.cb,packet,1.001))
+        self.a.sent(packets,True,1)
+        # Only the shooter claims, so the arbiter is the single committer.
+        claim=copy.deepcopy(state['a'][0]);claim[d.LIFE]=d.CLAIM
+        reply,_=self.send(self.b,self.cb,self.a,self.ca,[claim],1.1)
+        self.assertEqual(reply[0][d.LIFE],d.LIVE)
+        result,packets=self.a.update(self.ca,[robot(1)],1.2)
+        committed=result['a'][0]
+        self.assertEqual(committed[d.LIFE],d.REMOVED)
+        self.assertEqual(committed[d.OWNER],2)
+        self.assertEqual(committed[d.COMMITTER],1)
+        self.assertEqual(committed[d.LANDED],1)
+        # A committed kill only arms the native death once it reached the wire.
+        self.assertFalse(self.a.native_result(result)['a'])
+        self.a.sent(packets,False,1.2)
+        self.assertFalse(self.a.native_result(result)['a'])
+        result,packets=self.a.update(self.ca,[robot(1)],1.3)
+        self.assertTrue(packets)
+        self.a.sent(packets,True,1.3)
+        self.assertEqual(self.a.native_result(result)['a'][0][d.LIFE],d.REMOVED)
+        self.assertIn(key,self.a.dead)
+
+    def test_shutter_enemy_route_exit_stays_non_lethal(self):
+        self.setup_room(0xb2)
+        _,packets=self.send(self.a,self.ca,self.b,self.cb,[robot(1)],1)
+        gone=robot(1,life=d.REMOVED)
+        gone[d.COMMITTER]=1
+        result,packets=self.a.update(self.ca,[gone],1.1)
+        self.assertEqual(result['a'][0][d.LIFE],d.REMOVED)
+        self.assertEqual(result['a'][0][d.LANDED],0)
+        self.assertEqual(result['a'][0][d.COMMITTER],1)
+        for packet in packets:self.assertTrue(self.b.receive(self.cb,packet,1.101))
+        accepted,_=self.b.update(self.cb,[gone],1.11)
+        self.assertEqual(accepted['a'][0][d.LIFE],d.REMOVED)
+        self.assertEqual(accepted['a'][0][d.LANDED],0)
+
+    def test_shutter_enemy_unbound_route_exit_stamps_committer(self):
+        self.setup_room(0xb2)
+        self.send(self.a,self.ca,self.b,self.cb,[robot(1)],1)
+        # The local capture reports the route exit unbound, with no committer.
+        gone=robot(1,life=d.REMOVED)
+        self.assertEqual(gone[d.COMMITTER],0)
+        result,_=self.b.update(self.cb,[gone],2)
+        self.assertEqual(result['a'][0][:4],[0x7ffffffc,42,(3<<10)|(0xb2+1),1])
+        self.assertEqual(result['a'][0][d.COMMITTER],2)
+        self.assertEqual(result['a'][0][d.LANDED],0)
+
+    def test_shutter_enemy_lower_id_fresh_copy_cannot_rewind_holder(self):
+        self.setup_room(0xb2)
+        # The shutter belongs to the higher-id client, which publishes first.
+        self.wa.owners[2]=self.wb.owners[2]=2
+        state,_=self.send(self.b,self.cb,self.a,self.ca,[robot(1)],1)
+        self.assertEqual(state[0][d.OWNER],2)
+        key=tuple(state[0][:4])
+        # The shutter hands off to the lower-id client, which reports the same
+        # birth again. The established holder keeps the enemy.
+        self.wa.owners[2]=self.wb.owners[2]=1
+        state_a,_=self.send(self.a,self.ca,self.b,self.cb,[robot(1)],1.1)
+        self.assertEqual(state_a[0][d.OWNER],2)
+        self.assertEqual(self.a.owners[key],2)
+        result,_=self.b.update(self.cb,[robot(1)],1.12)
+        self.assertEqual(result['a'][0][d.OWNER],2)
+        self.assertEqual(self.b.owners[key],2)
+
+    def test_extended_drop_identity_is_injective_and_uses_the_new_cid(self):
+        placed=w.WorldTransport();placed.signature=42;placed.room=0xb2
+        def drop(parent,kind,ordinal):
+            r=actor(serial=1,kind=kind)
+            r[7]=parent;r[8]=0xFC;r[64]=ordinal
+            return r
+        # The 16-bit placed window keeps its old key.
+        self.assertEqual(d.loot_identity(drop(3,2,7),placed),
+                         [0x7ffffffd,42,0xb3,(2*3+0)*65536+7+1])
+        # Masking the packed serial was not injective: these two collided.
+        first,second=(3,2,200000),(3,3,134464)
+        masked=lambda t:(((t[0]-1)*3+t[1]-2)*65536+t[2]+1)&0x7fffffff
+        self.assertEqual(masked(first),masked(second))
+        self.assertNotEqual(d.drop_identity(drop(*first),placed),
+                            d.drop_identity(drop(*second),placed))
+        key=d.drop_identity(drop(*first),placed)
+        self.assertEqual(key[0],0x7ffffffb)
+        self.assertEqual(key[3],200000)
+        self.assertNotEqual(key[0],0x7ffffffd)
+        self.setup_room(0xb2)
+        for ordinal in (65536,0x7fffffff):
+            supplied=drop(3,2,ordinal)
+            state,_=self.a.update(self.ca,[supplied],1+ordinal/0x7fffffff)
+            self.assertEqual(state['a'][0][:4],d.drop_identity(supplied,placed))
+            self.assertTrue(d.valid(state['a'][0]))
+
+    def test_shutter_enemy_scope_stale_session_and_isolation(self):
+        # Kind 6 belongs to room 0xB2 on both the wire and the local capture.
+        r=robot(1)
+        self.assertEqual(self.ca['room'],302)
+        result,packets=self.a.update(self.ca,[r],1)
+        self.assertFalse(result['a']);self.assertFalse(packets)
+        _,packets=self.a.update(self.ca,[actor()],1.1)
+        self.assertTrue(packets)
+        bad=copy.deepcopy(packets[0]);bad['a'][0]=list(r)
+        self.assertFalse(self.b.receive(self.cb,bad,1.2))
+        self.assertTrue(self.b.receive(self.cb,packets[0],1.2))
+        # A new visit cannot inherit the previous room's enemies.
+        self.setup_room(0xb2)
+        self.send(self.a,self.ca,self.b,self.cb,[robot(1)],1)
+        self.assertTrue(self.a.peers or self.a.dead or self.a.owners)
+        self.wa.update(self.ca,0xb2,42,2,[],'00'*32,2)
+        self.a.update(self.ca,[],2)
+        self.assertFalse(self.a.dead);self.assertFalse(self.a.peers)
+        self.assertFalse(self.a.owners)
+
 
 class DynamicCodecTests(unittest.TestCase):
     @classmethod
@@ -281,6 +469,36 @@ class DynamicCodecTests(unittest.TestCase):
         for bad in (good+'garbage',good[:-3],json.dumps({'a':[r,r],'l':1}),
                     json.dumps({'a':[r],'l':-1}),'{"a":[],"l":01}'):
             self.assertFalse(run(bad),bad)
+
+    def test_native_npc_recipe_parity(self):
+        from anchor_world_npc import MODELS
+        for phase,model in enumerate(MODELS,1):
+            r=actor(kind=1)
+            r[8]=0x2c3 if phase==7 else model;r[9]=model;r[74]=phase
+            if model==0x2c4:r[78:83]=[2,2,1,9999,2]
+            self.assertTrue(d.valid(r))
+            for column in range(74,d.WORDS):
+                for value in (-32769,-2,0,1,2,3,4,6,8,16,18,24,26,32768):
+                    altered=list(r);altered[column]=value
+                    actual=self.lib.anchor_world_dynamic_row_valid((ctypes.c_int*d.WORDS)(*altered))
+                    self.assertEqual(bool(actual),d.valid(altered),(phase,column,value))
+
+    def test_shutter_enemy_recipe_and_bounds_parity(self):
+        examples=[robot(ordinal=o,parent=p,base_y=y)
+                  for o in (1,65535,0x7fffffff) for p in (1,256) for y in (0,1)]
+        for r in examples:
+            self.assertTrue(d.valid(r))
+            self.assertTrue(self.lib.anchor_world_dynamic_row_valid((ctypes.c_int*d.WORDS)(*r)))
+            for index,(lo,hi) in enumerate(d.BOUNDS):
+                for value in (lo-1,lo,hi,min(hi+1,0x7fffffff)):
+                    row=list(r);row[index]=value
+                    actual=self.lib.anchor_world_dynamic_row_valid((ctypes.c_int*d.WORDS)(*row))
+                    self.assertEqual(bool(actual),d.valid(row),(r[7],index,value))
+            for column,value in ((8,0x354),(9,0xFC),(10,1),(11,0),(32,56),(43,256),
+                                 (40,1),(41,1),(45,2),(64,0),(65,1)):
+                row=list(r);row[column]=value
+                actual=self.lib.anchor_world_dynamic_row_valid((ctypes.c_int*d.WORDS)(*row))
+                self.assertEqual(bool(actual),d.valid(row),(r[7],column,value))
 
 
 if __name__=='__main__':unittest.main()

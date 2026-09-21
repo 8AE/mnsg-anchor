@@ -1,0 +1,194 @@
+{
+  "date": "2026-09-19",
+  "worldSyncVersion": 11,
+  "universalCoverage": false,
+  "completedInThisPass": [
+    "File51 room15E root240 atomic guard2D0 pair, gate animation and blocker311 lifetime",
+    "Local accepted dialogue latch propagates to the controller while paused; local dialogues and return pointers are preserved",
+    "Established native receipt outranks a fresh save1 reload pose; failed native application never acknowledges readiness",
+    "Missing guard and blocker reconstruction with resource, generation and pending-allocation guards",
+    "Movement-only route prediction, local blink and sound deduplication, scalar completion preserving local shadow state",
+    "Local lock acquisition ownership and invalidation by other verified local sequence writers",
+    "Mid-scheduler binding replacement unwraps previous callbacks; stale parent does not prevent own-slot cleanup",
+    "Bridge-owned reconstructed guards excluded from generic dynamic NPC registration"
+  ],
+  "nativeChecks": {
+    "command": "bash tests/run_world_sync.sh",
+    "result": "passed",
+    "productionCHarnesses": 4,
+    "additionalExtractedRosterHarness": true,
+    "sanitizer": "undefined",
+    "flags": "O2, ffast-math, fno-unsafe-math-optimizations",
+    "worldPythonTests": 111,
+    "nativeSubstitutionLimit": "The host harnesses compile production C and substitute native routines; they are not game-runtime proof",
+    "bridgeScenarios": [
+      "atomic apply and retry",
+      "route instruction-boundary rejection",
+      "conversation100 and accepted4000 gates",
+      "real native callback saved in B4",
+      "local owned versus unrelated control lock",
+      "no extra shadow on retransmit or phase restoration",
+      "shadowless local allocation preserved",
+      "failed guard/blocker births and pending reuse",
+      "save1 late entrant restores an incumbent route and blocker",
+      "stale parent and placed rebind cleanup",
+      "pause freezes common-post motion",
+      "local accepted latch before imported route start",
+      "disconnect after save1 commit before accepted dialogue return",
+      "generic dynamic NPC exclusion"
+    ],
+    "revertedBugVariants": [
+      {
+        "regression": "lost-parent detach",
+        "detected": true,
+        "returncode": -6
+      },
+      {
+        "regression": "shadow flag lost",
+        "detected": true,
+        "returncode": -6
+      },
+      {
+        "regression": "accepted result overwritten",
+        "detected": true,
+        "returncode": -6
+      },
+      {
+        "regression": "dialogue saves wrapper",
+        "detected": true,
+        "returncode": -6
+      },
+      {
+        "regression": "other sequence lock released",
+        "detected": true,
+        "returncode": -6
+      }
+    ]
+  },
+  "pythonTests": {
+    "run": 381,
+    "skipped": 1,
+    "failures": 0
+  },
+  "loopbackTCP": {
+    "listener": "127.0.0.1:45387",
+    "serverRevisionFromPreviousSetup": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "bridge": {
+      "ok": true,
+      "max_packet_bytes": 599,
+      "checks": [
+        "kind9 schema accepted on the wire",
+        "wire keeps 46/47 clear",
+        "latch aggregate on the replica",
+        "owner echo carries the aggregate",
+        "paused latch still propagates",
+        "late entry bootstrap with live latches",
+        "established receipt outranks a fresh save-1 pose",
+        "failed send retries on a new sequence",
+        "owner disconnect handoff",
+        "sender exclusion",
+        "team isolation"
+      ]
+    },
+    "placed": {
+      "ok": true,
+      "actors": 256,
+      "parts": 11,
+      "max_packet_bytes": 3347,
+      "checks": [
+        "NUL framing",
+        "atomic reordered batch",
+        "roster-validated root identity",
+        "sender exclusion",
+        "team isolation",
+        "pickup tombstones",
+        "interaction ownership",
+        "peer expiry",
+        "door traveller departure",
+        "door reverse late entry",
+        "door closed checkpoint",
+        "native NPC continuation checkpoint",
+        "physics puzzle reward checkpoint",
+        "completed puzzle outranks delayed retry",
+        "reward timer handoff without rewind",
+        "switch and mechanism checkpoints",
+        "switch activation overrides older observer",
+        "pause presence after ownership handoff",
+        "save-aware constructor yields to moving checkpoint",
+        "linked platform child and tint checkpoint",
+        "local fire ownership",
+        "gate-open checkpoint before model initialization",
+        "lower-ID occupied-room bootstrap",
+        "native receipt required before takeover",
+        "local instance and receipt stripped from wire"
+      ]
+    },
+    "crane": {
+      "ok": true,
+      "max_packet_bytes": 631,
+      "checks": [
+        "native receipt bootstrap before lower-ID takeover",
+        "atomic crane/pads/reward",
+        "owner input echo",
+        "different pad aggregation",
+        "release preserves another holder",
+        "pause removes contribution",
+        "expiry removes contribution",
+        "local-only words stripped",
+        "sender exclusion",
+        "team isolation"
+      ]
+    },
+    "receiptLimit": "The TCP probes simulate native receipts; the production C harness independently tests native apply and receipt handling",
+    "cleanup": "All probe sockets closed; disposable server stopped with SIGINT; no listener remained"
+  },
+  "traffic": {
+    "route": "quiet generic targetTeamId, root assigned clientId, NUL framing",
+    "durability": "transient latest-state, no offline queue",
+    "cadence": "5Hz changed rows, 1Hz steady refresh, 50ms floor for controller and accepted-latch edges",
+    "rowWords": 50,
+    "newPacketTypes": 0,
+    "input": "existing u field, maximum one [root index, two-bit latch] entry",
+    "fanout": "one team relay per packet; server egress multiplied by team recipients"
+  },
+  "builds": {
+    "release": "passed",
+    "debug": "passed",
+    "collisionDispatch": "passed both",
+    "existingWarnings": [
+      "unused notif_ensure_init in anchor_ui.c"
+    ]
+  },
+  "packages": [
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 574738,
+      "sha256": "c219ecc0edc334906204da74eabc6919eb61cbad985222b0d708ada382f96691",
+      "pythonFiles": 11
+    },
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 575012,
+      "sha256": "86667a3675b45830ea9d261b6a29b2f03c8f1009c3f633b7785226a4f6321566",
+      "pythonFiles": 11
+    }
+  ],
+  "documentation": {
+    "localOnly": true,
+    "build": "passed",
+    "tests": 34,
+    "generatedSearchEntries": 308,
+    "valueRows": 1112,
+    "nativeExamplesMipsSyntaxChecks": 4,
+    "published": false,
+    "interactiveBrowserCheck": false,
+    "scopedNativeSymbolsAdded": 4
+  },
+  "liveTwoClientGameValidation": false,
+  "remaining": [
+    "File53,58,62,64,67,70,74,75 scripted controller families",
+    "File44 gated dynamic invocation classification",
+    "complete per-family placed/dynamic coverage audit",
+    "fresh in-game two-client matrix for all implemented world families"
+  ]
+}

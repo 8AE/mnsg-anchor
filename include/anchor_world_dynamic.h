@@ -2,7 +2,7 @@
 #define ANCHOR_WORLD_DYNAMIC_H
 
 #define WORLD_DYNAMIC_MAX 128
-#define WORLD_DYNAMIC_WORDS 74
+#define WORLD_DYNAMIC_WORDS 83
 #define WORLD_DYNAMIC_JSON 131072
 /* Portable scalar checkpoints. No task, resource, script or callback address
  * is accepted from the network. The callback field is a recipe-local enum. */
@@ -80,9 +80,10 @@ enum {
   WD_MASK94,
   WD_BODY_OFFSET2,
   WD_COMMITTER,
-  WD_GRAVITY
+  WD_GRAVITY,
+  WD_NPC_CHECKPOINT
 };
-enum { WD_NPC = 1, WD_COIN, WD_HEALTH, WD_FOOD, WD_HAZARD };
+enum { WD_NPC = 1, WD_COIN, WD_HEALTH, WD_FOOD, WD_HAZARD, WD_SHUTTER_ENEMY, WD_DOLL };
 enum { WD_LIVE, WD_CLAIM, WD_REMOVED };
 int anchor_world_dynamic_row_valid(const int *row);
 int anchor_world_dynamic_encode(const int rows[][WORLD_DYNAMIC_WORDS],
@@ -94,9 +95,13 @@ int anchor_world_dynamic_decode(const char *json,
 void anchor_world_dynamic_frame(unsigned int room, unsigned int signature,
                                 unsigned int visit, int active);
 void anchor_world_dynamic_room(void);
+/* File62's once-per-room Silver Doll, with a scheduled File26 initializer. */
+int anchor_world_dynamic_doll_spawn(void *root, unsigned int parent);
 /* -1: untracked, 0: another client owns it, 1: this client owns it. */
 int anchor_world_actor_authority(void *actor, unsigned int *placed_index);
 int anchor_world_actor_placed(void *actor);
+/* A typed producer may supply a stable ordinal for a native loot child. */
+int anchor_world_loot_ordinal(void *parent, unsigned int *ordinal);
 int anchor_world_is_paused(void);
 
 #endif

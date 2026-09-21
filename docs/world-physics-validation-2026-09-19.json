@@ -1,0 +1,179 @@
+{
+  "date": "2026-09-19T13:41:27.960453+00:00",
+  "worldSyncVersion": 8,
+  "universalCoverage": false,
+  "completedInThisPass": [
+    "File_30 0x3D0 typed carry, throw, rolling, shrink, animation, completion, break and retry checkpoints",
+    "Local player carry detachment on conflicting ownership or completion; remote held objects excluded from local pickup",
+    "Permanent completion outranks every delayed retry; reward timer handoff cannot rewind progress",
+    "Native reward allocation with deterministic choice/angle and parent-bound slots 0xFF00 through 0xFF14; per-client healing and ryo remain local",
+    "Paused replica post-update motion suppression without replaying gameplay callbacks",
+    "Retained state through proximity culling, native retry reconstruction and resource guards",
+    "Clear stale physics broken/attempt state on disconnect and fresh native placement; reproduced reconnect freeze fixed"
+  ],
+  "nativeChecks": {
+    "command": "bash tests/run_world_sync.sh",
+    "result": "passed",
+    "implementation": "Production C under UBSan and release floating-point flags; native game routines substituted in host harness",
+    "focusedPythonTests": 70,
+    "scenarios": [
+      "portable physics fields and native callback allowlist",
+      "local carry versus idle state and simultaneous carry conflict",
+      "remote carry blocks pickup; authority departure releases remote held status",
+      "throw break versus proximity deletion; retry uses newest retained attempt",
+      "late broken checkpoint suppresses historic effects",
+      "shrink and animation chain; all 21 reward boundaries",
+      "repeated reward boundary across attempts keeps kind, angle and ordinal",
+      "canonical child duplicate retirement and collected tombstones",
+      "paused native post-update saves/restores velocity and flags",
+      "resource residency rejection",
+      "completion outranks maximum retry counter",
+      "completed actor survives proximity re-placement without repeat rewards",
+      "scope reset releases retained completion",
+      "zero-health pause yields ownership only after native application receipt",
+      "disconnect after break, native re-placement and reconnect resumes rolling instead of stale broken state"
+    ]
+  },
+  "pythonTests": {
+    "run": 340,
+    "skipped": 1,
+    "failures": 0
+  },
+  "builds": {
+    "release": "passed",
+    "debug": "passed",
+    "collisionDispatchChecks": "passed",
+    "warnings": [
+      "Existing unused notif_ensure_init in src/ui/anchor_ui.c:90"
+    ]
+  },
+  "loopbackTCP": {
+    "listener": "127.0.0.1:45387",
+    "serverRevisionFromPreviousSetup": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "placed": {
+      "ok": true,
+      "actors": 256,
+      "parts": 11,
+      "max_packet_bytes": 3338,
+      "checks": [
+        "NUL framing",
+        "atomic reordered batch",
+        "roster-validated root identity",
+        "sender exclusion",
+        "team isolation",
+        "pickup tombstones",
+        "interaction ownership",
+        "peer expiry",
+        "door traveller departure",
+        "door reverse late entry",
+        "door closed checkpoint",
+        "native NPC continuation checkpoint",
+        "physics puzzle reward checkpoint",
+        "completed puzzle outranks delayed retry",
+        "reward timer handoff without rewind",
+        "switch and mechanism checkpoints",
+        "switch activation overrides older observer",
+        "pause presence after ownership handoff",
+        "save-aware constructor yields to moving checkpoint",
+        "linked platform child and tint checkpoint",
+        "local fire ownership",
+        "gate-open checkpoint before model initialization",
+        "lower-ID occupied-room bootstrap",
+        "native receipt required before takeover",
+        "local instance and receipt stripped from wire"
+      ]
+    },
+    "dynamic": {
+      "ok": true,
+      "actors": 128,
+      "parts": 11,
+      "max_packet_bytes": 2582,
+      "checks": [
+        "atomic late-entry current state",
+        "duplicate rejection",
+        "sender exclusion",
+        "team isolation",
+        "pickup claim/commit",
+        "native award waits for commit send",
+        "origin disconnect/handoff"
+      ]
+    },
+    "nativeReceiptSimulation": "TCP probe echoes the receipt as a native client; independent production-C harness verifies actual receipt emission conditions",
+    "cleanup": "All test clients exited; server stopped with SIGINT, exit 0, no TCP listener remained at 127.0.0.1:45387"
+  },
+  "packetBudget": {
+    "route": "transient targetTeamId; no offline queue",
+    "rowWords": 50,
+    "rowsPerPacket": 24,
+    "maxParts": 11,
+    "maxPacketBytes": 8192,
+    "steadyChangedHz": 5,
+    "unchangedHz": 1,
+    "edgeFloorMs": 50,
+    "establishedBitmapBytesPerPart": 71,
+    "newPrivateWordsOnWire": "two zero words, 4 bytes per row in compact JSON"
+  },
+  "packetAudit": {
+    "paths": [
+      "."
+    ],
+    "literalSends": 22,
+    "errors": 0,
+    "warnings": 0,
+    "includes": "production py/src plus protocol-faithful local stress tool literals"
+  },
+  "nativeReference": {
+    "build": "passed",
+    "tests": 34,
+    "validationErrors": [],
+    "table": "D_8015CDE0#world-mechanism-state",
+    "addedNativeEvidence": "File_30 0x3D0 carry helpers, local action release, geometry status writers, proximity versus break source identity, unsigned timer and native reward allocation; File50 byte/word initializer proof; crane room root/child and local scene boundaries",
+    "published": false
+  },
+  "packages": [
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 538823,
+      "sha256": "a057341d667c0d9ba64ca0cd9c2066625b4e847419f4c10f2aad04863166be26",
+      "zipIntegrity": "passed",
+      "pythonSources": "matched",
+      "pythonSourceCount": 11
+    },
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 539111,
+      "sha256": "1889f7e8acaa9eff575ac6c61423bbfd983fc93f4c3f34e9637c73e1747a3aa6",
+      "zipIntegrity": "passed",
+      "pythonSources": "matched",
+      "pythonSourceCount": 11
+    }
+  ],
+  "sourceSha256": {
+    "include/anchor_world.h": "a5b6458bcf8f15c74c481330644226090181444871c7a76576a6ff8a3ace2d84",
+    "include/anchor_world_dynamic.h": "2204caa61bb4ed2d09cc867b911a9def413c962e2fcbbbe84e1efcaafcb95787",
+    "src/anchor_world.c": "42cd22a27ee398a5e5b6b50fbbe688dae36c4d93c26099d5516eed20c2d6c9da",
+    "src/anchor_world_dynamic.c": "fce7237b85372de448fe995c5ba3de67e7523415e35971811565f48bb974bf38",
+    "src/utils/anchor_world_codec.c": "6a175bc426890ccd8265549a8534a6e2f0f6f8f6a5fd7b2efadc03909105ee4f",
+    "py/anchor_world.py": "68f0a3f6a596cf257c04677babc288449e6dbef531134947ca64b1ca406c2d24",
+    "tests/test_world_native.c": "dd59df05aed4e441b9cbab0cc07e197c25b1960b24fd23447e4f00fa52520c9f",
+    "tests/test_world_dynamic_native.c": "60fd03148bece482a9f09801371663f4ce30c36f020f16d5ecdfcc6dbc922ca0",
+    "tests/test_world_transport.py": "3fec3cf15cc926f663be43e9f025b5f3519fd12e53bae60e64ab84b71326142c",
+    "tests/test_world_dynamic.py": "3b72b03611c6e00e4cdaafd17f473660ae1c12cbc8a3f5e9a2bb2122d324e72f",
+    "tools/test_world_anchor_local.py": "e59e3e9c0448367f1f076c3f2b4b9a217e366f11e3020bcbdd3e67cdd43e0269"
+  },
+  "remaining": [
+    "Crane room0x31 typed root/child/3D3 checkpoints and per-client pad input aggregation",
+    "Other room-specific controller graphs in world-controller-audit-2026-09-16.md",
+    "Scripted NPC continuations outside the implemented common/File_59 paths",
+    "Dynamic invocation audit of gated 0x1F4",
+    "Full placed/dynamic family classification",
+    "Fresh two-client in-game verification, including carry/throw, collision, break/retry, completion and reward collection"
+  ],
+  "review": {
+    "performed": "Independent read-only code review followed by commander native call-path checks and regression tests",
+    "completionAndRewardIdentity": "One shared completion per occupied room scope is intentional; culling restores it and a true scope reset releases it. New native test verifies both boundaries. Different roster signatures cannot share dynamic scope.",
+    "postReentrancy": "No recursive common-post call found in inspected native body; nested execution not tested in live game.",
+    "nativeRewardCallback": "Rechecked RNG, sound, child allocation/launch, timer and continuation; no omitted camera, progression or direct personal award calls found.",
+    "reconnectRegression": "physics_reconnect_after_break_test failed before fix at stale broken/round assertion; final production-C native harness passes."
+  }
+}

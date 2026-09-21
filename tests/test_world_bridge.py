@@ -9,6 +9,21 @@ from test_world_dynamic import actor
 
 
 class WorldBridgeTests(unittest.TestCase):
+    def test_world_waits_for_current_handshake_membership(self):
+        c=load_client(1,101,'blue',0x12e);self.addCleanup(c.disconnect)
+        c._world_roster_session=100
+        sample=json.dumps({'a':[row()],'d':'00'*32})
+        self.assertFalse(json.loads(c.update_world(0x12e,42,1,sample))['a'])
+        self.assertIsNone(c._world.scope)
+        self.assertFalse(any(json.loads(p[:-1]).get('type')=='MNSG_WORLD' for p in c._sock.sent))
+        c._replace_all_client_states([{'clientId':1,'self':True,'clientState':{
+            'interactionSession':101,'teamId':'blue','currentRoomId':0x12e,
+            'online':True,'isSaveLoaded':True}}])
+        c.update_world(0x12e,42,1,sample)
+        self.assertEqual(c._world_roster_session,101)
+        self.assertIsNotNone(c._world.scope)
+        self.assertTrue(any(json.loads(p[:-1]).get('type')=='MNSG_WORLD' for p in c._sock.sent))
+
     def test_child_snapshots_use_production_framing_and_skip_event_fifo(self):
         a=load_client(1,101,'blue',0x12e);b=load_client(2,202,'blue',0x12e)
         self.addCleanup(a.disconnect);self.addCleanup(b.disconnect)
@@ -47,7 +62,8 @@ class WorldBridgeTests(unittest.TestCase):
             b._sock=RecordingSocket()
             answer=json.loads(b.update_world(0x12e,42,1,sample))
             self.assertEqual(answer['a'][0][0],1)
-            self.assertEqual(answer['a'][0][2:],row())
+            self.assertEqual(answer['a'][0][2:2+world.INSTANCE],row()[:world.INSTANCE])
+            self.assertGreater(answer['a'][0][-1],0)
             queued=[]
             while not b._recv_queue.empty():queued.append(json.loads(b._recv_queue.get_nowait()))
             self.assertFalse(any(p.get('type')=='MNSG_WORLD' for p in queued))

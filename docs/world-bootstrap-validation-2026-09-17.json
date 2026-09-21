@@ -1,0 +1,170 @@
+{
+  "date": "2026-09-17T00:02:32.966868-04:00",
+  "worldSyncVersion": 7,
+  "universalCoverage": false,
+  "completedInThisPass": [
+    "Established-presence arbitration prevents a new cyclic actor instance from overriding an incumbent before native application",
+    "Native instance and receipt fields are local bridge data; peer packets require zeros in both fields",
+    "Bootstrap can correct a fresh rider; native dialogue/travel does not falsely acknowledge an unapplied checkpoint",
+    "Application failure revokes readiness; reused native instances and new scopes cannot acknowledge old offers",
+    "New bootstrap tokens require actual application even when their numeric payload matches an older checkpoint",
+    "Only a current published full row can bootstrap; former-owner presence alone cannot refresh its older pose",
+    "Initial server roster gates world authority; changed membership prompts a full checkpoint refresh",
+    "Native travel actions retain priority when reopening doors",
+    "Further File_30 0x3D0 research identifies the health gate, terminal animation/reward chain and tracked native child-builder path"
+  ],
+  "nativeChecks": {
+    "command": "bash tests/run_world_sync.sh",
+    "result": "passed",
+    "implementation": "Production C under UBSan and release floating-point flags; native game routines substituted in host harness",
+    "focusedPythonTests": 65,
+    "scenarios": [
+      "bootstrap corrects a fresh rider before ownership",
+      "receipt only after applied state",
+      "invalid continuation reports failure",
+      "reused incarnation rejects stale offer",
+      "dialogue delays acknowledgment",
+      "identical older payload cannot skip a new bootstrap",
+      "resource failure/recovery",
+      "retained platform and child reconstruction",
+      "lower-ID occupied-room entry",
+      "paused incumbent handoff after receipt",
+      "newer checkpoint invalidates unapplied offer",
+      "former-owner cache is not current",
+      "scope and incarnation mismatch",
+      "atomic established bitmap",
+      "private receipt fields rejected on wire",
+      "initial handshake membership gate",
+      "bounded liveness fallback"
+    ]
+  },
+  "pythonTests": {
+    "run": 335,
+    "skipped": 1,
+    "failures": 0
+  },
+  "builds": {
+    "release": "passed",
+    "debug": "passed",
+    "collisionDispatchChecks": "passed",
+    "warnings": [
+      "Existing unused notif_ensure_init in src/ui/anchor_ui.c:90"
+    ]
+  },
+  "loopbackTCP": {
+    "listener": "127.0.0.1:45387",
+    "serverRevisionFromPreviousSetup": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "placed": {
+      "ok": true,
+      "actors": 256,
+      "parts": 11,
+      "max_packet_bytes": 3338,
+      "checks": [
+        "NUL framing",
+        "atomic reordered batch",
+        "roster-validated root identity",
+        "sender exclusion",
+        "team isolation",
+        "pickup tombstones",
+        "interaction ownership",
+        "peer expiry",
+        "door traveller departure",
+        "door reverse late entry",
+        "door closed checkpoint",
+        "native NPC continuation checkpoint",
+        "switch and mechanism checkpoints",
+        "switch activation overrides older observer",
+        "pause presence after ownership handoff",
+        "save-aware constructor yields to moving checkpoint",
+        "linked platform child and tint checkpoint",
+        "local fire ownership",
+        "gate-open checkpoint before model initialization",
+        "lower-ID occupied-room bootstrap",
+        "native receipt required before takeover",
+        "local instance and receipt stripped from wire"
+      ]
+    },
+    "dynamic": {
+      "ok": true,
+      "actors": 128,
+      "parts": 11,
+      "max_packet_bytes": 2582,
+      "checks": [
+        "atomic late-entry current state",
+        "duplicate rejection",
+        "sender exclusion",
+        "team isolation",
+        "pickup claim/commit",
+        "native award waits for commit send",
+        "origin disconnect/handoff"
+      ]
+    },
+    "nativeReceiptSimulation": "TCP probe echoes the receipt as a native client; independent production-C harness verifies actual receipt emission conditions",
+    "cleanup": "All test sockets closed; disposable server stopped and no listener remained"
+  },
+  "packetBudget": {
+    "route": "transient targetTeamId; no offline queue",
+    "rowWords": 50,
+    "rowsPerPacket": 24,
+    "maxParts": 11,
+    "maxPacketBytes": 8192,
+    "steadyChangedHz": 5,
+    "unchangedHz": 1,
+    "edgeFloorMs": 50,
+    "establishedBitmapBytesPerPart": 71,
+    "newPrivateWordsOnWire": "two zero words, 4 bytes per row in compact JSON"
+  },
+  "packetAudit": {
+    "paths": [
+      "py",
+      "src"
+    ],
+    "literalSends": 17,
+    "errors": 0,
+    "warnings": 0
+  },
+  "nativeReference": {
+    "build": "passed",
+    "tests": 34,
+    "validationErrors": [],
+    "table": "D_8015CDE0#world-mechanism-state",
+    "addedNativeEvidence": "File_30 0x3D0 rolling gate and reward continuation chain",
+    "published": false
+  },
+  "packages": [
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 537510,
+      "sha256": "ca9eb4b3829d5e464a05d23798f2fe6d39468ce2977b11b6350b03ad74e6dab8",
+      "zipIntegrity": "passed",
+      "pythonSources": "matched"
+    },
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 537730,
+      "sha256": "e5ec633125fbe3a04b67a681f2d40ea2b2920aee303cf09d40d628ac090b5198",
+      "zipIntegrity": "passed",
+      "pythonSources": "matched"
+    }
+  ],
+  "sourceSha256": {
+    "include/anchor_world.h": "a5fee0c67ff639e0bea0513637c5536780f830481ea0e472c99268ec2db37731",
+    "src/anchor_world.c": "baefdb0d3040f1388d68e9057d162801c3a33229dd3df4cd160b6845da0583b8",
+    "src/utils/anchor_world_codec.c": "c768f4c69df3516b411a368bb92b01020b78aaaf1bdf00da2fa484e10210feac",
+    "py/anchor_world.py": "7bf9f536ccd90640778cb70e6f06374551eb2901fcb8e8fa8d70dea978a7be76",
+    "py/anchor_mnsg.py": "c99f7f8d7eb30b8c3ee98790d71f7b40fee692feca298ac85cd4f2f7f42223bd",
+    "tests/test_world_native.c": "bde3ecebd2787c0004c3a73810b342f8afd5cd00a6bd87625973336464996380",
+    "tests/test_world_transport.py": "e50180e79d9c0bfddb526a487fd6e26320cd322dd7a708e6cd4253c12989b155",
+    "tests/test_world_bridge.py": "85615f22c4c03c799cdc142180fd532ab99a6ad93f61840d3ef304030c20cac5",
+    "tests/test_boss_invitation_transport.py": "d8df57ab938a56e1e2ade68ae152c66de330f8ac95ab64e4f30d7c89153d07af",
+    "tools/test_world_anchor_local.py": "0db821824313268a6c23aba034d3083735f88141a2edd6844a97e3433b0391b4"
+  },
+  "remaining": [
+    "Room-specific controller graphs and child identities in world-controller-audit-2026-09-16.md",
+    "0x3D0 interaction/status writer audit and typed adapter implementation",
+    "Scripted NPC continuations outside the implemented common/File_59 paths",
+    "Dynamic invocation audit of gated 0x1F4 and unused File_50 timer/reset paths",
+    "Full placed/dynamic family classification",
+    "Fresh two-client in-game verification"
+  ]
+}

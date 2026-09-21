@@ -1,41 +1,83 @@
 #include "anchor_world_dynamic.h"
+#include "anchor_world_npc.h"
 #include "utils/string_utils.h"
 
 int anchor_world_dynamic_row_valid(const int *r) {
   static const int lo[WORLD_DYNAMIC_WORDS] = {
-      0, 0,      0, 0,       0,        0,        1,        0,
-      0, 0,      0, 0,       -3276800, -3276800, -3276800, 0,
-      0, 0,      0, 0,       0,        -100000,  -100000,  -100000,
-      0, 0,      0, 0,       0,        0,        0,        -32768,
-      0, -32768, 0, 0,       -32768,   -32768,   -32768,   0,
-      0, 0,      0, -100000, 0,        -32768,   0,        0,
-      0, -32768, 0, 0,       -32768,   0,        0,        0,
-      0, 0,      0, 0,       0,        -3276800, -3276800, -3276800,
-      0, 0,      0, 0,       0,        0,        0,        -32768,
-      0, 0};
+      0,      0,      0, 0,       0,        0,        1,        0,
+      0,      0,      0, 0,       -3276800, -3276800, -3276800, 0,
+      0,      0,      0, 0,       0,        -100000,  -100000,  -100000,
+      0,      0,      0, 0,       0,        0,        0,        -32768,
+      0,      -32768, 0, 0,       -32768,   -32768,   -32768,   0,
+      0,      0,      0, -100000, 0,        -32768,   0,        0,
+      0,      -32768, 0, 0,       -32768,   0,        0,        0,
+      0,      0,      0, 0,       0,        -3276800, -3276800, -3276800,
+      0,      0,      0, 0,       0,        0,        0,        -32768,
+      0,      0,      0, -32768,  -32768,   -32768,   -32768,   -32768,
+      -32768, -32768, 0};
   static const int hi[WORLD_DYNAMIC_WORDS] = {
       2147483647, 2147483647, 2147483647, 2147483647, 2147483647, 2,
-      5,          256,        1025,       1025,       255,        1,
+      7,          256,        1025,       1025,       255,        1,
       3276700,    3276700,    3276700,    1023,       1023,       1023,
       1000000,    65535,      7,          100000,     100000,     100000,
       64000,      64000,      64000,      65535,      65535,      65535,
       65535,      32767,      163,        32767,      7,          255,
       32767,      32767,      32767,      255,        1,          65535,
-      14,         100000,     1,          32767,      1023,       65535,
+      17,         100000,     1,          32767,      1023,       65535,
       65535,      32767,      65535,      65535,      32767,      255,
       65535,      255,        255,        255,        255,        100000,
       100000,     3276700,    3276700,    3276700,    2147483647, 1,
       1,          17,         255,        255,        65535,      32767,
-      2147483647, 255};
+      2147483647, 255,        22,         32767,      32767,      32767,
+      32767,      32767,      32767,      32767,      6};
   unsigned int i;
   for (i = 0; i < WORLD_DYNAMIC_WORDS; ++i)
     if (r[i] < lo[i] || r[i] > hi[i])
       return 0;
-  if (!r[WD_SERIAL] || (r[WD_LIFE] == WD_CLAIM &&
-                        (r[WD_KIND] < WD_COIN || r[WD_KIND] > WD_FOOD)))
+  if (!anchor_world_npc_valid(r[WD_ENTITY], r[WD_MODEL],
+                              r + WD_NPC_CHECKPOINT) ||
+      (r[WD_KIND] != WD_NPC && r[WD_NPC_CHECKPOINT]))
     return 0;
+  if (!r[WD_SERIAL] ||
+      (r[WD_LIFE] == WD_CLAIM &&
+       (r[WD_KIND] < WD_COIN || r[WD_KIND] > WD_FOOD) &&
+       r[WD_KIND] != WD_SHUTTER_ENEMY && r[WD_KIND] != WD_DOLL))
+    return 0;
+  /* The nested File_26 Doll is pinned before the removal early return, so a
+   * tombstone still carries the typed container identity: fixed entity and
+   * model, clip 2, no animation, the one-based container parent, the single
+   * spawn ordinal and the fixed birth X/Z. It falls in hundreds of a unit and
+   * rests at 3400. */
+  if (r[WD_KIND] == WD_DOLL) {
+    unsigned int j;
+    if (r[WD_ENTITY] || r[WD_MODEL] || r[WD_CLIP] != 2 || r[WD_ANIMATED] ||
+        r[WD_PARENT] < 1 || r[WD_PARENT] > 256 || r[WD_ORDINAL] != 1 ||
+        r[WD_X] != -600 || r[WD_Z] != -10200 ||
+        r[WD_VX] || r[WD_VY] || r[WD_VZ] ||
+        r[WD_TALKABLE] || r[WD_DIALOG] || r[WD_BUSY] || r[WD_ROUTE] != 163)
+      return 0;
+    for (j = WD_NPC_CHECKPOINT; j < WORLD_DYNAMIC_WORDS; ++j)
+      if (r[j])
+        return 0;
+    if (r[WD_PHASE] == 16)
+      return r[WD_Y] >= 3500 && r[WD_Y] <= 12500 && (r[WD_Y] % 100) == 0;
+    if (r[WD_PHASE] == 17)
+      return r[WD_Y] == 3400;
+    return 0;
+  }
   if (r[WD_LIFE] == WD_REMOVED)
     return 1;
+  /* A shutter enemy is a one-hit native child with no health word, so the
+   * recipe pins the only appearance it can have. The word table already caps
+   * the ordinal at INT_MAX; the recipe only has to exclude zero. Base Y is a
+   * boolean here, and its set value carries the native route status 0x400. */
+  if (r[WD_KIND] == WD_SHUTTER_ENEMY)
+    return r[WD_ENTITY] == 0xFC && r[WD_MODEL] == 0xFB && !r[WD_CLIP] &&
+           r[WD_ANIMATED] && r[WD_PHASE] == 15 && r[WD_ROUTE] == 57 &&
+           r[WD_PARENT] >= 1 && r[WD_PARENT] <= 256 && r[WD_ORDINAL] >= 1 &&
+           !r[WD_TALKABLE] && !r[WD_DIALOG] && !r[WD_BUSY] &&
+           r[WD_BOUNCE] >= 0 && r[WD_BOUNCE] <= 255 &&
+           (r[WD_BASE_Y] == 0 || r[WD_BASE_Y] == 1);
   if (r[WD_KIND] == WD_NPC &&
       !((r[WD_MODEL] == 0x8b && !r[WD_ANIMATED]) ||
         (r[WD_MODEL] >= 0x2bd && r[WD_MODEL] <= 0x401 && r[WD_ANIMATED])))

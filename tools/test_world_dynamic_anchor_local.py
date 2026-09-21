@@ -67,6 +67,10 @@ def main():
         rows[0][9:12] = [1, 4, 0]
         rows[0][42] = 1
 
+        # A pickpocket already escaping when the observer enters.
+        rows[1][6]=1;rows[1][8:12]=[0x2c4,0x2c4,0,1]
+        rows[1][42:44]=[0,0]
+        rows[1][74:]=[13,-200,100,60,24,-2,1,500,2]
         state, packets = tx.update(ctx(host), rows, 1)
         assert len(packets) == 11
         for p in packets:
@@ -81,6 +85,8 @@ def main():
         assert not rx.receive(ctx(guest), incoming[-1], 1.1)
         result, _ = rx.update(ctx(guest), [], 1.12)
         assert result["a"] == state["a"]
+        npc=next(r for r in result['a'] if r[6]==1)
+        assert npc[74:]==[13,-200,100,60,24,-2,1,500,2]
         assert result["a"][4][31] == 42 and result["a"][4][43] == -2250
         assert not any(p.get("type") == PACKET_TYPE for p in host.read(.05))
         assert not any(p.get("type") == PACKET_TYPE for p in outsider.read(.05))
@@ -118,7 +124,9 @@ def main():
         result, _ = rx.update(ctx(guest), live, 2.1)
         assert len([r for r in result["a"] if r[5] != REMOVED]) == 127
         assert all(r[4] == guest.cid for r in result["a"] if r[5] != REMOVED)
-        assert all(r[0] == host.cid for r in result["a"] if r[5] != REMOVED)
+        births={tuple(r[:4]) for r in state['a']}
+        assert all(tuple(r[:4]) in births for r in result['a'])
+        assert next(r for r in result['a'] if r[6]==1)[74:]==npc[74:]
         print(json.dumps(dict(ok=True, actors=128, parts=11,
             max_packet_bytes=max(len(json.dumps(p, separators=(",", ":")).encode()) + 1 for p in incoming),
             checks=["atomic late-entry current state", "duplicate rejection",

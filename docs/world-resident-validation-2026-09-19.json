@@ -1,0 +1,199 @@
+{
+  "date": "2026-09-19",
+  "worldSyncVersion": 10,
+  "universalCoverage": false,
+  "completedInThisPass": [
+    "Native resident source list at metadata+0 joins the normal/partition roster",
+    "Two existing 0x1FC platform adapters now bind room0x30 resident slots26/27",
+    "Five existing 0xFC/0xFE enemy adapters now bind room0x131 resident slots7 through11",
+    "Stable source identity, raw resident definitions, deduplication, capacity and missing-wave guards",
+    "Reproducible three-list US-ROM inventory and corrected native metadata reference"
+  ],
+  "nativeChecks": {
+    "command": "bash tests/run_world_sync.sh",
+    "result": "passed",
+    "implementation": "Three complete production-C world harnesses plus one production-extracted C roster harness, under UBSan; native routines substituted",
+    "focusedPythonTests": 98,
+    "rosterRegression": "Removing the resident traversal reproduces the first runtime assertion failure by omitting two platform entries",
+    "scenarios": [
+      "normal and sorted partition indices preserved",
+      "resident sources appended and deduplicated",
+      "combined capacity256 accepted; overflow and unterminated lists rejected",
+      "same-room signature preserves deaths; changed layout clears old bitmap",
+      "unavailable wave does not reset a valid roster",
+      "resident-only metadata needs no segmented resolver or wave",
+      "resident enemy registration, native dead-spawn suppression and pool reuse",
+      "empty scripted room establishes dynamic world scope"
+    ]
+  },
+  "pythonTests": {
+    "run": 368,
+    "skipped": 1,
+    "failures": 0
+  },
+  "builds": {
+    "release": "passed",
+    "debug": "passed",
+    "collisionDispatchChecks": "passed",
+    "warnings": [
+      "Existing unused notif_ensure_init in src/ui/anchor_ui.c:90"
+    ]
+  },
+  "network": {
+    "schemaChanges": "None; room roster signatures change where resident sources were omitted",
+    "packetTypesAdded": 0,
+    "cadenceAndFanout": "Unchanged existing enemy/world routes and bounds",
+    "loopbackTCP": "Shutter, placed and dynamic probes passed immediately before this enumeration-only change; see world-shutter-validation-2026-09-19.json. No new socket run for the roster-only change."
+  },
+  "review": {
+    "performed": "Independent read-only code/test review plus commander native disassembly verification",
+    "resolved": [
+      "Native8020DA78 directly reads the resident definition; no segmented-pointer semantics are assumed for metadata+0",
+      "8020DA60/8020DA68 set source/definition scratch and8020DB00 supplies the source to the shared initializer",
+      "Combined256-source capacity is distinct from the bounded256-entry single-list scan including its terminator"
+    ]
+  },
+  "remaining": [
+    "File51 Super Pass Bridge guard and gate checkpoint adapter; native audit completed separately",
+    "Other controllers and scripted NPC families in world-controller-audit-2026-09-16.md",
+    "Fresh two-client in-game platform, combat, culling, late-entry and authority-handoff checks"
+  ],
+  "packages": [
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 561412,
+      "sha256": "05806d7e4d2818ea2d6276996c889231ef1d4e503ffa6550e75da71cbd2ddc3e",
+      "zipIntegrity": "passed",
+      "pythonSources": "matched",
+      "pythonSourceCount": 11
+    },
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 561618,
+      "sha256": "e5a2c738939dce5b198f1cf9a41ddda34ace69af809d54a7525a5fd15cf9f5a0",
+      "zipIntegrity": "passed",
+      "pythonSources": "matched",
+      "pythonSourceCount": 11
+    }
+  ],
+  "nativeReference": {
+    "build": "passed",
+    "tests": 34,
+    "valueRows": 1111,
+    "validationErrors": [],
+    "published": false,
+    "additionalResearch": "File51 Super Pass Bridge guard routes, local dialogue/control boundary and gate/blocker semantics documented; no graph adapter implemented in this pass"
+  },
+  "romInventory": {
+    "romSha256": "e40bee20508c2e29e651dca4e47504e40f908f0a2186e34a582784bf5a64be4c",
+    "metadataSlots": 800,
+    "roomsWithMetadata": 374,
+    "roomsWithActorDataFile": 333,
+    "roomsWithActors": 292,
+    "maxRoster": 57,
+    "actorCount": 3888,
+    "entityTypes": 255,
+    "residentActors": [
+      {
+        "index": 26,
+        "entity": 508,
+        "sourceKind": "resident",
+        "sourceRom": 6184128,
+        "definitionRom": 6183104,
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "room": 48
+      },
+      {
+        "index": 27,
+        "entity": 508,
+        "sourceKind": "resident",
+        "sourceRom": 6184148,
+        "definitionRom": 6183120,
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "room": 48
+      },
+      {
+        "index": 7,
+        "entity": 254,
+        "sourceKind": "resident",
+        "sourceRom": 6187328,
+        "definitionRom": 6183136,
+        "position": [
+          145,
+          -40,
+          450
+        ],
+        "room": 305
+      },
+      {
+        "index": 8,
+        "entity": 252,
+        "sourceKind": "resident",
+        "sourceRom": 6187348,
+        "definitionRom": 6183152,
+        "position": [
+          135,
+          -40,
+          190
+        ],
+        "room": 305
+      },
+      {
+        "index": 9,
+        "entity": 254,
+        "sourceKind": "resident",
+        "sourceRom": 6187368,
+        "definitionRom": 6183136,
+        "position": [
+          145,
+          -40,
+          -30
+        ],
+        "room": 305
+      },
+      {
+        "index": 10,
+        "entity": 252,
+        "sourceKind": "resident",
+        "sourceRom": 6187388,
+        "definitionRom": 6183152,
+        "position": [
+          -125,
+          -40,
+          -30
+        ],
+        "room": 305
+      },
+      {
+        "index": 11,
+        "entity": 254,
+        "sourceKind": "resident",
+        "sourceRom": 6187408,
+        "definitionRom": 6183136,
+        "position": [
+          -370,
+          -40,
+          -50
+        ],
+        "room": 305
+      }
+    ],
+    "command": "python3 tools/inspect_world_roster.py /path/to/mnsg.us.decompressed.z64"
+  },
+  "sourceSha256": {
+    "src/enemy_sync.c": "d14250165ca77dbdb21a8c28adf8ba49662cefa69910444688ce2003bbeadfb0",
+    "src/anchor_world.c": "dda5fff596a08b253c5e2ebee59cda80b113f30239e0f7e47c50297a2f6d79cc",
+    "tests/test_world_roster_native.py": "c6eb68bcf88465d4b04635725a3998d1d77f362e4008285071d5c68084441580",
+    "tools/inspect_world_roster.py": "2d4ec33b67e2da8b3d0c5da178965eb43a3a54ddf068c914571553bd1a47dd81",
+    "docs/world-resident-audit-2026-09-19.md": "ccecbf05aea1db3d30ec0baf76679136de66f4b079ad1622527536ca8c56ddb4",
+    "docs/world-bridge-audit-2026-09-19.md": "a3fa3d7666b39077d3eb00acb9cbcaa720399c72dc8039af1eb56f7f04447125"
+  }
+}

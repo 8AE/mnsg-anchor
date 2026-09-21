@@ -1,0 +1,205 @@
+{
+  "date": "2026-09-19T14:42:04.436112+00:00",
+  "worldSyncVersion": 9,
+  "universalCoverage": false,
+  "completedInThisPass": [
+    "File_30 room0x31 atomic crane, two pads and Wind-up Camera reward checkpoint",
+    "Per-client pad input aggregation, owner input echo and native-receipt bootstrap",
+    "Native phase/timer/motion prediction, child reconstruction with resource/generation guards, paused post-update integration",
+    "Reward consumption without remote scenario replay; preserve local scene cleanup through proxy replacement",
+    "Camera Chargeable save+D8 added to durable item state alongside camera ownership+C8",
+    "Durable crane power15A added; reversible local camera flags15B/15C removed from outbound snapshots and inbound key lookup"
+  ],
+  "nativeChecks": {
+    "command": "bash tests/run_world_sync.sh",
+    "result": "passed",
+    "implementation": "Three production-C host harnesses under UBSan and release floating-point flags; native routines substituted",
+    "focusedPythonTests": 83,
+    "scenarios": [
+      "eleven-step pad motion and simultaneous occupancy",
+      "remote presses preserve local player controls",
+      "owner echo does not rewind its own pose",
+      "bootstrap receipt requires application",
+      "same checkpoint reapplies after child replacement",
+      "atomic validation/resource rejection before state mutation",
+      "paused motion preserves velocity and flags",
+      "culling and reconstruction do not duplicate pending births",
+      "late reward completion does not replay contact scene",
+      "wrapped proxy replacement preserves local cleanup",
+      "disabled callback bits survive apply and unwrap",
+      "parent pool reuse retires child tasks",
+      "parent generation change cannot strand a wrapper",
+      "failed/deleted births release pending readiness",
+      "culled power presentation does not stall coupled motion",
+      "Shared save table grants both camera capabilities and power while excluding local camera handshakes and legacy keys"
+    ]
+  },
+  "pythonTests": {
+    "run": 353,
+    "skipped": 1,
+    "failures": 0
+  },
+  "builds": {
+    "release": "passed",
+    "debug": "passed",
+    "collisionDispatchChecks": "passed",
+    "warnings": [
+      "Existing unused notif_ensure_init in src/ui/anchor_ui.c:90"
+    ]
+  },
+  "loopbackTCP": {
+    "listener": "127.0.0.1:45387",
+    "serverRevisionFromPreviousSetup": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "crane": {
+      "ok": true,
+      "max_packet_bytes": 629,
+      "command": "python3 tools/test_world_crane_anchor_local.py --port 45387",
+      "checks": [
+        "native receipt bootstrap before lower-ID takeover",
+        "atomic crane/pads/reward",
+        "owner input echo",
+        "different pad aggregation",
+        "release preserves another holder",
+        "pause removes contribution",
+        "expiry removes contribution",
+        "local-only words stripped",
+        "sender exclusion",
+        "team isolation"
+      ]
+    },
+    "placed": {
+      "ok": true,
+      "actors": 256,
+      "parts": 11,
+      "max_packet_bytes": 3345,
+      "checks": [
+        "NUL framing",
+        "atomic reordered batch",
+        "roster-validated root identity",
+        "sender exclusion",
+        "team isolation",
+        "pickup tombstones",
+        "interaction ownership",
+        "peer expiry",
+        "door traveller departure",
+        "door reverse late entry",
+        "door closed checkpoint",
+        "native NPC continuation checkpoint",
+        "physics puzzle reward checkpoint",
+        "completed puzzle outranks delayed retry",
+        "reward timer handoff without rewind",
+        "switch and mechanism checkpoints",
+        "switch activation overrides older observer",
+        "pause presence after ownership handoff",
+        "save-aware constructor yields to moving checkpoint",
+        "linked platform child and tint checkpoint",
+        "local fire ownership",
+        "gate-open checkpoint before model initialization",
+        "lower-ID occupied-room bootstrap",
+        "native receipt required before takeover",
+        "local instance and receipt stripped from wire"
+      ]
+    },
+    "dynamic": {
+      "ok": true,
+      "actors": 128,
+      "parts": 11,
+      "max_packet_bytes": 2582,
+      "checks": [
+        "atomic late-entry current state",
+        "duplicate rejection",
+        "sender exclusion",
+        "team isolation",
+        "pickup claim/commit",
+        "native award waits for commit send",
+        "origin disconnect/handoff"
+      ]
+    },
+    "cleanup": "All probe clients exited; disposable server stopped with SIGINT, exit0; no listener remained",
+    "nativeReceiptSimulation": "TCP probe simulates native receipt; production-C harness independently tests receipt application"
+  },
+  "packetBudget": {
+    "route": "transient targetTeamId, quiet, no offline queue; per-recipient team fan-out unchanged",
+    "rowWords": 50,
+    "rowsPerPacket": 24,
+    "maxParts": 11,
+    "maxPacketBytes": 8192,
+    "steadyChangedHz": 5,
+    "unchangedHz": 1,
+    "edgeFloorMs": 50,
+    "inputs": "u list max1 pair, empty outside room0x31; OR excludes paused, absent, stale or out-of-scope peers",
+    "localOnlyWords": [
+      46,
+      47,
+      48,
+      49
+    ],
+    "newDurableProgress": "cr_power and cam_charge use existing idempotent item delta/snapshot route; cr_off_txt/cr_entered are no longer shared"
+  },
+  "packetAudit": {
+    "literalSends": 22,
+    "errors": 0,
+    "warnings": 0
+  },
+  "nativeReference": {
+    "build": "passed",
+    "tests": 34,
+    "valueRows": 1097,
+    "validationErrors": [],
+    "published": false
+  },
+  "review": {
+    "performed": "Independent read-only review followed by commander native call-path verification and regression tests",
+    "fixed": [
+      "disabled callback restoration",
+      "stale child/proxy detachment and retirement",
+      "failed/deleted pending births"
+    ],
+    "verifiedAssumptions": [
+      "native constructors bind model1B9/1BB/3D3; power retains1BA",
+      "native root allocation kind3; ROM category3D3 is9",
+      "802171A8 installs initializer before child setup hook",
+      "80034A10 clears pool record; release bookkeeping before reuse"
+    ]
+  },
+  "sourceSha256": {
+    "include/anchor_world_crane.h": "d6924a0fd790a81aa66ee5cc0455da871fbc128de99727a98557983dce93d8bc",
+    "src/anchor_world_crane.c": "65874bacdb7aefa5be0c72f9bebc925d86d380a93c151ab48291ac783880a324",
+    "src/anchor_world.c": "0c0602598cae6bc8049e6760e4987bcb36c6a5ee76222f3ae2ebfdc836fa181c",
+    "src/utils/anchor_world_codec.c": "d9bda0a5eb0fc0a75d8f574f4d1de90722bb97b0ea26372254c06c9834d724f2",
+    "py/anchor_world.py": "5b2ec1eac0ed638b66ee2ed510fe59c60b7feebd347282ff8087c3d50210083c",
+    "src/item_sync.c": "0cd8944e44ad69b532193d2818dad719ff9be5850c16dafa9fa3b8df7907ea3c",
+    "src/ui/debug.c": "4b60fef7e36077e4b7b2b7e77503a2917b6ae8c879de46c523c50944c3dab782",
+    "tests/test_world_crane_native.c": "83ac267079d3bcbdc798604e4c63d4ed9c6feebb98aeb8b5e735aac45609df69",
+    "tests/test_world_native.c": "4ba86344885011322c98f0cc4675cbcfe8db8e9180b0d9b9bd3ab71bc0341b15",
+    "tests/test_world_transport.py": "89695b8dc1be6cbdfdb61b8d38b22878e6187dd2f834b561c026525377cb6753",
+    "tests/run_world_sync.sh": "6c8b0df43d9b56aff88886204313fecc636d2afc5be1239e5f5244e5479f11a6",
+    "tools/test_world_crane_anchor_local.py": "988f67d352b1914451a74f3aaac6841041d5ab17d6456fa4c0247a4171e938f4",
+    "tests/test_world_crane_progress.py": "dd4b52db374212a757edd2ac92fbdccab712b3139d22497dcfb56731fe6359d7"
+  },
+  "remaining": [
+    "File_30 0x354 shutter and dynamic enemy0xFC lifecycle (native audit next)",
+    "Other room-specific controller graphs listed in world-controller-audit-2026-09-16.md",
+    "Scripted NPC continuations outside common/File_59 paths",
+    "Gated dynamic invocation of0x1F4 and full placed/dynamic family classification",
+    "Fresh two-client in-game verification including crane pad collision, power/scenes, culling, reward pickup and charging"
+  ],
+  "packages": [
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 556693,
+      "sha256": "667df8555bbf54bbf4a60efeea998f43d58e79a3d042c003ab4ce965f33fc83e",
+      "zipIntegrity": "passed",
+      "pythonSources": "matched",
+      "pythonSourceCount": 11
+    },
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 556828,
+      "sha256": "421d7a07c9cbf8f75a2012610022cd0bda75602bbff418914ef7a36adf4fb09f",
+      "zipIntegrity": "passed",
+      "pythonSources": "matched",
+      "pythonSourceCount": 11
+    }
+  ]
+}

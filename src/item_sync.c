@@ -134,6 +134,8 @@ static SyncField s_fields[] = {
     {0x0CC, 0, 0, "eq_kunai"},
     {0x0D0, 0, 0, "eq_bazooka"},
     {0x0D4, 0, 0, "eq_fire_ryo"},
+    /* Scenario 0x83 grants this companion capability with camera ownership. */
+    {0x0D8, 0, 0, "cam_charge"},
 
     /* ── Abilities / magic ──────────────────────────────────────────── */
     /* SAVE_SUDDEN_IMPACT_MAGIC / MINI_EBISU_MAGIC / SUPER_JUMP_MAGIC /
@@ -401,7 +403,12 @@ static SyncFlagBit s_flag_bits[] = {
 
     /* ── World / story event flags ──────────────────────────────────── */
     {0x014, 0, "fl_koryuta"},    /* Freed Koryuta the Dragon              */
-    {0x06B, 0, "fl_outerspace"}, /* Went to Outer Space                   */
+    /* File67 save0x06B is the local dialogue0x1F9 departure choice, not
+     * shared completion. Save0x06C is a local dialogue cue cleared by the
+     * same scene. Exclude both from this table: queued legacy deltas and
+     * compact snapshots must not change another player's travel decision.
+     * Their native save bits remain local; the four Miracle items still
+     * share through s_fields. */
     {0x06F, 0, "fl_baron_iga"},  /* Met Baron in Iga                      */
 
     /* ── World-state / NPC-unlock flags ─────────────────────────────── */
@@ -413,8 +420,6 @@ static SyncFlagBit s_flag_bits[] = {
     {0x016, 0, "fl_witch_np"},
     /* 0x017  Kyushu Disappeared – major world-state change              */
     {0x017, 0, "fl_kyushu"},
-    /* 0x06C  Going to Outer Space – pre-space world state               */
-    {0x06C, 0, "fl_to_space"},
     /* 0x07F  Riding Dragon From Folkypoke – progression unlock          */
     {0x07F, 0, "fl_dragon_fp"},
     /* 0x080  Plasma Told You to Resurrect Sasuke – quest trigger        */
@@ -598,14 +603,16 @@ static SyncFlagBit s_flag_bits[] = {
     {0x007D, 0, "fl_miniebi_mg"},  /* Mini Ebisumaru mini-game started  */
 
     /* World state / Yamato & turtle shrine / switches & walls */
+    {0x00A1, 0, "wl_mt_gate"},     /* File64 two-piece Mt. Fear obstacle */
     {0x00C3, 0, "fl_mtfuji"},      /* Visited Mt. Fuji                  */
+    {0x00C4, 0, "fl_shore_entry"}, /* File70 room0x14D entrance complete */
     {0x00C5, 0, "fl_turtle_ryo"},  /* Turtle shrine ryo                 */
     {0x00C6, 0, "fl_turtle_doll"}, /* Turtle shrine doll spawn          */
     {0x00C7, 0, "fl_turtle_wall"}, /* Turtle shrine Yamato wall         */
     {0x00C8, 0, "fl_turtle_gate"}, /* Turtle shrine red gate            */
     {0x00C9, 0, "fl_yamato_open"}, /* Yamato Shrine unlocked            */
-    {0x015B, 0, "cr_off_txt"},     /* Crane power off text              */
-    {0x015C, 0, "cr_entered"},     /* Crane game entered                */
+    {0x015A, 0, "cr_power"},       /* Crane powered on                  */
+    /* 15B/15C are reversible local camera handshakes, never team progress. */
     {0x015E, 0, "cam_grab"},       /* Camera grabbed                    */
     {0x015F, 0, "cam_belt"},       /* Camera on belt                    */
     {0x0194, 0, "wl_mc_left"},     /* Wall: Musical left entrance       */
@@ -618,6 +625,7 @@ static SyncFlagBit s_flag_bits[] = {
     {0x019D, 0, "sw_shore"},       /* Switch: Japan shoreline           */
     {0x019E, 0, "dr_19e"},         /* Door state 0x19E                  */
     {0x01A3, 0, "pk_camera"},      /* Camera minigame collected         */
+    {0x01A4, 0, "pk_fire_ryo"},    /* Fire Ryo / Medal of Flames pickup */
     {0x01A5, 0, "pk_bazooka"},     /* Yae bazooka collected             */
     {0x01A6, 0, "pk_hammer"},      /* Meat hammer collected             */
     {0x01C3, 0, "fl_shuhudo"},     /* Shuhudo tunnel blown              */

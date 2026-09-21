@@ -1,0 +1,215 @@
+{
+  "date": "2026-09-19",
+  "worldSyncVersion": 12,
+  "universalCoverage": false,
+  "completedInThisPass": [
+    "File64 entity0x325 in room0x14B typed two-piece obstacle state",
+    "Local weapon-hit ownership confirmation before camera/control acquisition",
+    "Native motion, model transitions and completion; camera-free replica and owner-departure continuation",
+    "Guarded child reconstruction, task incarnation, late bootstrap and null-root completion",
+    "Native File53 and File58 audits preserved with explicit remaining world-state gaps",
+    "Complete File62, File74 and File75 overlay decompilation; separate hit-reactive Doll container from local cinematics",
+    "Durable completion0xA1 through existing wl_mt_gate item flag for absent and later teammates",
+    "Native 60-update hit arbitration window before local camera/control acquisition",
+    "Active native camera retains authority through pause; camera-free pause and departure handoff remain supported",
+    "File67/70 native cinematic and finite-child classification with explicit legacy File67 flag-review gap",
+    "File70 completion0xC4 through existing durable fl_shore_entry item flag",
+    "File62 Doll parent/helper/category9 identity, scheduled initialization and implicit-current helper removal verified; adapter still open"
+  ],
+  "nativeChecks": {
+    "command": "bash tests/run_world_sync.sh",
+    "result": "passed",
+    "productionCHarnesses": 5,
+    "worldPythonTests": 124,
+    "additionalExtractedRosterHarness": true,
+    "sanitizer": "undefined",
+    "flags": "O2 ffast-math fno-unsafe-math-optimizations",
+    "limits": "Production C with substituted native routines; not game runtime",
+    "gate64Scenarios": [
+      "qualifying and rejected hits",
+      "unconfirmed hit waits without acquiring controls",
+      "only local activator invokes camera",
+      "active local camera rejects imported replacement",
+      "exact timer30 split displacement",
+      "replica waits at phase boundaries then advances once on handoff",
+      "missing assets and failed child allocation retry",
+      "pending native child initialization not duplicated",
+      "pool reuse and owned child link cleanup",
+      "disconnect continuation without camera",
+      "paused motion",
+      "NaN and impossible phase/model rejection",
+      "canonical completion after root deletion",
+      "durable completion retires instantiated idle copies",
+      "durable completion preserves an active local camera until its native cleanup",
+      "confirmed hit waits the full native delay before camera acquisition",
+      "losing hit cannot acquire a camera on later handoff",
+      "another local sequence lock blocks delayed gate camera acquisition until released"
+    ],
+    "revertedBugVariant": {
+      "regression": "Disconnected observer re-suspended by next native scheduler begin",
+      "detected": true,
+      "returncode": -6,
+      "assertion": "Assertion failed: (save_a1&&!cutscenes&&!locks), function reconstruction_and_failure, file test.c, line 106."
+    }
+  },
+  "pythonTests": {
+    "command": "PYTHONPATH=py python3 -m unittest discover -s tests -p 'test_*.py'",
+    "run": 394,
+    "skipped": 1,
+    "failures": 0,
+    "skipReason": "Unrelated projectile transport test: sandbox does not allow its loopback listener; the separate gate64 TCP probe ran successfully with authorized localhost access."
+  },
+  "loopbackTCP": {
+    "listener": "127.0.0.1:45387",
+    "serverRevisionFromPreviousSetup": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "serverSourceSha256": "de5ad21c2b521d3beeb4da11c6559746184084581e45336c9ea4d19fd8030283",
+    "gate64": {
+      "ok": true,
+      "max_packet_bytes": 606,
+      "checks": [
+        "kind10 schema on the wire",
+        "no input channel in the gate room",
+        "completed phase wins authority",
+        "late entry bootstrap receipt",
+        "phase-only progress",
+        "paused camera owner retains authority",
+        "paused camera-free owner hands off",
+        "owner disconnect handoff",
+        "room scope",
+        "sender exclusion",
+        "team isolation"
+      ]
+    },
+    "serverStopped": true,
+    "publicServerUsed": false,
+    "completionFlags": {
+      "ok": true,
+      "flags": {
+        "wl_mt_gate": 1,
+        "fl_shore_entry": 1
+      },
+      "max_packet_bytes": 113,
+      "checks": [
+        "production flag envelopes",
+        "team isolation",
+        "sender exclusion",
+        "late entrant queued completion",
+        "snapshot subsumes queued completion"
+      ],
+      "limits": "Python production envelope plus native flag table review; not game execution"
+    }
+  },
+  "packetContract": {
+    "route": "quiet targetTeamId, same room/session/version/roster receivers",
+    "durability": "transient; no offline queue",
+    "cadence": "5Hz changed, 1Hz steady, minimum50ms semantic edges",
+    "rowWords": 50,
+    "newPacketTypes": 0,
+    "selfOwnerEcho": "local Python-to-C only",
+    "literalSendAudit": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "completion": {
+      "route": "existing team SET_FLAG and team snapshot",
+      "durability": "queued idempotent progression plus compact snapshot",
+      "cadence": "one native completion edge; existing bounded retry",
+      "newPacketTypes": 0,
+      "fields": [
+        "wl_mt_gate",
+        "fl_shore_entry"
+      ],
+      "measuredMaxPacketBytes": 113
+    },
+    "authority": "Actual active native camera first, then phase progress, establishment, unpaused state and client ID; no camera acquisition from a received busy bit"
+  },
+  "build": {
+    "command": "./build_mod.sh -j4",
+    "result": "passed",
+    "releaseAndDebug": true,
+    "gate64StaticOverlayTables": false,
+    "compilerNote": "Runtime volatile import slots and per-object fno-jump-tables avoid unsupported overlay-import static relocation tables"
+  },
+  "packages": [
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 584120,
+      "sha256": "347bc64cbc37a3ba115b162827194e017473280b409b04239bd185447bc6b6df",
+      "zipIntegrity": true,
+      "bundledWorldPythonMatches": true
+    },
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 583853,
+      "sha256": "bd58699686a37b05e521c8e709a80b182abbcc280c417f9fd05197794f4f21d1",
+      "zipIntegrity": true,
+      "bundledWorldPythonMatches": true
+    }
+  ],
+  "documentation": {
+    "repo": "/Users/ahmad/git/mnsg-documentation",
+    "localBuild": "passed",
+    "tests": 34,
+    "siteValidationErrors": 0,
+    "browserChecks": [
+      "new field table at exact anchor",
+      "semantic Mt. Fear weapon obstacle search",
+      "exact D_8015CDE0 search",
+      "travel/entrance table at exact anchor",
+      "semantic travel entrance search",
+      "exact D_8015CDE0 search after travel table generation",
+      "Doll lifetime table at exact anchor",
+      "semantic nested Silver Doll search",
+      "updated File67 native travel-choice branch text"
+    ],
+    "published": false
+  },
+  "sourceSha256": {
+    "src/anchor_world_gate64.c": "429dfdacff8a4a4331dd266b0eb38339ab69448151b853bf1157ed72c81c82da",
+    "include/anchor_world_gate64.h": "e474e9886dff19526d17d317aa01f2b1ad535230a6d3953848d1e896199513db",
+    "src/anchor_world.c": "149a5a099a0b5e05c744c00a61522601699b78d0c39d2f1a4684c78f1b57ccdc",
+    "src/utils/anchor_world_codec.c": "a724e23f4210333b9cff2abd6d68d9ca0db0cab403b732c6cb81fa65aa9108ef",
+    "py/anchor_world.py": "9bc688ef2e3b1d11d4983d061c6f182ce9b1899bf549dc327c52d23f9821aa64",
+    "tests/test_world_gate64_native.c": "49e1cd60ea4a55a15530c963d9e867eff5422ed1792d95af3daada871154595e",
+    "tests/test_world_gate64.py": "e38ca77bc581e4c678401b986bfbc13f6cd77e34bddd460cfafa2e6e0ce744ef",
+    "tools/test_world_gate64_anchor_local.py": "f28f74baa918ae8f99e00218abfd7154b01f02b50584d5a56f468609fc1b0beb",
+    "Makefile": "42b2e958e87e421b0817be827c474027be708c77c7ae84c8df1a8639eff1940c",
+    "src/item_sync.c": "89052048c0cc1d1eed888852d7a6ef5fcd649caf1483366d998d57eb02fdeb38"
+  },
+  "freshTwoClientGameplay": false,
+  "remaining": [
+    "Simultaneous activation and local camera pause in two game clients",
+    "In-game reconstruction, handoff, collision and completed-save entry",
+    "File53 NPC/object/effect graph",
+    "File46 Koryuta visible body/waves and File58 local scene boundaries",
+    "File44 gated dynamic reachability",
+    "Final classification of all placed and dynamic families",
+    "File62 Doll container and Kihachi graph; File74/75 shared versus local scene boundaries",
+    "File67 legacy shared flags0x6B/0x6C scenario-script semantics"
+  ],
+  "nativeEvidenceSha256": {
+    "file64-all-decompiled.txt": "4688b037e986545d45d58dbf40c2d9a473a9eb48ba777663b50850af6196a05d",
+    "file53-common-decompiled.txt": "9c6e21036012be553eabdf81f652d607a96c5537c84c3165722e00ee3e0baf77",
+    "file53-next1-decompiled.txt": "892d1c180ba014e6e562c06ffeac90108358901be50dec2dd0fce0c0005e2064",
+    "file53-b-decompiled.txt": "009ca69edf99f5c3f26ea3524370cf2c80ce937ed5026e363cb21ea5ed909e25",
+    "file53-a-decompiled.txt": "b30ea2ee580f50d00c07ab85d13f1ad6398525fc4985ecd71472b6d72bb939c0",
+    "file53-common2-decompiled.txt": "a7de5b2cc518b08d42891a52ac8234eb074614053102916b8c11a8ccbe7eba2e",
+    "file58-native-audit-2026-09-19.txt": "ad6c2597b81857207cb9bd7d34ec22ef5eca5c2b5ad9b801407d007a917591c7",
+    "file62-helpers-decompiled.txt": "94c773b5ac6350db844d17c18e22b81fe32a1fd4d9f2bcfd04d502c70ca70068",
+    "file62-main-decompiled.txt": "4bd97483db5f896bfc98805ac20802f9bcb3f0d918a2869455d6a5a6bf0f8228",
+    "file74-main-decompiled.txt": "bef4b9470a141d3062fc7bdb9534fb5123d963c6cf00ae9f9911328fcfc3c8c5",
+    "file74-children-decompiled.txt": "12ca54a085851e8fdd4e5ef082740848de71a4b8985f99de8a877b4809d7dff1",
+    "file74-rest-decompiled.txt": "fbc6c8c2a8288737bc4942acfbb1acf6c4fc29059c1c4bbdbe2b64503bb00e8e",
+    "file75-main-decompiled.txt": "65dcab68887fe20cba111d9b201f9f74be86deadb44b305e53cef9baeebc678c",
+    "file75-children-decompiled.txt": "cfd164553417ed22479a413d2248104f76c6760413ed881486ca6644442befd4",
+    "file67-70-native-audit-2026-09-19.txt": "fde9c6b5dc29817b7b594e53b3d48811cdf66af25663a6022091c85a89f6dd24",
+    "file67-scenario-followup-2026-09-19.txt": "a5feb677b230812897dd0cd661490336b08a29b718a7e41328ff1756945068ea",
+    "file62-doll-native-audit-2026-09-19.txt": "d27ef81b80fa415e4fd169df1ab28fe5b99705357c2543d8d5e1d418a15bf29e"
+  },
+  "review": {
+    "scope": "latest gate64 authority, delayed acquisition and completion flags",
+    "findings": 0,
+    "commanderFollowup": "Added fresh local control-lock guard and production-C regression after review highlighted the widened acquisition window",
+    "limits": "Read-only review and host tests; no fresh two-client game"
+  }
+}
