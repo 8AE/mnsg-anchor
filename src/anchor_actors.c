@@ -15,6 +15,7 @@
 #include "anchor_nameplates.h"
 #include "anchor_dialog.h"
 #include "anchor_player_models.h"
+#include "alternative_ebisumaru/anchor_player_skin.h"
 #include "anchor_projectile_models.h"
 #include "anchor_player_sounds.h"
 #include "anchor_remote_animation.h"
@@ -241,6 +242,9 @@ void anchor_load_remote_cutscene_resources(void)
     /* Use the dedicated stage-load path so broad decompression and whole-file
      * action DMA never occur inside the per-frame remote update hook. */
     anchor_player_models_load_resources();
+    /* The alternative Ebisumaru cutscene asset is not resident in normal gameplay
+     * overlays and must be registered alongside the clothed resources. */
+    anchor_player_skin_load_resources();
     /* Projectile recipes share the already staged character broad files. */
     anchor_projectile_models_load_resources();
     anchor_dungeon_maps_load_resources();
@@ -676,6 +680,11 @@ static void publish_local_state(PlayerObject *local_obj)
                 appearance_flags |= ANCHOR_APPEARANCE_MINI_EBISUMARU;
         }
     }
+    /* Bit 3 is the local alternative-skin toggle and is only meaningful for
+     * Ebisumaru; anchor_player_skin_appearance_bit already returns 0 for any
+     * other character. */
+    if (char_idx == CHARACTER_EBISUMARU)
+        appearance_flags |= anchor_player_skin_appearance_bit();
 
     /* Transmit both script boundaries immediately, even when a stationary
      * player keeps the same action and animation throughout the transition. */
@@ -944,6 +953,9 @@ void anchor_actors_update_cutscene_models(void)
      * this is the authoritative transform and source animation phase. */
     PlayerObject *local_obj = D_801FC60C_5B851C;
 
+    /* Update the alternative-skin toggle before publishing so this frame's packet
+     * already carries appearance bitmap bit 3. */
+    anchor_player_skin_update();
     publish_local_state(local_obj);
     refresh_lobby();
     update_remote_cutscene_models(local_obj);

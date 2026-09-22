@@ -10,7 +10,7 @@ or ordinary NPCs as either character.
 The corrected result is asymmetric:
 
 - Ebisumaru is a standalone cutscene task with a model/display object created
-  directly from file `0x4D9`; this is intentionally the naked/fundoshi opening
+  directly from file `0x4D9`; this is intentionally the alternative/fundoshi opening
   variant seen in the runtime screenshot.
 - Goemon has a cutscene-specific controller task, but that task does **not**
   create a Goemon model. It moves the already-live player model objects through
@@ -19,7 +19,7 @@ The corrected result is asymmetric:
 
 Consequently, there is no standalone opening-Goemon file/model tuple that can
 be copied into `func_8000DBF0`. A recreation limited to the opening resources
-can produce only the naked Ebisumaru and cannot create a second visible Goemon.
+can produce only the alternative Ebisumaru and cannot create a second visible Goemon.
 
 The earlier identification of `func_802135E4` as Goemon and
 `func_80213D4C` as Ebisumaru was wrong. Runtime screenshots showed those exact
@@ -200,7 +200,7 @@ NPC; they are not the standalone Ebisumaru animation helpers.
 ## Remote-render implementation consequence
 
 The first prototype faithfully created the standalone file-`0x4D9` task, which
-is why it displayed naked Ebisumaru and remained on its initial running clip.
+is why it displayed Ebisumaru's alternative appearance and remained on its initial running clip.
 That tuple is correct for the opening but cannot satisfy a clothed, exact-action
 remote renderer. The corrected implementation therefore preserves the
 cutscene architecture while separating it from the opening's presentation

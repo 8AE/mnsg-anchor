@@ -1,5 +1,11 @@
 #include "anchor_render_scratch.h"
 
+/* Animation contexts whose kind-6 model trees this preflight may walk. The
+ * alternative Ebisumaru asset (file 0x4D9) uses its own cutscene context; its
+ * skeleton resolves through the caller's resolver like the clothed trees. */
+#define CLOTHED_CHARACTER_ANIM_CONTEXT 0xc01fc680u
+#define ALTERNATIVE_CHARACTER_ANIM_CONTEXT 0xc006d898u
+
 typedef struct BudgetWalk
 {
     AnchorRenderResolve resolve;
@@ -115,7 +121,10 @@ int anchor_render_player_budget(const void *pointer,
      * draw. Only 16C44 writes that flag, so 196F0's CPU-transform matrix
      * branch cannot add an uncounted matrix at a root or wrapper. */
     if ((model & 0x70000001u) != 0x60000000u ||
-        *(const unsigned int *)(object + 0x30) != 0xc01fc680u)
+        (*(const unsigned int *)(object + 0x30) !=
+             CLOTHED_CHARACTER_ANIM_CONTEXT &&
+         *(const unsigned int *)(object + 0x30) !=
+             ALTERNATIVE_CHARACTER_ANIM_CONTEXT))
         return 0;
     header = resolve(model & 0x8ffffffeu, 12u, context);
     if (!header)

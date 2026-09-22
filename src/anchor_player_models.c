@@ -33,9 +33,15 @@
  *   +0x50 / +0x58 aux face/part resources (segments from D_80203FF0),
  *         loaded per resource with FUN_800145B4 into shared texture pages
  *   +0x2c action record model pointer | 0x60000000
+ *
+ * An alternative Ebisumaru remote keeps the playable action tree and animation data
+ * in a private slice, replacing its body displays with the opening actor's
+ * mesh. Segment 9 carries the original broad file plus that mesh and its
+ * native texture pages. See include/alternative_ebisumaru/anchor_alternative_model.h.
  */
 
 #include "anchor_player_models.h"
+#include "alternative_ebisumaru/anchor_player_skin.h"
 #include "anchor_impact_native.h"
 #include "anchor_dialog.h"
 #include "anchor_remote_model_pool.h"
@@ -49,6 +55,7 @@
 #include "modding.h"
 #include "recomputils.h"
 #include "utils/array_utils.h"
+#include "alternative_ebisumaru/anchor_alternative_model.h"
 #include "utils/texture_cache.h"
 
 #define REMOTE_PLAYER_ACTION_IDLE 0
@@ -58,7 +65,7 @@
 #define REMOTE_PLAYER_ACTION_MINI_GROW 0x8f
 #define PLAYER_MODEL_RENDER_SEGMENT 0x60000000u
 #define ACTION_MODEL_FILE_SEGMENT 0x07000000u
-#define CLOTHED_CHARACTER_ANIM_CONTEXT 0xc01fc680u
+#define CLOTHED_CHARACTER_ANIM_CONTEXT ANCHOR_CLOTHED_ANIM_CONTEXT
 #define CLOTHED_CHARACTER_OBJECT_MODE 2u
 #define REMOTE_YAW_SPEED_THRESHOLD_SQ 64
 #define REMOTE_MODEL_SCALE 0.1f
@@ -105,6 +112,8 @@ typedef struct RemoteModelSlot
     int bound_ch;     /* character currently bound to the object, -1 if none */
     int bound_action; /* action currently bound, -1 if none */
     int bound_sudden_impact;
+    int bound_alternative;  /* 1 while private action and broad/mesh are bound */
+    int alternative_unavailable_reported; /* per-slot one-shot fallback log */
     int last_seq;
     int last_remote_frame_100;
     int last_remote_frame_count_100;
@@ -250,6 +259,21 @@ static unsigned int s_drive_tick;
 static unsigned char *s_aux_arena;
 static MnsgTextureCacheEntry s_aux_cache[AUX_CACHE_PAGES];
 
+/* Low original-RDRAM render-data pool. RT64 has extended RDRAM disabled in
+ * this build, so any display-list/texture address at or above 0x80800000 is
+ * truncated; the private alternative broad/mesh is carved from the stock
+ * scene arena and bumped per stage instead of using recomp_alloc. */
+static unsigned char *s_alternative_pool;
+static unsigned int s_alternative_pool_size;   /* total reserved bytes */
+static unsigned int s_alternative_pool_stride; /* fixed per-buffer size */
+static unsigned int s_alternative_pool_offset; /* bump cursor within the pool */
+static int s_alternative_pool_capacity;        /* buffers reserved in the pool */
+static unsigned char *s_alternative_broad;     /* shared private broad copy base */
+static int s_alternative_broad_failed;         /* copy build failed for this stage */
+static unsigned char *s_local_alternative_action;
+static unsigned int s_local_alternative_action_size;
+static int s_local_alternative_action_bound = -1;
+
 static void remote_model_task_update(void *task, void *object);
 
 static void write_u8_at(void *obj, unsigned int offset, unsigned char value)
@@ -351,6 +375,20 @@ static unsigned char *alloc_aligned(unsigned int size)
     return (unsigned char *)(unsigned long)((addr + (BUFFER_ALIGN - 1u)) & ~(BUFFER_ALIGN - 1u));
 }
 
+static void invalidate_alternative_pool(void)
+{
+    s_alternative_pool = 0;
+    s_alternative_pool_size = 0;
+    s_alternative_pool_stride = 0;
+    s_alternative_pool_offset = 0;
+    s_alternative_pool_capacity = 0;
+    /* The private broad/mesh lives inside the pool, so a rebuilt pool makes it
+     * stale; drop it and allow one fresh build attempt per stage. */
+    s_alternative_broad = 0;
+    s_alternative_broad_failed = 0;
+    s_local_alternative_action_bound = -1;
+}
+
 static void invalidate_aux_render_arena(void)
 {
     int slot_index;
@@ -358,6 +396,10 @@ static void invalidate_aux_render_arena(void)
     int i;
 
     s_aux_arena = 0;
+    /* The scene registry sentinel is rebuilt at each stage load, so the low
+     * render-data pool derived from it must be reserved again before the next
+     * alternative mesh graft. */
+    invalidate_alternative_pool();
     for (i = 0; i < AUX_CACHE_PAGES; ++i)
     {
         s_aux_cache[i].resource = 0;
@@ -380,6 +422,8 @@ static void invalidate_aux_render_arena(void)
         slot->bound_ch = -1;
         slot->bound_action = -1;
         slot->bound_sudden_impact = 0;
+        slot->bound_alternative = 0;
+        slot->alternative_unavailable_reported = 0;
         slot->aux_last_frame = 0.0f;
         slot->collision_ready = 0;
         slot->pending_valid = 0;
@@ -432,6 +476,111 @@ static int reserve_aux_render_arena(void)
     return 1;
 }
 
+/* Reserve the low render-data pool from the stock scene-registry sentinel.
+ * This mirrors reserve_aux_render_arena: find the loader's file_id == 0
+ * cursor, align it up, reserve, then advance the sentinel so later resident
+ * resources start after the pool. The pool must stay entirely below
+ * 0x80800000 because RT64 has extended RDRAM disabled and truncates every
+ * display-list/texture address at or above it.
+ *
+ * The buffer size is the fixed private broad/mesh size (0x28000), so this
+ * runs from the stage-load skin path after file 0x4D9 is resident. */
+int anchor_player_models_reserve_alternative_pool(void)
+{
+    SceneResourceEntry *free_entry = 0;
+    unsigned int cursor;
+    unsigned int start;
+    unsigned int end;
+    unsigned int per_buffer;
+    unsigned int total;
+    int buffers;
+    int i;
+
+    invalidate_alternative_pool();
+
+    per_buffer = (ANCHOR_ALTERNATIVE_RENDER_DATA_SIZE + (BUFFER_ALIGN - 1u)) &
+                 ~(BUFFER_ALIGN - 1u);
+    if (!per_buffer)
+        return 0;
+
+    /* One shared buffer serves all local and remote alternative Ebisumaru models. */
+    if (per_buffer > ANCHOR_ALTERNATIVE_POOL_CAP)
+        buffers = 1;
+    else
+    {
+        buffers = (int)(ANCHOR_ALTERNATIVE_POOL_CAP / per_buffer);
+        if (buffers > ANCHOR_ALTERNATIVE_POOL_MAX_BUFFERS)
+            buffers = ANCHOR_ALTERNATIVE_POOL_MAX_BUFFERS;
+        if (buffers < 1)
+            buffers = 1;
+    }
+    total = (unsigned int)buffers * per_buffer;
+    if (total < per_buffer)
+        return 0;
+
+    for (i = 0; i < SCENE_RESOURCE_ENTRY_COUNT; ++i)
+    {
+        if (D_80167FC0_168BC0[i].file_id == 0)
+        {
+            free_entry = &D_80167FC0_168BC0[i];
+            break;
+        }
+    }
+    if (!free_entry || !free_entry->data)
+        return 0;
+
+    cursor = (unsigned int)(unsigned long)free_entry->data & 0xbfffffffu;
+    start = (cursor + (BUFFER_ALIGN - 1u)) & ~(BUFFER_ALIGN - 1u);
+    end = start + total;
+    if (end < start || end > RENDER_RDRAM_END ||
+        !is_rdram_pointer((void *)(unsigned long)start) ||
+        !is_rdram_pointer((void *)(unsigned long)(end - 1u)))
+    {
+        recomp_printf("[remote_models] alternative pool %x..%x is outside render RDRAM\n",
+                      start, end);
+        return 0;
+    }
+
+    /* Advance the loader sentinel because later resident resources must begin
+     * after the render-data buffers, not overwrite them. */
+    free_entry->data = (unsigned char *)(unsigned long)end;
+    s_alternative_pool = (unsigned char *)(unsigned long)start;
+    s_alternative_pool_size = total;
+    s_alternative_pool_stride = per_buffer;
+    s_alternative_pool_offset = 0;
+    s_alternative_pool_capacity = buffers;
+    recomp_printf("[remote_models] alternative pool reserved at %x..%x (%d x %u)\n",
+                  start, end, s_alternative_pool_capacity, s_alternative_pool_stride);
+    return 1;
+}
+
+unsigned char *anchor_player_models_alternative_pool_alloc(unsigned int size)
+{
+    unsigned int aligned;
+    unsigned int address;
+    unsigned int end;
+    unsigned char *result;
+
+    if (!s_alternative_pool || !size)
+        return 0;
+    /* The builder asks for the same stage-fixed render-data size the pool was
+     * reserved with; a larger request means the layout moved and the pool
+     * cannot back it, so fail and let the caller fall back to clothed. */
+    if (s_alternative_pool_stride && size > s_alternative_pool_stride)
+        return 0;
+    aligned = (size + (BUFFER_ALIGN - 1u)) & ~(BUFFER_ALIGN - 1u);
+    if (aligned < size || s_alternative_pool_offset > s_alternative_pool_size ||
+        aligned > s_alternative_pool_size - s_alternative_pool_offset)
+        return 0;
+    result = s_alternative_pool + s_alternative_pool_offset;
+    address = (unsigned int)(unsigned long)result;
+    end = address + aligned;
+    if (end < address || end > RENDER_RDRAM_END || !is_rdram_pointer(result))
+        return 0;
+    s_alternative_pool_offset += aligned;
+    return result;
+}
+
 static void release_slot_aux(RemoteModelSlot *slot)
 {
     int channel;
@@ -467,8 +616,9 @@ static unsigned char *resident_resource_base(unsigned int file_id)
 
 /* The next registry allocation (including the sentinel cursor) bounds the
  * resident file. Use the closest later base so preflight cannot walk into
- * another asset or into the graphics arenas reserved after staging. */
-static unsigned int resident_resource_size(const unsigned char *base)
+ * another asset or into the graphics arenas reserved after staging. Shared
+ * with the skin module so the alternative file size uses the same registry walk. */
+unsigned int resident_resource_size(const unsigned char *base)
 {
     unsigned int start = (unsigned int)(unsigned long)base;
     unsigned int end = 0;
@@ -645,6 +795,9 @@ static void hide_object(void *object)
         if (s_slots[i].object == object)
         {
             s_slots[i].collision_ready = 0;
+            /* A hidden object no longer carries a bound model/asset. */
+            s_slots[i].bound_alternative = 0;
+            s_slots[i].alternative_unavailable_reported = 0;
             /* A failed new expression must not leave a hidden model pinning
              * all cache pages forever. Retirement still protects GPU reads. */
             release_slot_aux(&s_slots[i]);
@@ -696,6 +849,8 @@ static void clear_slot_state(RemoteModelSlot *slot, int preserve_live_task)
     slot->bound_ch = -1;
     slot->bound_action = -1;
     slot->bound_sudden_impact = 0;
+    slot->bound_alternative = 0;
+    slot->alternative_unavailable_reported = 0;
     slot->last_seq = 0;
     slot->last_remote_frame_100 = 0;
     slot->last_remote_frame_count_100 = 0;
@@ -827,6 +982,19 @@ int anchor_player_models_is_remote_object(const void *object)
     return 0;
 }
 
+int anchor_player_models_is_alternative_object(const void *object)
+{
+    int i;
+    if (!object || s_owner_task != D_801FC604_5B8514)
+        return 0;
+    for (i = 0; i < s_slot_capacity; ++i)
+        if (s_slots[i].active && s_slots[i].object == object &&
+            is_linked_remote_task(s_slots[i].task) &&
+            s_slots[i].bound_alternative)
+            return 1;
+    return 0;
+}
+
 static int range_contains(const void *base, unsigned int size,
                            unsigned int address, unsigned int bytes)
 {
@@ -870,6 +1038,14 @@ const void *anchor_player_models_resolve_render_address(const void *object,
             range_contains(slot->private_action, slot->private_action_size,
                            address, bytes))
             return (const void *)(unsigned long)address;
+        if (slot->bound_alternative)
+        {
+            /* The private segment-9 buffer contains the standard broad file
+             * and the rebased opening mesh with its texture pages. */
+            if (range_contains(s_alternative_broad, ANCHOR_ALTERNATIVE_RENDER_DATA_SIZE,
+                               address, bytes))
+                return (const void *)(unsigned long)address;
+        }
         return 0;
     }
     return 0;
@@ -891,6 +1067,8 @@ static int ensure_slot_task(RemoteModelSlot *slot, const AnchorPlayerModelRemote
         slot->bound_ch = -1;
         slot->bound_action = -1;
         slot->bound_sudden_impact = 0;
+        slot->bound_alternative = 0;
+        slot->alternative_unavailable_reported = 0;
     }
     if (slot->task && slot->object)
         return 1;
@@ -1101,14 +1279,14 @@ static int sync_timed_aux_resources(RemoteModelSlot *slot,
 }
 
 static int bind_action_model_data(RemoteModelSlot *slot, int ch, int action,
-                                  int sudden_impact)
+                                  int sudden_impact, int alternative)
 {
     CharacterModelCache *cache = &s_char_cache[ch];
     unsigned int offset;
     unsigned int size;
     unsigned int base;
 
-    if (!sudden_impact)
+    if (!sudden_impact && !alternative)
     {
         write_u32_at(slot->object, 0x38,
                      (unsigned int)(unsigned long)cache->action);
@@ -1123,7 +1301,8 @@ static int bind_action_model_data(RemoteModelSlot *slot, int ch, int action,
         cache->max_action_model_size == 0 ||
         size > cache->max_action_model_size)
         return 0;
-    if (!slot->private_action)
+    if (!slot->private_action ||
+        slot->private_action_size < cache->max_action_model_size)
     {
         slot->private_action = alloc_aligned(cache->max_action_model_size);
         if (!slot->private_action)
@@ -1134,16 +1313,101 @@ static int bind_action_model_data(RemoteModelSlot *slot, int ch, int action,
         return 0;
 
     copy_bytes(slot->private_action, cache->action + offset, size);
+    if (alternative && !anchor_alternative_patch_action(slot->private_action, offset, size,
+            *(unsigned int *)get_action_entry(ch, action)))
+        return 0;
     base = (unsigned int)(unsigned long)slot->private_action - offset;
     write_u32_at(slot->object, 0x38, base);
     return 1;
+}
+
+/* Preserve the playable broad file for expression/cue readers. Append the
+ * opening actor's complete mesh and decoded texture pages at +0x18000, then
+ * rebase only its display-list references into segment 9. The standard action
+ * skeleton remains in a private segment-8 slice. */
+static int build_alternative_broad_copy(void)
+{
+    CharacterModelCache *cache = &s_char_cache[CHARACTER_EBISUMARU];
+    const unsigned char *alternative_base;
+    unsigned int alternative_size;
+    unsigned char *copy;
+
+    if (!cache->ready || !cache->broad || !cache->broad_size)
+        return 0;
+    alternative_base = (const unsigned char *)(unsigned long)
+        anchor_player_skin_alternative_base();
+    alternative_size = anchor_player_skin_alternative_size();
+    if (!alternative_base || alternative_size < ANCHOR_ALTERNATIVE_RESOURCE_BYTES ||
+        cache->broad_size > ANCHOR_ALTERNATIVE_BROAD_BYTES)
+        return 0;
+
+    /* The allocator rejects a request larger than the stage-fixed stride, so
+     * the pool cannot hand back a wrong-sized copy. */
+    copy = anchor_player_models_alternative_pool_alloc(ANCHOR_ALTERNATIVE_RENDER_DATA_SIZE);
+    if (!copy)
+        return 0;
+
+    copy_bytes(copy, cache->broad, cache->broad_size);
+    copy_bytes(copy + ANCHOR_ALTERNATIVE_MESH_OFFSET, alternative_base,
+               ANCHOR_ALTERNATIVE_RESOURCE_BYTES);
+    if (!anchor_alternative_rebase_mesh(copy, alternative_size))
+        return 0;
+
+    s_alternative_broad = copy;
+    return 1;
+}
+
+unsigned int anchor_player_models_alternative_broad_base(void)
+{
+    if (!s_alternative_broad)
+    {
+        if (s_alternative_broad_failed || !build_alternative_broad_copy())
+        {
+            s_alternative_broad_failed = 1;
+            return 0;
+        }
+    }
+    return (unsigned int)(unsigned long)s_alternative_broad;
+}
+
+unsigned int anchor_player_models_alternative_action_base(int action,
+                                                    unsigned int model_ptr)
+{
+    CharacterModelCache *cache = &s_char_cache[CHARACTER_EBISUMARU];
+    unsigned int offset;
+    unsigned int size;
+    unsigned char *entry = get_action_entry(CHARACTER_EBISUMARU, action);
+
+    if (!entry || (model_ptr & 0x8ffffffeu) != *(unsigned int *)entry ||
+        !cache->ready || !cache->action ||
+        !action_model_range(CHARACTER_EBISUMARU, action, &offset, &size) ||
+        !cache->max_action_model_size || size > cache->max_action_model_size)
+        return 0;
+    if (!s_local_alternative_action)
+    {
+        s_local_alternative_action = alloc_aligned(cache->max_action_model_size);
+        if (!s_local_alternative_action)
+            return 0;
+        s_local_alternative_action_size = cache->max_action_model_size;
+    }
+    if (size > s_local_alternative_action_size)
+        return 0;
+    if (s_local_alternative_action_bound != action)
+    {
+        copy_bytes(s_local_alternative_action, cache->action + offset, size);
+        if (!anchor_alternative_patch_action(s_local_alternative_action, offset, size,
+                                       *(unsigned int *)entry))
+            return 0;
+        s_local_alternative_action_bound = action;
+    }
+    return (unsigned int)(unsigned long)s_local_alternative_action - offset;
 }
 
 /* Bind a character/action to the slot's render object from the character
  * cache. Sudden Impact uses a private mutable action slice; ordinary models
  * keep using the shared pristine raw action file. */
 static int bind_model(RemoteModelSlot *slot, int ch, int action,
-                      int sudden_impact)
+                      int sudden_impact, int alternative)
 {
     CharacterModelCache *cache = &s_char_cache[ch];
     unsigned char *entry = get_action_entry(ch, action);
@@ -1154,9 +1418,16 @@ static int bind_model(RemoteModelSlot *slot, int ch, int action,
 
     sudden_impact = ch == CHARACTER_GOEMON && sudden_impact != 0;
 
+    /* The standard animation context decides the native material path; +0x34
+     * is the segment-8 file id and +0x70 is the auxiliary binding word. A
+     * alternative->clothed rebind restores the clothed broad base below. */
+    write_u32_at(slot->object, 0x30, CLOTHED_CHARACTER_ANIM_CONTEXT);
+    write_u16_at(slot->object, 0x34, 0);
+    write_u32_at(slot->object, 0x70, 0);
+
     /* Segment 8: action model file base. Ordinary models use the whole shared
      * file; the mutable Sudden Impact variant uses a slot-private slice. */
-    if (!bind_action_model_data(slot, ch, action, sudden_impact))
+    if (!bind_action_model_data(slot, ch, action, sudden_impact, alternative))
         return 0;
     /* Segment 9: broad character file id + base (object+0x3c/+0x40). */
     write_u16_at(slot->object, 0x3c, D_80204020_5BFF30[ch]);
@@ -1182,6 +1453,7 @@ static int bind_model(RemoteModelSlot *slot, int ch, int action,
     slot->bound_ch = ch;
     slot->bound_action = action;
     slot->bound_sudden_impact = sudden_impact;
+    slot->bound_alternative = 0;
     show_object(slot->object);
     return 1;
 }
@@ -1659,6 +1931,10 @@ void anchor_collision_after_local_movement(void)
     AnchorCollisionVec3 contact;
     AnchorCollisionVec3 resolved;
     int count;
+    /* Runs after the native late player update and shadow mirroring. Rebinding
+     * the primary display object here is intentionally before every early
+     * return so the alternative override is re-asserted on each firing frame. */
+    anchor_player_skin_apply_local();
     if (!s_collision_local_task)
         return;
     if (s_collision_local_task != D_801FC604_5B8514 ||
@@ -1794,7 +2070,8 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
     if (!entry || !sync_timed_aux_resources(slot, entry, slot->frame))
     {
         /* Keep a model with incomplete face segments hidden so corrupt display
-         * data is never submitted while an aux load or table check fails. */
+         * data is never submitted while an aux load or table check fails. The
+         * alternative mesh graft uses the playable aux face pages. */
         hide_object(slot->object);
         slot->bound_action = -1;
         slot->bound_sudden_impact = 0;
@@ -1824,6 +2101,13 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
         write_u16_at(slot->object, 0x18, 0);
     }
     write_float_at(slot->object, 0x28, slot->frame);
+    /* Re-assert the relocated opening mesh base for an alternative slot. */
+    if (slot->bound_alternative)
+    {
+        unsigned int alternative_broad = anchor_player_models_alternative_broad_base();
+        if (alternative_broad)
+            write_u32_at(slot->object, 0x40, alternative_broad);
+    }
     /* Flicker is a render flag only. Retiring the object with hide_object
      * would incorrectly remove its collider on every hidden recovery frame.
      * Animation, nameplates and collision continue through both phases. */
@@ -1865,6 +2149,9 @@ static void remote_model_task_update(void *task, void *object)
     const AnchorPlayerModelRemote *remote;
     int ch;
     int action;
+    int sudden_impact;
+    int alternative;
+    unsigned int alternative_broad;
     int i;
 
     (void)object;
@@ -1886,6 +2173,7 @@ static void remote_model_task_update(void *task, void *object)
         slot->bound_ch = -1;
         slot->bound_action = -1;
         slot->bound_sudden_impact = 0;
+        slot->bound_alternative = 0;
         return;
     }
 
@@ -1904,39 +2192,81 @@ static void remote_model_task_update(void *task, void *object)
         slot->bound_ch = -1;
         slot->bound_action = -1;
         slot->bound_sudden_impact = 0;
+        slot->bound_alternative = 0;
         return;
     }
 
     action = remote_action_or_idle(remote->action);
-    if (!s_char_cache[ch].ready)
+    /* Bit 3 is meaningful only for Ebisumaru. Its action tree stays playable;
+     * the body's display references are patched in a private action slice. */
+    alternative = ch == CHARACTER_EBISUMARU &&
+            (remote->appearance_flags &
+             ANCHOR_APPEARANCE_ALTERNATIVE_EBISUMARU) != 0;
+    alternative_broad = 0;
+    if (alternative)
     {
-        if (slot->bound_ch != ch)
+        alternative_broad = anchor_player_models_alternative_broad_base();
+        if (!alternative_broad)
+        {
+            /* File 0x4D9 failed to register, or the low-RDRAM render-data pool
+             * could not serve the private broad copy. Degrade to the clothed
+             * model instead of hiding the peer; report once per slot. */
+            if (!slot->alternative_unavailable_reported)
+            {
+                slot->alternative_unavailable_reported = 1;
+                recomp_printf("[remote_models] alternative Ebisumaru render data "
+                              "unavailable; using clothed model\n");
+            }
+            alternative = 0;
+        }
+        else
+        {
+            slot->alternative_unavailable_reported = 0;
+        }
+    }
+    if (!alternative && !s_char_cache[ch].ready)
+    {
+        /* Also reset a slot left alternative by a cleared bit so it can rebind the
+         * clothed model once the character cache becomes available. */
+        if (slot->bound_ch != ch || slot->bound_alternative)
         {
             hide_object(slot->object);
             slot->bound_ch = -1;
             slot->bound_action = -1;
             slot->bound_sudden_impact = 0;
+            slot->bound_alternative = 0;
         }
         update_slot_hidden_pose(slot, remote);
         return;
     }
 
-    if (slot->bound_ch != ch || slot->bound_action != action ||
-        slot->bound_sudden_impact !=
-            (ch == CHARACTER_GOEMON &&
-             (remote->appearance_flags &
-              ANCHOR_APPEARANCE_SUDDEN_IMPACT) != 0))
+    sudden_impact = ch == CHARACTER_GOEMON &&
+        (remote->appearance_flags & ANCHOR_APPEARANCE_SUDDEN_IMPACT) != 0;
+    if (anchor_player_model_remote_rebind_required(
+            slot->bound_ch, slot->bound_action, slot->bound_sudden_impact,
+            slot->bound_alternative, ch, action, sudden_impact, alternative))
     {
-        if (!bind_model(slot, ch, action,
-                        remote->appearance_flags &
-                            ANCHOR_APPEARANCE_SUDDEN_IMPACT))
+        if (!bind_model(slot, ch, action, sudden_impact, alternative))
         {
-            hide_object(slot->object);
-            slot->bound_ch = -1;
-            slot->bound_action = -1;
-            slot->bound_sudden_impact = 0;
-            update_slot_hidden_pose(slot, remote);
-            return;
+            /* An unsupported action/tree must render clothed rather than
+             * expose a partly patched mesh or hide the remote player. */
+            if (!alternative || !bind_model(slot, ch, action, sudden_impact, 0))
+            {
+                hide_object(slot->object);
+                slot->bound_ch = -1;
+                slot->bound_action = -1;
+                slot->bound_sudden_impact = 0;
+                slot->bound_alternative = 0;
+                update_slot_hidden_pose(slot, remote);
+                return;
+            }
+            alternative = 0;
+        }
+        if (alternative)
+        {
+            /* Bind the relocated opening mesh and original broad cue data. */
+            write_u32_at(slot->object, 0x40, alternative_broad);
+            slot->bound_alternative = 1;
         }
         update_slot_pose(slot, remote, 1);
         return;

@@ -281,8 +281,9 @@ ENEMY_BITMAP_HEX_MAX: int = 64
 APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
 APPEARANCE_MINI_EBISUMARU: int = 1 << 1
 APPEARANCE_HURT_RECOVERY: int = 1 << 2
+APPEARANCE_ALTERNATIVE_EBISUMARU: int = 1 << 3
 APPEARANCE_MASK: int = (APPEARANCE_SUDDEN_IMPACT | APPEARANCE_MINI_EBISUMARU |
-                       APPEARANCE_HURT_RECOVERY)
+                       APPEARANCE_HURT_RECOVERY | APPEARANCE_ALTERNATIVE_EBISUMARU)
 _PROJECTILE_SPAWN_LIMITS = {
     "id": (1, 0x7fffffff), "kind": (1, 255),
     "x100": (-1000000000, 1000000000),
@@ -2872,7 +2873,8 @@ def set_position_anim(
         rot_y: Current model Y rotation.
         rot_z: Current model Z rotation.
         appearance_flags: Bitmap containing Sudden Impact (bit 0), Mini
-            Ebisumaru (bit 1), and native hurt recovery (bit 2).
+            Ebisumaru (bit 1), native hurt recovery (bit 2), and the alternative
+            Ebisumaru skin (bit 3).
         velocity_x: Optional final-frame X velocity in world units per second.
         velocity_y: Optional final-frame Y velocity in world units per second.
         velocity_z: Optional final-frame Z velocity in world units per second.
@@ -3396,7 +3398,8 @@ def get_lobby_positions_json() -> str:
       "x","y","z" – last broadcast world-space position (0 if not yet received).
       "hp"   – 1 if the player has sent at least one position update, 0 otherwise.
       "t"    – sender monotonic milliseconds, masked to a positive 31-bit value.
-      "ap"   – Sudden Impact bit 0, Mini Ebisumaru bit 1, hurt recovery bit 2.
+      "ap"   – Sudden Impact bit 0, Mini Ebisumaru bit 1, hurt recovery bit 2,
+               alternative Ebisumaru skin bit 3.
       "cd"   – 1 while the sender requires cutscene/script collision bypass.
       "mr"   – gameplay room used by the Japan-map marker, -1 if unavailable.
       "mx","my","mz" – signed fixed-point map position in hundredths.

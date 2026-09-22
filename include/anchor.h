@@ -304,7 +304,8 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
     * @param rot_z            Model Z rotation from object offset 0x18.
     * @param appearance_flags Appearance bitmap: bit 0 is Goemon's Sudden
     *                         Impact; bit 1 is Mini Ebisumaru; bit 2 is native
-    *                         hurt recovery (the receiver supplies blink phase).
+    *                         hurt recovery (the receiver supplies blink phase);
+    *                         bit 3 is the alternative Ebisumaru skin.
     * @param velocity_x       Final frame-to-frame X displacement, units/sec.
     * @param velocity_y       Final frame-to-frame Y displacement, units/sec.
     * @param velocity_z       Final frame-to-frame Z displacement, units/sec.

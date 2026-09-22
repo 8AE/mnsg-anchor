@@ -1,6 +1,7 @@
 #include "modding.h"
 #include "recomputils.h"
 #include "anchor_dialog.h"
+#include "alternative_ebisumaru/anchor_player_skin.h"
 
 /* Save-data base. The character unlock fields live at +0x94..+0xa0, and
  * hp_max lives before the base at -0x28. func_8000B640 initializes this block
@@ -66,6 +67,7 @@ void anchor_set_current_character_if_needed(void)
     if (replacement < 0)
         return;
 
+    anchor_player_skin_clear_for_character_change();
     SAVE_WRITE32(SAVE_SPAWN_CHARACTER, replacement);
     D_8015C5D8_15D1D8[1] = replacement & 0xff;
     D_8015C5D8_15D1D8[0x2C / 4] = 1;
@@ -92,6 +94,9 @@ RECOMP_PATCH int func_801DD50C_59941C(void *arg0)
 
     if (selected >= 0)
     {
+        /* Release Ebisumaru's private render bases before the native swap
+         * changes the character id and starts rebinding the player object. */
+        anchor_player_skin_clear_for_character_change();
         *(unsigned char *)((char *)arg0 + 0x60) = (unsigned char)selected;
         D_8015C5D8_15D1D8[1] = selected & 0xff;
         D_8015C5D8_15D1D8[0x2C / 4] = 1;

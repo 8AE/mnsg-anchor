@@ -2,10 +2,68 @@
 #define ANCHOR_PLAYER_MODELS_H
 
 #include "anchor_remote_collision.h"
+#include "alternative_ebisumaru/anchor_alternative_model.h"
 
 #define ANCHOR_APPEARANCE_SUDDEN_IMPACT (1 << 0)
 #define ANCHOR_APPEARANCE_MINI_EBISUMARU (1 << 1)
 #define ANCHOR_APPEARANCE_HURT_RECOVERY (1 << 2)
+/* Alternative/fundoshi Ebisumaru opening-cutscene skin. */
+#define ANCHOR_APPEARANCE_ALTERNATIVE_EBISUMARU (1 << 3)
+
+/* An alternative appearance change replaces both segment bases. */
+static inline int anchor_player_model_remote_rebind_required(
+    int bound_ch, int bound_action, int bound_sudden_impact, int bound_alternative,
+    int ch, int action, int sudden_impact, int alternative)
+{
+    return bound_ch != ch || bound_action != action ||
+           bound_sudden_impact != sudden_impact || bound_alternative != alternative;
+}
+
+/* The private segment-9 buffer retains the complete 0x124 broad file at the
+ * original offsets. The resident 0x4D9 opening file is appended at +0x18000;
+ * its display-list references are rebased into segment 9. A private copy of
+ * each active 0x127 action replaces only the body's display references with
+ * alternative mesh references. The native action header, joint tree, frame and
+ * expression data keep their playable values. */
+#define ANCHOR_ALTERNATIVE_SIZE_FALLBACK ANCHOR_ALTERNATIVE_RESOURCE_BYTES
+#define ANCHOR_CLOTHED_ANIM_CONTEXT 0xc01fc680u
+
+/* Bounding size of a resident scene resource, or 0 when unknown. Shared with
+ * the skin module so the alternative file size uses the same registry walk. */
+unsigned int resident_resource_size(const unsigned char *base);
+
+/* --- Low-RDRAM alternative render-data pool -------------------------------
+ *
+ * The private broad copy is both geometry and texture data, so every byte a
+ * display-list command resolves must be directly addressable by RT64. The
+ * Goemon64Recomp build enables the extended opcode but leaves
+ * gEXSetRDRAMExtended(...,1) disabled, so an address at or above 0x80800000
+ * is truncated/aliased and corrupts the display list (eventually nulling
+ * RT64's hleGBI). recomp_alloc returns heap addresses around 0x81xxxxxx, so
+ * the copy cannot live there. These buffers are instead carved from the stock
+ * scene-registry arena below 0x80800000, exactly like the remote face arena,
+ * and handed out by a per-stage bump allocator.
+ *
+ * Reserve the pool at stage load after file 0x4D9 is resident; returns 1 when
+ * the pool is usable. */
+int anchor_player_models_reserve_alternative_pool(void);
+/* Bump-allocate one render-data buffer of `size` bytes from the low-RDRAM
+ * pool. Returns a valid low RDRAM pointer, or 0 when the pool was not
+ * reserved, the request exceeds the fixed per-buffer stride, or it is
+ * exhausted. */
+unsigned char *anchor_player_models_alternative_pool_alloc(unsigned int size);
+
+/* One shared relocated mesh per stage. */
+#define ANCHOR_ALTERNATIVE_POOL_CAP 0x80000u
+#define ANCHOR_ALTERNATIVE_POOL_MAX_BUFFERS 1
+
+/* Private broad + opening mesh base, or 0 when the asset cannot be prepared. */
+unsigned int anchor_player_models_alternative_broad_base(void);
+/* Private playable action slice with alternative body displays. Returns its
+ * rebased segment-8 base, or zero if this action cannot safely use the skin. */
+unsigned int anchor_player_models_alternative_action_base(int action,
+                                                          unsigned int model_ptr);
+
 
 typedef struct AnchorPlayerModelRemote
 {
@@ -67,6 +125,8 @@ int anchor_player_models_get_sound_position(int cid, int session, int epoch,
 int anchor_player_models_is_local_sound_task(const void *task);
 int anchor_player_models_capacity(void);
 int anchor_player_models_is_remote_object(const void *object);
+/* True for an active remote slot currently bound to the alternative mesh graft. */
+int anchor_player_models_is_alternative_object(const void *object);
 const void *anchor_player_models_resolve_render_address(const void *object,
     unsigned int encoded, unsigned int bytes);
 int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacity);

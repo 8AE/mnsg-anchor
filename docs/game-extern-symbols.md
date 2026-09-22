@@ -465,7 +465,7 @@ touching game memory.
 ## Corrected Opening-Resource Boundary
 
 The opening's standalone file-`0x4D9` Ebisumaru is intentionally the
-naked/fundoshi variant and its selector exposes only nine special opening
+alternative/fundoshi variant and its selector exposes only nine special opening
 clips. The opening Goemon controller drives the already-live local player model
 and never creates a standalone Goemon display object.
 

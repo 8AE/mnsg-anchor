@@ -24,6 +24,7 @@ extern short D_800C7A72_C8672;
 extern int D_801684F8_1690F8;
 extern int D_801684FC_1690FC;
 extern int anchor_player_models_is_remote_object(const void *object);
+extern int anchor_player_models_is_alternative_object(const void *object);
 extern const void *anchor_player_models_resolve_render_address(
     const void *object, unsigned int address, unsigned int bytes);
 
@@ -69,6 +70,20 @@ static const void *resolve(unsigned int address, unsigned int bytes,
                             const void *object)
 {
     return anchor_player_models_resolve_render_address(object, address, bytes);
+}
+
+/* Undo a pending scratch hide when a draw cannot use the redirect. Clothed
+ * objects keep the existing hidden-for-this-draw behavior; an alternative-bound
+ * object is a fixed game asset, so leave it visible and let the native kind-6
+ * draw proceed in the stock bank instead. s_object is cleared so the matching
+ * end hook no-ops. */
+static void abandon_scratch_hide(void *object, int alternative)
+{
+    if (!alternative || !s_object)
+        return;
+    ((unsigned char *)object)[0x64] =
+        (unsigned char)((((unsigned char *)object)[0x64] & 0xfeu) | s_hidden);
+    s_object = 0;
 }
 
 void anchor_render_scratch_load_resources(void)
@@ -120,6 +135,7 @@ void anchor_render_scratch_begin_object(void *pointer)
     unsigned char *native_start;
     unsigned char *native_limit;
     unsigned int left, matrix_bytes, command_bytes, tail_bytes;
+    int alternative;
     unsigned char *object = pointer;
 
     /* Case-6 native drawing recurses through 18CA0, never through 16C44. */
@@ -129,18 +145,24 @@ void anchor_render_scratch_begin_object(void *pointer)
         (object[0x64] & 1u) || (signed char)object[0x65] < 0 ||
         !*(unsigned int *)(object + 0x2c))
         return;
+    /* Alternative-bound objects go through the same budgeted scratch redirect. If
+     * the preflight or the scratch arena cannot be used, abandon_scratch_hide
+     * leaves an alternative object visible instead of hidden. */
+    alternative = anchor_player_models_is_alternative_object(object);
     s_object = object;
     s_hidden = object[0x64] & 1u;
     object[0x64] |= 1u;
     if (!s_arena || s_bank < 0 || s_bank != D_800C7A72_C8672)
     {
         report(1u);
+        abandon_scratch_hide(object, alternative);
         return;
     }
     if (D_801684F8_1690F8 < -1 || D_801684F8_1690F8 > 32 ||
         D_801684FC_1690FC < 0 || D_801684FC_1690FC > 32)
     {
         report(2u);
+        abandon_scratch_hide(object, alternative);
         return;
     }
     native_start = D_8015C5C8_15D1C8 + s_bank * NATIVE_GRAPHICS_BANK_BYTES;
@@ -152,6 +174,7 @@ void anchor_render_scratch_begin_object(void *pointer)
         (unsigned char *)D_8015C5CC_15D1CC + 8 > native_limit)
     {
         report(4u);
+        abandon_scratch_hide(object, alternative);
         return;
     }
     left = s_bank_bytes - s_used[s_bank];
@@ -160,6 +183,7 @@ void anchor_render_scratch_begin_object(void *pointer)
     if (!anchor_render_player_budget(object, resolve, object, &available, &budget))
     {
         report(8u);
+        abandon_scratch_hide(object, alternative);
         return;
     }
     matrix_bytes = budget.matrices * 64u;
@@ -167,6 +191,7 @@ void anchor_render_scratch_begin_object(void *pointer)
     if (matrix_bytes > left || command_bytes > left - matrix_bytes)
     {
         report(16u);
+        abandon_scratch_hide(object, alternative);
         return;
     }
     bank_start = s_arena + s_bank * s_bank_bytes + s_used[s_bank];

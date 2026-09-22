@@ -24,6 +24,7 @@ static AlignedBytes s_native, s_scratch, s_assets, s_objects;
 static unsigned int s_asset_bytes;
 static unsigned int s_reports;
 static int s_dialog_busy;
+static int s_alternative;
 void anchor_render_scratch_begin_bank(void);
 void anchor_render_scratch_begin_object(void *object);
 void anchor_render_scratch_end_object(void);
@@ -52,6 +53,12 @@ int anchor_player_models_is_remote_object(const void *object)
     return object == s_objects.bytes || object == s_objects.bytes + 0x100;
 }
 
+int anchor_player_models_is_alternative_object(const void *object)
+{
+    return s_alternative &&
+           (object == s_objects.bytes || object == s_objects.bytes + 0x100);
+}
+
 static const void *resolve_asset(unsigned int address, unsigned int bytes,
                                   const void *context)
 {
@@ -75,6 +82,7 @@ static void fixture(void)
 {
     memset(&s_assets, 0, sizeof(s_assets));
     memset(&s_objects, 0, sizeof(s_objects));
+    s_alternative = 0;
     s_asset_bytes = 4096;
     word(s_objects.bytes, 0x2c, 0x67001000u);
     word(s_objects.bytes, 0x30, 0xc01fc680u);
@@ -346,6 +354,72 @@ static void invitation_reserves_native_window_commands(void)
     assert(s_native.bytes[10640u * 8u] == 0xa5);
 }
 
+static void alternative_object_is_budgeted_and_redirected(void)
+{
+    unsigned char *matrix;
+
+    setup_native();
+    /* Alternative context with a valid skeleton: the relaxed preflight accepts it and
+     * the draw is redirected into scratch like a clothed remote. */
+    word(s_objects.bytes, 0x30, 0xc006d898u);
+    s_alternative = 1;
+    matrix = draw_object(s_objects.bytes, 0x66);
+    assert(matrix == s_scratch.bytes);
+    assert(s_reports == 0);
+    s_alternative = 0;
+}
+
+static void alternative_object_with_failed_budget_stays_visible(void)
+{
+    unsigned int *head;
+    unsigned char *matrix;
+    unsigned char old[0x100];
+
+    setup_native();
+    word(s_objects.bytes, 0x30, 0xc006d898u);
+    /* Header bit 31 set with no root pointer makes the skeleton walk fail. */
+    word(s_assets.bytes, 0, 0x80000010u);
+    word(s_assets.bytes, 8, 0);
+    s_alternative = 1;
+    head = D_8015C5CC_15D1CC;
+    matrix = D_80168504_169104;
+    memcpy(old, s_objects.bytes, sizeof(old));
+    anchor_render_scratch_begin_object(s_objects.bytes);
+    /* An alternative object whose budget fails is left visible for the native draw. */
+    assert((s_objects.bytes[0x64] & 1u) == 0);
+    anchor_render_scratch_end_object();
+    assert(memcmp(old, s_objects.bytes, sizeof(old)) == 0);
+    assert(D_8015C5CC_15D1CC == head && D_80168504_169104 == matrix);
+    assert(s_reports > 0); /* report(8) fired. */
+    s_alternative = 0;
+}
+
+static void single_segment_alternative_pointer_stays_visible(void)
+{
+    unsigned int *head;
+    unsigned char *matrix;
+    unsigned char old[0x100];
+
+    setup_native();
+    /* The single-segment composite stamps +0x2c = 0x08000000 | header offset
+     * and keeps a clothed context. The budget preflight only walks 0x60000000
+     * model pointers, so an alternative draw is never redirected: the fallback must
+     * leave it visible and reserve no scratch. */
+    word(s_objects.bytes, 0x2c, 0x08002100u);
+    word(s_objects.bytes, 0x30, 0xc01fc680u);
+    s_alternative = 1;
+    head = D_8015C5CC_15D1CC;
+    matrix = D_80168504_169104;
+    memcpy(old, s_objects.bytes, sizeof(old));
+    anchor_render_scratch_begin_object(s_objects.bytes);
+    assert((s_objects.bytes[0x64] & 1u) == 0);
+    anchor_render_scratch_end_object();
+    assert(memcmp(old, s_objects.bytes, sizeof(old)) == 0);
+    assert(D_8015C5CC_15D1CC == head && D_80168504_169104 == matrix);
+    assert(s_reports > 0); /* report(8) fired. */
+    s_alternative = 0;
+}
+
 int main(void)
 {
     native_tree_budget();
@@ -354,6 +428,9 @@ int main(void)
     private_lists_chain_and_keep_submitted_storage_alive();
     exhaustion_skips_only_the_draw_and_preserves_colliders();
     invitation_reserves_native_window_commands();
+    alternative_object_is_budgeted_and_redirected();
+    alternative_object_with_failed_budget_stays_visible();
+    single_segment_alternative_pointer_stays_visible();
     puts("Render scratch and native preflight tests passed");
     return 0;
 }

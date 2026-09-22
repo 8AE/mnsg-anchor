@@ -47,7 +47,7 @@ except Exception:
     DEFAULT_PORT = 43383
     ROOM_ID_PREFIX = "mnsg-"
     ROOM_ID_TRIM_CHARS = " \t\n\r\v\f"
-    APPEARANCE_MASK = 7
+    APPEARANCE_MASK = 15
     HOT_PACKET_MAX_BYTES = {
         "MNSG_PLAYER_POS": 640,
         "MNSG_PROJECTILE_SPAWN": 512,
@@ -577,6 +577,9 @@ class StressController:
         if cmd == "recovery":
             await self._command_recovery(args)
             return
+        if cmd == "alternative":
+            await self._command_alternative(args)
+            return
         if cmd == "throw":
             await self._command_throw(args)
             return
@@ -700,6 +703,16 @@ class StressController:
                                              if enabled else (bot.appearance_flags & ~4))
                                for bot in bots))
         print(f"hurt recovery {'on' if enabled else 'off'} for {len(bots)} bots")
+
+    async def _command_alternative(self, args: list[str]) -> None:
+        if len(args) != 2 or args[1].lower() not in {"on", "off"}:
+            raise ValueError("usage: alternative <all|N|A-B> <on|off>")
+        bots = self._select_bots(args[0])
+        enabled = args[1].lower() == "on"
+        await asyncio.gather(*(bot.set_state(appearance_flags=(bot.appearance_flags | 8)
+                                             if enabled else (bot.appearance_flags & ~8))
+                               for bot in bots))
+        print(f"alternative Ebisumaru skin {'on' if enabled else 'off'} for {len(bots)} bots")
 
     async def _command_throw(self, args: list[str]) -> None:
         if len(args) not in (2, 5):

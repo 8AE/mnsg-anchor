@@ -78,6 +78,23 @@ int main(void)
     expect_only_render_bit_changed(&remote, &before, 0);
     anchor_remote_appearance_apply_hurt(0, ANCHOR_APPEARANCE_HURT_RECOVERY, 1);
 
+    /* Bit 3 (alternative Ebisumaru) is an asset-swap bit handled by the rebind guard,
+     * not here. The flicker helper must still touch only +0x64 bit0. */
+    {
+        unsigned int alternative_frame;
+        for (alternative_frame = 0; alternative_frame < 4; ++alternative_frame)
+        {
+            anchor_remote_appearance_apply_hurt(remote.object,
+                ANCHOR_APPEARANCE_ALTERNATIVE_EBISUMARU |
+                    ANCHOR_APPEARANCE_HURT_RECOVERY,
+                (unsigned short)alternative_frame);
+            expect_only_render_bit_changed(&remote, &before, alternative_frame & 1u);
+        }
+        anchor_remote_appearance_apply_hurt(remote.object,
+            ANCHOR_APPEARANCE_ALTERNATIVE_EBISUMARU, 1);
+        expect_only_render_bit_changed(&remote, &before, 0);
+    }
+
     puts("remote appearance flicker and collision preservation tests passed");
     return 0;
 }
