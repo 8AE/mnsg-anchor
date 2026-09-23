@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class CraneProgressTests(unittest.TestCase):
     def test_capabilities_and_power_share_without_local_camera_flags(self):
-        source = (ROOT / 'src/item_sync.c').read_text()
+        source = (ROOT / 'src/progression/item_sync.c').read_text()
         fields = re.search(r'static SyncField s_fields\[\] = \{(.*?)\n\};', source, re.S)[1]
         flags = re.search(r's_flag_bits\[\] = \{(.*?)\n\};', source, re.S)[1]
         field_map = {int(offset, 16): key for offset, key in re.findall(

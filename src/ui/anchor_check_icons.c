@@ -1,4 +1,4 @@
-#include "anchor_rom_icons.h"
+#include "ui/anchor_rom_icons.h"
 #include "utils/string_utils.h"
 
 AnchorRomIcon anchor_icon_for_check(const char *key, int value)

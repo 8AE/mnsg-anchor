@@ -90,7 +90,7 @@ class BombTransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path=Path(temp)/'codec.so'
             subprocess.run(['cc','-shared','-fPIC','-std=c99','-I'+str(ROOT/'include'),
-                str(ROOT/'src/utils/anchor_world_dynamic_codec.c'),str(ROOT/'src/utils/string_utils.c'),
+                str(ROOT/'src/world/anchor_world_dynamic_codec.c'),str(ROOT/'src/utils/string_utils.c'),
                 '-o',str(path)],check=True)
             lib=ctypes.CDLL(str(path));Row=ctypes.c_int*d.WORDS
             lib.anchor_world_dynamic_row_valid.argtypes=[ctypes.POINTER(ctypes.c_int)]

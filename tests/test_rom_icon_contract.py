@@ -20,9 +20,9 @@ class RomIconContractTests(unittest.TestCase):
         self.assertNotIn("extract_flute_icon", build_script)
 
     def test_runtime_loader_pins_verified_rom_resources(self):
-        header = (ROOT / "include" / "anchor_rom_icons.h").read_text()
+        header = (ROOT / "include" / "ui" / "anchor_rom_icons.h").read_text()
         ui_source = (ROOT / "src" / "ui" / "anchor_ui.c").read_text()
-        nameplate_source = (ROOT / "src" / "anchor_nameplates.c").read_text()
+        nameplate_source = (ROOT / "src" / "ui" / "anchor_nameplates.c").read_text()
 
         self.assertIn("ANCHOR_FLUTE_RESOURCE_ID          0x8016u", header)
         self.assertIn(

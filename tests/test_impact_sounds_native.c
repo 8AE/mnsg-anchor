@@ -6,7 +6,7 @@
 #define IS_PTR(p,o) TP(p,o)
 char *anchor_impact_sounds_update(int,unsigned int,unsigned int,unsigned int,const char *);
 void recomp_free(void *);
-#include "../src/anchor_impact_sounds.c"
+#include "../src/bosses/impact/anchor_impact_sounds.c"
 static unsigned int state[256], manager[64], child[64], unrelated[64];
 void *D_8020EED0_63A2B0 = state, *D_8016DAB4_16E6B4 = child;
 volatile unsigned char D_801C09FD_1C15FD, D_801C09C9_1C15C9;

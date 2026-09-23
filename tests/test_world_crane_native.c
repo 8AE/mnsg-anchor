@@ -9,7 +9,7 @@
 #define CR_DISABLED (1ul << (sizeof(unsigned long)*8-1))
 #define RECOMP_HOOK(name)
 #define RECOMP_HOOK_RETURN(name)
-#include "../src/anchor_world_crane.c"
+#include "../src/world/anchor_world_crane.c"
 
 unsigned short D_800C7AB2;
 void *D_801FC604_5B8514, *D_8016DAB4_16E6B4;

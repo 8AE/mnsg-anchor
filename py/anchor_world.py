@@ -10,7 +10,7 @@ import anchor_world_counterweight as counterweight
 
 PACKET_TYPE = 'MNSG_WORLD'
 METADATA_KEY = 'worldSync'
-VERSION = 16
+VERSION = 19
 WORDS = 50
 INSTANCE = 48
 RECEIPT = 49

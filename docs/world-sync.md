@@ -18,6 +18,17 @@ exchange state. Both players need this version of the mod.
 | Timed emitters `0x19A`, subtypes `0–2` | Shared countdown and cycle. Their existing rock/flame children carry independent current-state snapshots; a late entrant reconstructs those children without replaying the emitter. |
 | Platform variant 9 child hazards | Current live child set, position, phase, timer, bounce/orbit state and lifetime, including late entry and ownership handoff. |
 | Dynamic NPCs using common native NPC/path setup | Stable birth identity, matching to an existing local task, or reconstruction using resident native model, dialogue and path state. Independently allocated copies of the same NPC are coalesced. |
+| File30 slicer emitters `0x19D`, rooms `0xAB`/`0xAC` | Six placed invisible emitters share their countdown, repeat period and speed parameters. Each independently scheduled flying blade gets a typed identity, a motion checkpoint and an owner-only expiry; a committed kill publishes its drops through the existing per-parent loot identity, and a retired emitter cannot resurrect a blade. |
+| File30 RNG spawner `0x3EF`, room `0x91` | The one placed invisible root rolls its native birth period and spawn position on the owner alone. Each `0x12F` child carries a typed identity, a checkpointed target X/Z and shared lifetime; a replica turns from that target without dereferencing the local player pointer, and a silent expiry commits no loot. |
+| File_40 bomb blocks `0x1A9`, rooms `0x65`/`0x66` | Seven placed roots share their arming cause, fall, fuse tint, the single committed explosion and the twelve transient children: four spinning rings, two of them registered attackers, and eight particles. The native proximity AI is not replayed, and only the named committer runs the explosion callback. Nothing here awards loot. |
+| File_40 counterweights `0x3CB`, room `0x6B` | Three placed six-piece graphs share parent motion, child placement and native continuation. |
+| File_46 Koryuta wave graph, room `0x155` | The placed body's invisible producer and its `0x12D`/`0xFA` children share the encounter stop latch, child identity, checkpointed pursuit destination and owner-only retirement. The local live-wave census and spawn positions stay local, and no wave drops loot. |
+| Custom quest presentations, File_53/46/62/74/75 | Gateway Viewpoint (`0x316`, room `0x153`), Koryuta's body, Kihachi's scene (`0x315`, rooms `0x16A`/`0x182`) and Gorgeous Music Castle (`0x35C`/`0x35D`, room `0xC1`) publish only the visible scalar state of their scripted actor graphs, on a separate `MNSG_WORLD_QUEST` packet. Dialogue, camera, fade, player control and the temporary-bit banks stay local; a render-only proxy binds native models and is hidden while no valid reconstruction is active. |
+| File30 save-controlled appearances `0xCA`/`0x339` | Room `0x14` placement 8 and rooms `0x14E`/`0x15C` placements 20/15 adopt their native visible model, flags, scale and clip when the shared save flag (`0x12E` / `0x32`) arrives after the actor was already constructed, and hide that presentation again while the flag is set. Their idle continuations and local controls are untouched. |
+| File30 placed one-HP objects `0x196`/`0x330`/`0x331`/`0x332`/`0x339`/`0x3EC` | Six placed root families share their hit/claim, one-HP kill, committed tombstone and native loot identity. `0x331` and `0x332` also track the linked child their own native birth allocates. Proximity culling and the save-completed disappearance of `0x339` are not treated as kills. |
+| File34 falling boulders `0x3DA`, rooms `0x13D`/`0x13F` | All 20 native-placed boulders share phase, pose, age and expiry. The race multiplier's extra copies key on the placed roster slot plus the race ordinal, so a duplicate is a distinct actor at the original birth coordinate with its own offset pose. Expiry is not a kill and carries no committer, and a missing native copy is never reconstructed: a replica waits for a live capture instead of inventing a task. |
+| File68 fish `0x338`, seven rooms | All 33 placed fish share their per-fish native save flag. Collection is a same-room one-winner claim resolved before the native pickup runs, so both peers cannot run that pickup. The native count increments only when the active quest gate, fish variant and colour cap (8/5/3) permit, but a later native continuation sets the per-fish flag regardless of whether the increment happened; the placement flags therefore cannot reconstruct the exact counter, and the two cross-room concurrency cases below are confirmed gaps. The fish's private animation object stays local. |
+| Purchases versus progression | Ordinary main-shop armor and consumable purchases stay personal. Cat Eyes rewards are quest progression despite being bought: `fl_ce_dharma`/`fl_ce_notice`/`fl_ce_doll` (save bits `0x1C5`–`0x1C7`) now share through the durable flag table like other quest flags, and no synthetic Doll count increment is published, so existing counter sync carries any native count change. Quest collectibles, keys, world equipment and their counts remain shared. |
 | Other mechanisms | Indexed rotors `0x356` and ride-triggered platforms `0x3B4` now include their native motion/wait phases and timers. Falling traps `0x197`, elevators `0x1FC`, tilting platforms `0x1FD`, path crates `0x1F7`, pushable blocks `0x245`, and rising platforms `0x34A` have distinct phase adapters. Riders/pushers and opposite-floor elevator callers can take ownership. |
 | Room switches and puzzle mechanisms | Placed `0x226` switches share hit/pressed/settled state and their definition-selected temporary or save flag. `0x324` variants 0–11 and `0x326` variants 0–7 share native activation, motion and endpoint continuations. Progress survives late entry, ownership handoff and proximity culling. |
 | File_44 linked platforms | `0x228` shares activation, endpoint motion and native model setup. `0x1FE` also shares fire-triggered shake, melt/wait/reform phases, tint and its parent-owned child collider. Local fire can take ownership; reconstruction validates resources, immutable parameters and child generation. |
@@ -61,14 +72,23 @@ reloading restores that checkpoint after the native model initializer is ready.
 
 ## Transport
 
-`MNSG_WORLD` and `MNSG_WORLD_ACTORS` are quiet, transient `targetTeamId` packets
-with **no offline queue**. The client supplies its assigned root `clientId`;
-Anchor relays it without authenticating or injecting it. Receivers check roster,
-team, session and room eligibility. Metadata is
-`worldSync = [15, interactionSession, visit, rawRoom, rosterSignature]`.
-Older world-sync versions are incompatible: version15 adds the File40 top
-and rotating-platform checkpoints. Version14 added the File24 spike
-cycle and jump-rope rotation checkpoints. Version13 added the File_62
+`MNSG_WORLD`, `MNSG_WORLD_ACTORS` and `MNSG_WORLD_QUEST` are quiet, transient
+`targetTeamId` packets with **no offline queue**. The client supplies its
+assigned root `clientId`; Anchor relays it without authenticating or injecting
+it. Receivers check roster, team, session and room eligibility. All three packet
+types carry the same
+`worldSync = [19, interactionSession, visit, rawRoom, rosterSignature]`
+metadata. Protocol 19 is the current package. Older world-sync versions are
+incompatible: version 19 added the File68 `0x338` fish claim lifecycle, version
+18 added the File34 `0x3DA` boulder lifecycle, and version 17 added the six
+File30 placed one-HP families
+`0x196`/`0x330`/`0x331`/`0x332`/`0x339`/`0x3EC` to the dynamic lifecycle.
+Version 16 added the
+File30 slicer/RNG-spawner and File_40 bomb/counterweight children to the dynamic
+lifecycle, the File_46 Koryuta wave graph, and the custom quest presentation
+transport. Version 15 added the File40 top
+and rotating-platform checkpoints. Version 14 added the File24 spike
+cycle and jump-rope rotation checkpoints. Version 13 added the File_62
 container checkpoint and its nested File_26 Doll lifecycle. Version 12 added the File_64
 two-piece obstacle checkpoint. Version 11 added the coupled bridge
 checkpoint and its accepted-event latch. Version 10 added typed shutters and
@@ -78,6 +98,14 @@ version 7 instance/receipt and established-presence arbitration.
 Both players must update.
 Every packet also carries this metadata, a sequence, part index/count, presence,
 interaction and removal bitmaps, and compact scalar actor rows.
+
+The quest transport reuses that metadata and peer eligibility, and carries at
+most 32 records of 64 words in batches of 8 rows and at most 4 parts. Its rows
+are visible-scalar only: dialogue, camera, fade and temporary-bit state never
+leave the client. Dynamic kinds 8–14 are the File30 slicer emitter and its
+blades, the File30 RNG spawner, the File_40 bomb block, the File_46 wave graph,
+the File30 placed one-HP objects, the File34 falling boulder and the File68
+fish; the File_40 counterweight is placed kind 12.
 
 Shutter kind 8 uses the same 50-word budget: timer17, phase18, immutable
 emitter19, monotone emission ordinal20 and playback/reverse29. Only its simulator
@@ -287,35 +315,68 @@ records, 333 actor-data waves, 292 nonempty placed rosters and 255 distinct
 placed entity types. All three native source lists total 3,888 placements;
 the largest room roster has 57. The adapters above were
 traced against their real native initializers, continuations and cleanup paths.
-Fuji props `0x33B/0x33C` have no autonomous moving state to stream; their
-native view/admission state still needs a complete classification. The
-production classifier matches884 placed-world roots,742 regular enemies and
-three coupled bridge members. The remaining2,259 placements include runtime
-NPC promotion, static/save-derived actors, bosses and actual gaps; this is
-not an unsupported-actor count or proof of complete lifecycle coverage.
+File30 `0x322` (six placements), `0x33B` (41) and `0x33C` (21) need no
+shared-state adapter on the inspected placed path: their constructors bind
+static models, and the shared callback `080003B0` only toggles a local render
+bit (task+0x68 `0x20000`) that main `801E63AC`/`801E674C` selection and helpers
+`801E6BC8`/`801E6D30`/`801E6F00` set and clear during local traversal. Sharing
+it would alter another player's local view, and no persistent world mutation was
+found; unrelated dynamic invocation is not proven absent. All 33 placed
+`0x1F4` records carry `D4` gate 0 and are static geometry; an optional nonzero
+`D4` one-shot effect has no persistent motion to stream, though a scripted or
+dynamic invocation is not exhaustively excluded. File12 `0x064` also needs no
+adapter on the inspected placed path: all 34 records' constructor `80213F20`
+selects a static model/draw from `D0`/`D4`, its callback `80213F14` is empty, and
+no mutable state, hit, loot or child was found. The production classifier
+matches 884 placed-world roots, 742 regular enemies and three coupled bridge
+members. The remaining 2,259 placements are what the classifier did not match,
+not a list of unsupported actors: they include runtime NPC promotion, static or
+save-derived actors, bosses and genuine gaps. That remainder is a worklist, not
+an unsupported-actor count and not proof of complete lifecycle coverage.
 
 The original gaps for common dynamic NPCs, container/enemy loot and late-entry
-emitter/platform hazards now have implementations. That does **not** establish
-universal support for every native actor. The next native controller audit is
-tracked in `world-controller-audit-2026-09-16.md`:
+emitter/platform hazards now have implementations, as do the File30 slicer and
+RNG spawner, the File_40 bomb and counterweight graphs, the File_46 wave graph
+and the four quest presentations above. That does **not** establish universal
+support for every native actor. The next native controller audit is tracked in
+`world-controller-audit-2026-09-16.md`:
 
 
-- Minigame and cutscene controls stay local. A reconstructed NPC uses the common
-  dialogue/path continuation except for the 22 File_59 continuations described
-  above. Custom scene-controller pointers and private quest continuations outside
-  that family are not reconstructed.
+- Minigame and cutscene controls stay local. The four quest families above
+  publish visible scalars only; their dialogue, camera, fade, player-control and
+  temporary-bit scripts are not reconstructed. A reconstructed NPC uses the
+  common dialogue/path continuation except for the 22 File_59 continuations
+  described above. The native scene graphs are recorded in
+  [the quest controller audit](world-quest-native-audit-2026-09-19.md).
 - Room-specific puzzle controllers and other unaudited actor families still
   need explicit adapters. In particular, shared progression flags alone do not
   synchronize every temporary room flag or already-loaded puzzle state.
-- File30 slicer emitter `0x19D` and RNG spawner `0x3EF`, File40 bomb block
-  `0x1A9` and the separate coupled `0x3CB` graph remain unimplemented. An
-  empty actor-specific callback is not enough to classify a prop as static:
-  common hit/death and child lifecycles must also be checked.
-- The tracked hazard recipes are the File_34 emitter children and File_44
-  platform children listed above, not arbitrary projectiles or visual effects.
+- The tracked hazard recipes are the File_34 emitter children, File_44 platform
+  children, File30 slicer/RNG children, File_46 wave children and File30 one-HP
+  children listed above, not arbitrary projectiles or visual effects. An empty
+  actor-specific callback is not enough to classify a prop as static: common
+  hit/death and child lifecycles must also be checked. The remaining work is the
+  actor families that still have no adapter.
 - The live-set and removal-history limits are explicit. Repeated scripted NPC
   births at an identical descriptor need game testing beyond the current
   simultaneous-copy/ordinal tests.
+- File30's placed one-HP objects share kills and drops but are never
+  reconstructed from a snapshot: late reconstruction is disabled for that kind,
+  so a peer only tracks the copies its own native initializer created, and the
+  `0x331`/`0x332` linked children match only to their own native birth.
+- The File68 fish claim is same-room only, and its two concurrency cases are
+  confirmed gaps, not merely unproven. Flag IDs repeat across the room pairs
+  `0x168`/`0x17E` and `0x16B`/`0x180`, so two clients collecting that pair in
+  different rooms at the same instant is a team-global lease gap the typed claim
+  does not cover; a simultaneous collection of different fish whose shared
+  per-colour counters then take a maximum is the second. The native count
+  increments only when the active quest gate, variant and colour cap
+  (8/5/3) permit, while the later continuation sets the per-fish flag regardless
+  of whether the increment happened, so the placement flags cannot reconstruct
+  the exact count. The existing Anchor relay
+  has no atomic cross-room claim, so an exact fix needs a durable per-flag
+  contribution ledger with team-wide arbitration and a saved baseline. Neither
+  case has a live two-client run.
 - Native callback/path validation uses the US actor data. A modified path
   program requires regenerating/reviewing its instruction-boundary masks.
 
@@ -325,6 +386,10 @@ Run `bash tests/run_world_sync.sh` for the real C implementation under UBSan and
 release-style floating-point flags, the C/Python codecs, metadata merging, framed
 receive-loop routing and transport lifecycle tests. The native test uses simulated
 native tasks; it does not run the game's renderer, scheduler or collision engine.
+The runner also builds the quest native harness and the File_40 bomb adapter;
+the dynamic children harness carries the slicer, RNG-spawner, wave and File30
+one-HP-object lifecycle tests, and the Python discovery run covers the slicer,
+RNG-spawner, bomb, counterweight, wave and quest transport suites.
 
 `python3 tools/inspect_world_actors.py /path/to/mnsg.us.decompressed.z64` verifies
 the 163 derived path masks without copying game assets into the repository.
@@ -333,8 +398,11 @@ the normal, partition and resident lists. The latter adds room `0x30`'s two
 `0x1FC` platforms and room `0x131`'s five `0xFC`/`0xFE` enemies to the existing
 native adapters. Resident sources append after the normal and sorted partition
 slots; they retain their raw source/definition pointers locally. Changed roster
-signatures exclude clients that still omit these sources. No new packet fields,
-packet types, cadence or fan-out were added. The production roster harness
+signatures exclude clients that still omit these sources. Version 16 adds the
+quest packet type and its records, version 17 adds the File30 one-HP dynamic
+kind, version 18 adds the File34 boulder dynamic kind and version 19 adds the
+File68 fish dynamic kind, but none adds a new per-frame publication, offline
+queue or fan-out route. The production roster harness
 checks capacity, deduplication, reloads, pool reuse and missing-wave retries.
 `tools/test_world_anchor_local.py --port PORT` requires a disposable loopback
 Anchor and checks 256 actors/11 parts with three real TCP clients, team isolation,

@@ -1,4 +1,4 @@
-#include "utils/anchor_tsurami_codec.h"
+#include "bosses/tsurami/anchor_tsurami_codec.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

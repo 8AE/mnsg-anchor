@@ -9,7 +9,7 @@
 #define RECOMP_HOOK(name) static const char *render_hook = name;
 char *anchor_impact_visuals_update(int, unsigned int, unsigned int, unsigned int, const char *);
 void recomp_free(void *);
-#include "../src/anchor_impact_visuals.c"
+#include "../src/bosses/impact/anchor_impact_visuals.c"
 
 static unsigned int state[0x300/4], system_data[0xC2DA0/4];
 static unsigned int head[64], manager[64], world[64], boss[64], model[64];

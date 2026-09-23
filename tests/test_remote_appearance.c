@@ -1,5 +1,5 @@
-#include "anchor_remote_appearance.h"
-#include "anchor_player_models.h"
+#include "player/anchor_remote_appearance.h"
+#include "player/anchor_player_models.h"
 
 #include <assert.h>
 #include <stdio.h>

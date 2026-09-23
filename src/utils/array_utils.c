@@ -1,7 +1,7 @@
 #include "utils/array_utils.h"
 
 #ifndef MNSG_ARRAY_UTILS_HOST_TEST
-#include "recomputils.h"
+#include "platform/recomputils.h"
 #else
 extern void *recomp_alloc(unsigned long size);
 extern void recomp_free(void *memory);

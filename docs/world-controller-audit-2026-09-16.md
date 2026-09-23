@@ -38,6 +38,71 @@ per room. SHA-256:
 - File_30 0x32A is static tinted geometry: continuation 0800435C only calls
   the local tint helper. It has no moving puzzle state to stream.
 
+## Completed in the version-16 through version-19 coverage passes
+
+World protocol 16 extends the dynamic lifecycle and adds the `MNSG_WORLD_QUEST`
+packet; protocol 17 adds the six File30 placed one-HP families to that dynamic
+lifecycle, protocol 18 adds the File34 `0x3DA` boulder lifecycle and protocol 19
+adds the File68 `0x338` fish claim lifecycle. Protocol 19 is the current
+package. Each item below has a production adapter plus a host or Python harness;
+none has had a fresh two-client in-game run.
+
+- File_30 `0x19D` slicer emitters, rooms `0xAB`/`0xAC`: six placed invisible
+  emitters share countdown, repeat period and speed. Each independently
+  scheduled blade gets a typed identity, a motion checkpoint and an owner-only
+  expiry; a committed kill publishes its drops through the existing per-parent
+  loot identity, and a retired emitter cannot resurrect a blade.
+- File_30 `0x3EF` RNG spawner, room `0x91`: the one placed root rolls its native
+  birth period and position on the owner alone. Each `0x12F` child carries a
+  typed identity, a checkpointed target X/Z and shared lifetime; a replica turns
+  from that target without dereferencing the local player pointer.
+- File_40 `0x1A9` bomb blocks, rooms `0x65`/`0x66`: seven placed roots share the
+  arming cause, fall, fuse tint, the single committed explosion and its twelve
+  transient children. The native proximity AI is not replayed, only the named
+  committer runs the explosion callback, and nothing here awards loot.
+- File_40 `0x3CB` counterweights, room `0x6B`: three placed six-piece graphs
+  share parent motion, child placement and native continuation.
+- File_46 `0x1B0` Koryuta body and wave graph, room `0x155`: the placed body's
+  invisible producer and its `0x12D`/`0xFA` children share the encounter stop
+  latch, child identity, checkpointed pursuit destination and owner-only
+  retirement. The live-wave census and spawn positions stay local.
+- Custom quest presentations, File_53/46/62/74/75: Gateway Viewpoint (`0x316`,
+  room `0x153`), Koryuta's body, Kihachi's scene (`0x315`, rooms
+  `0x16A`/`0x182`) and Gorgeous Music Castle (`0x35C`/`0x35D`, room `0xC1`)
+  publish visible scalar state only. Dialogue, camera, fade, player control and
+  the temporary-bit banks stay local. A render-only proxy binds native models
+  when a valid reconstruction is active and is hidden otherwise.
+- File30 placed one-HP objects `0x196`/`0x330`/`0x331`/`0x332`/`0x339`/`0x3EC`
+  (protocol 17): six placed root families share hit/claim, the one-HP kill, a
+  committed tombstone and the native loot identity. `0x331`/`0x332` also track
+  the linked child their own native birth allocates: a late entrant normally
+  obtains that child through the native placed parent constructor, and the mod
+  matches that birth. Exceptional synthetic repair of a missing child stays
+  fail-closed, because it would have to fabricate the parent pointer and
+  allocator lifecycle. Proximity culling and the save-completed disappearance of
+  `0x339` are not kills. Late root/child reconstruction is disabled for this
+  kind; see the table row below.
+- File_44 `0x1F4`: the placed classification is verified. All 33 placed records
+  carry `D4` gate 0 and are static geometry.
+- File34 `0x3DA` falling boulders, rooms `0x13D`/`0x13F` (protocol 18): all 20
+  native-placed boulders share phase, pose, age and expiry. The race
+  multiplier's duplicates key on the placed roster slot plus the race ordinal,
+  so each duplicate is a distinct actor at the original birth coordinate with
+  its own offset pose. Expiry is not a kill, carries no committer, and a missing
+  native copy is never reconstructed: a replica waits for a live capture.
+- File68 `0x338` fish, seven rooms (protocol 19): all 33 placed fish share their
+  per-fish native save flag. Collection is a same-room one-winner claim resolved
+  before the native pickup runs, so both peers cannot run that pickup. The
+  fish's private animation object stays local. The native count increments only
+  when the active quest gate, variant and colour cap (8/5/3) permit, while a
+  later native continuation sets the per-fish flag regardless of whether the
+  increment happened, so the flags cannot reconstruct the
+  exact count. Both cross-room concurrency cases are confirmed gaps: the shared
+  paired flag (`0x168`/`0x17E`, `0x16B`/`0x180`) collected in different rooms at
+  once, and a simultaneous different-fish counter maximum. The Anchor relay has
+  no atomic cross-room claim; an exact fix needs a durable per-flag contribution
+  ledger with team-wide arbitration and a saved baseline.
+
 ## Native findings that constrain the remaining work
 
 The production-classifier audit on 2026-09-19 executes the actual C roster
@@ -62,10 +127,17 @@ are884 placed-world,742 regular-enemy,3 bridge members and2,259 needing other
 evidence after protocol15 adds all12 File40 tops/platforms. See the
 [File40 audit](world-file40-audit-2026-09-19.md). The three File30 equipment
 idle pickups also reconcile their shared collection flags and local shine;
-see [the equipment audit](world-equipment-audit-2026-09-19.md). File30 trap
-families, File40 bomb blocks and other mechanisms still require explicit
-native lifecycle adapters. These remain in scope alongside the coupled
-scenes below. Dynamic births require a separate producer/child inventory.
+see [the equipment audit](world-equipment-audit-2026-09-19.md). File30
+`0x322` (six placements), `0x33B` (41) and `0x33C` (21) need no shared-state
+adapter on the inspected placed path. Constructors
+`08000334`/`08000414`/`08000490` bind static models, and the shared callback
+`080003B0` only toggles local render flags from task+0x68 bit `0x20000`: main
+`801E63AC`/`801E674C` selection and helpers `801E6BC8`/`801E6D30` set the bit
+during local traversal and `801E6F00` clears it. Sharing that bit would alter
+another player's local view, and no persistent world mutation was found.
+Unrelated dynamic invocation of these models is not proven absent. Other
+unaudited controller families still require a native classification, and
+dynamic births require a separate producer/child inventory.
 
 `func_80023DF0_249F0`, `func_80023E40_24A40` and
 `func_80023E94_24A94` set, clear and read the temporary bank at 0x80168E90.
@@ -79,25 +151,34 @@ shared child identities, and semantic flag transitions. Local input/camera and
 personal rewards must retain their existing boundaries. Save-flag replication
 alone does not reconstruct an already-running controller graph.
 
+Audited paths that deliberately need no adapter: `0x08C` doorway, `0x08E` room
+setup, `0x287` local animation, `0x308` local camera, `0x3CC` minimap, `0x3FD`
+static, `0x31D` BGM, `0x08A` local scene, `0x08B` touch music and `0x088` silver
+doll, which is already covered by its flags. File12 `0x064` joins them: all 34
+placed records, constructor `80213F20` selects a static model/draw from `D0`/`D4`,
+callback `80213F14` is empty, and no mutable state, hit, loot or child was found.
+These are classification results, not shared state.
+
 | File / entities | Native room scope | Work remaining |
 | --- | --- | --- |
-| File_30 `0x19D` slicer emitters/blades | `0xAB`/`0xAC` | Both root and child expose common HP1 incoming-hit processing and can produce native death loot. Root countdown/emission, stable blade identities, flight checkpoints, shared kill/loot arbitration and cause-specific removal must be handled together. Motion alone is insufficient. |
-| File_30 `0x3EF` random spawner | `0x91` | Shared random birth cadence and current child reconstruction. Child model12F moves with velocity and turns toward a native target pointer; that pointer must be rebuilt locally. |
+| File_30 `0x19D` slicer emitters/blades | `0xAB`/`0xAC` | Protocol16 implements the placed emitter countdown/repeat/speed, typed blade identity, motion checkpoint, owner-only expiry and shared kill/loot through the per-parent loot identity. Fresh two-client gameplay remains outstanding. |
+| File_30 `0x3EF` random spawner | `0x91` | Protocol16 implements the owner-only birth roll, typed `0x12F` child identity, checkpointed target X/Z and shared lifetime. A replica turns from that target without dereferencing the local player pointer. Fresh two-client gameplay remains outstanding. |
 | File_40 `0x365`/`0x366` | `0x3E`/`0x3F` | Protocol15 implemented; all12 placements classified, native/codec/loopback checks passed. Fresh two-client riding/contact validation remains outstanding. |
-| File_40 `0x1A9` and separate `0x3CB` graph | `0x65`/`0x66` for1A9 | Bomb-block proximity/fuse and surviving-hit explosions allocate children, while immediately lethal common damage follows a different path. Cause-specific lifecycle and child identities remain unimplemented. |
+| File_40 `0x1A9` and separate `0x3CB` graph | `0x65`/`0x66` for 1A9, `0x6B` for 3CB | Protocol16 implements the seven placed bomb roots' arming cause, fall, fuse tint, single committed explosion and twelve transient children, plus the three counterweight six-piece graphs. Nothing here awards loot. Fresh two-client gameplay remains outstanding. |
 | File_30 0x1B9/0x1BA/0x1BB/0x1BF and coupled 0x3D3 | 0x31 | Implemented protocol 9 atomic crane/pad/reward checkpoint, per-client pad aggregation and local child reconstruction. Camera, fades and scenes remain local. Native/transport checks are documented in [the crane audit](world-crane-audit-2026-09-19.md); fresh two-client gameplay remains outstanding. |
 | File_30 0x354 / File_32 0xFC | 0xB2 | Protocol 10 adds retained shutter phase, timer and emission identity, overlapping route-57 robots, current-state reconstruction and kill arbitration. Native death runs after commit; only the arbiter emits loot. See the [shutter audit](world-shutter-audit-2026-09-19.md). Fresh two-client gameplay remains outstanding. |
 | File_30 0x3D0 | 0x35 | Adapter implemented in protocol 8: carry/throw, break/retry, completion and stable reward slots. Fresh two-client game validation remains open. |
-| File_44 0x1F4 gated dynamic invocation | Placed records are static | All 33 placed records have the gate disabled. Audit scripted/dynamic invocation of the separate gated branch before classifying that branch. The 0x228/0x1FE placed adapters are implemented below. |
+| File_44 0x1F4 gated dynamic invocation | Placed records verified static | All 33 placed records carry `D4` gate 0 and are static geometry, so the placed classification is verified. A conservative full-symbol scan found no `0x1F4` child allocation, but indirect or scripted invocation of the separate gated branch is not exhaustively excluded. The 0x228/0x1FE placed adapters are implemented below. |
 | File_50 unplaced timed/rearming routines | Unreachable through the native entity initializer | Disassembly confirms the initializer selects the one-way path for byte +D4 equal 0/1, then compares the entire big-endian word +D4 against 2/3. Either word necessarily has byte +D4 equal zero and already took the one-way branch. No alternate entry into these subgraphs occurs within File_50; arbitrary direct cross-overlay callback injection is outside this classification. |
 | File_51 0x240/0x2D0/0x311 | 0x15E | Protocol11 couples both guard routes, temp0/1, gate animation and blocker lifetime. Established checkpoints override fresh save1 constructor poses; native dialogue, shadows and sequence-lock ownership remain local. See [the bridge audit](world-bridge-audit-2026-09-19.md). Fresh two-client gameplay remains outstanding. |
-| File_53 0x316 | 0x153 | Complete native graph and dialogue-owned save0x17 commit traced. All visible children inherit entity0x316 and need distinct role identities; NPC catch-up and private mesh initialization need dedicated handling. Shared visual checkpoints and safe scene handoff remain unimplemented; see [the File53 audit](world-file53-audit-2026-09-19.md). |
-| File_58 0x2A0 and File_46 0x1B0 | 0x155 | File_58 is a local camera/scene controller, but its room flags also drive File_46's visible Koryuta body and wave graph. That graph remains a coverage gap. Save0x19F is a local proximity/camera token and must not be copied to bypass its prerequisites. See [the quest audit](world-quest-native-audit-2026-09-19.md). |
-| File_62 0x315/0x3D6 | 0x16A, 0x182 | Protocol13 implements the separate hit-reactive0x3D6 container's repeatable opening/closing and nested Silver Doll birth, descent, reconstruction and collection. See [the Doll audit](world-doll-audit-2026-09-19.md). The Kihachi0x315 scene graph still needs its own shared presentation adapter; see [the quest audit](world-quest-native-audit-2026-09-19.md). Fresh two-client gameplay remains outstanding. |
+| File_53 0x316 | 0x153 | Protocol16 implements the shared visible-scalar presentation for the Gateway Viewpoint graph, including distinct role identities for the visible children. Dialogue, camera, fade, player control and the dialogue-owned save0x17 commit stay local. See [the File53 audit](world-file53-audit-2026-09-19.md). Fresh two-client gameplay remains outstanding. |
+| File_58 0x2A0 and File_46 0x1B0 | 0x155 | Protocol16 implements the File_46 Koryuta body and wave graph's shared stop latch, child identity, checkpointed pursuit destination and owner-only retirement. File_58 stays a local camera/scene controller, and save0x19F remains a local proximity/camera token that must not be copied to bypass its prerequisites. See [the quest audit](world-quest-native-audit-2026-09-19.md). Fresh two-client gameplay remains outstanding. |
+| File_62 0x315/0x3D6 | 0x16A, 0x182 | Protocol13 implements the separate hit-reactive0x3D6 container's repeatable opening/closing and nested Silver Doll birth, descent, reconstruction and collection. Protocol16 adds the Kihachi0x315 scene graph's shared visible-scalar presentation; dialogue, camera, fade and player control stay local. See [the Doll audit](world-doll-audit-2026-09-19.md) and [the quest audit](world-quest-native-audit-2026-09-19.md). Fresh two-client gameplay remains outstanding. |
 | File_64 0x325 | 0x14B | Protocol12 implements the two-piece weapon obstacle's hit arbitration, shared motion and completion, child reconstruction and camera-free replica/handoff continuation. See [the obstacle audit](world-gate64-audit-2026-09-19.md). Fresh two-client gameplay remains outstanding. |
 | File_67 0x335, File_70 0x344 | 0x14C, 0x14D, 0x158 | Native graphs classified as local travel/entrance cinematics, including their finite visual children. File67 requires all four shared Miracle items and retires its controller if any is missing; its verified local departure-choice/cue0x6B/0x6C are now excluded from item replication, including legacy queued input. File70's durable completion0xC4 accompanies existing0xC3; remote completion leaves an active local scene to perform its own cleanup. See [the travel flag audit](world-travel-flags-audit-2026-09-19.md) and [quest audit](world-quest-native-audit-2026-09-19.md). Fresh two-client gameplay remains outstanding. |
-| File_74 0x35C, File_75 0x35D | 0xC1 | All61 overlay functions traced: linked Gorgeous Music Castle cinematics, local camera/player/control/fade work and staged visible children. Temporary0/1 and save0x75/0x76 coordinate local scene prerequisites; not a general room puzzle. Shared-visible-state classification remains open; see [the quest audit](world-quest-native-audit-2026-09-19.md). |
-| Other placed and dynamic families | All inventoried rooms | Finish per-family classification against the native entrypoints; distinguish static scenery from actors with simulation, interactions, gameplay children or private continuations. |
+| File_74 0x35C, File_75 0x35D | 0xC1 | Protocol16 implements the shared visible-scalar presentation of the linked Gorgeous Music Castle graphs. The local camera/player/control/fade work and the temporary0/1 and save0x75/0x76 scene prerequisites stay local; not a general room puzzle. See [the quest audit](world-quest-native-audit-2026-09-19.md). Fresh two-client gameplay remains outstanding. |
+| File30 placed one-HP objects `0x196`/`0x330`/`0x331`/`0x332`/`0x339`/`0x3EC` | rooms per the fragile scope table | Protocol17 implements shared hit/claim, the one-HP kill, a committed tombstone and the native loot identity. Late root/child reconstruction is disabled for this kind, so a peer only tracks the copies its own native initializer created: a late entrant normally obtains the `0x331`/`0x332` linked child through the native placed parent constructor, the mod matches that birth, and exceptional synthetic repair of a missing child stays fail-closed because of the parent pointer and allocator lifecycle. |
+| Other placed and dynamic families | All inventoried rooms | Finish per-family classification against the native entrypoints; distinguish static scenery from actors with simulation, interactions, gameplay children or private continuations. This includes the remaining unaudited room controllers. |
 
 Useful local research files (not repository inputs):
 `/tmp/mnsg-world-sync/room-actors.json`, `inventory.py`, `elf.py`,
@@ -143,7 +224,14 @@ resource/application failure. The initial server roster gates establishment;
 former-owner presence does not make an older cached full row current again.
 Host/native and loopback evidence is in `world-bootstrap-validation-2026-09-17.json`.
 
-No fresh two-client in-game validation has been performed for this pass.
+No fresh two-client in-game validation has been performed for this pass,
+including for the version-16 slicer, RNG-spawner, bomb, counterweight, Koryuta
+wave and quest-presentation adapters, the version-17 File30 one-HP-object
+adapters, the version-18 File34 boulder lifecycle and the version-19 File68 fish
+claim. The available
+evidence is the host harnesses and Python transport suites run by
+`tests/run_world_sync.sh`; no version-16 through version-19 validation record
+exists yet.
 
 The File_50 initializer reachability check was completed on 2026-09-19.
 `func_08000000_70C820` executes LBU at `0800006C`; its branch at `0800007C`

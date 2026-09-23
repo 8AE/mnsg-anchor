@@ -2,13 +2,13 @@
 
 Subject: save bits 0x06B (`fl_outerspace`) and 0x06C (`fl_to_space`) are
 File67 local travel-choice / scene-clear state.  They were removed from
-`src/item_sync.c`'s `s_flag_bits[]` sync table and from the debug catalog in
+`src/progression/item_sync.c`'s `s_flag_bits[]` sync table and from the debug catalog in
 `src/ui/debug.c`.  Nothing in the item-sync paths may read or write them, while
 the neighbouring travel flags (0x017 `fl_kyushu`, 0xC3 `fl_mtfuji`,
 0xC4 `fl_shore_entry`) and the four miracle words must keep working.
 
 How it runs: `tests/test_item_scene_flags.c` is a host harness that compiles
-the real production `src/item_sync.c` translation unit (with a shimmed
+the real production `src/progression/item_sync.c` translation unit (with a shimmed
 `modding.h`, because the real one emits Mach-O-incompatible section
 attributes), links the real `string_utils` / `json_utils` /
 `anchor_item_reconcile` sources, and stubs only the Anchor transport, boss,
@@ -37,14 +37,15 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HARNESS = os.path.join(ROOT, "tests", "test_item_scene_flags.c")
-PRODUCTION = os.path.join(ROOT, "src", "item_sync.c")
+PRODUCTION = os.path.join(ROOT, "src", "progression", "item_sync.c")
 REAL_UTILS = [
     os.path.join(ROOT, "src", "utils", "string_utils.c"),
     os.path.join(ROOT, "src", "utils", "json_utils.c"),
-    os.path.join(ROOT, "src", "utils", "anchor_item_reconcile.c"),
+    os.path.join(ROOT, "src", "progression", "anchor_item_reconcile.c"),
 ]
 
 # The pre-edit production source kept by the commander for the negative run.
@@ -73,11 +74,19 @@ CC = os.environ.get("HOST_CC", "cc")
 
 
 def build_host_includes(base):
-    """Copy the repository include tree and swap in the host modding.h."""
+    """Stage current headers and legacy aliases for the negative fixture."""
     dest = os.path.join(base, "include")
     shutil.copytree(os.path.join(ROOT, "include"), dest)
-    with open(os.path.join(dest, "modding.h"), "w") as handle:
+    for header in Path(dest).rglob("*.h"):
+        if header.parent == Path(dest):
+            continue
+        alias = Path(dest) / header.name
+        if not alias.exists():
+            alias.write_text('#include "%s"\n' % header.relative_to(dest).as_posix())
+    with open(os.path.join(dest, "platform", "modding.h"), "w") as handle:
         handle.write(HOST_MODDING_H)
+    reconcile_alias = os.path.join(dest, "utils", "anchor_item_reconcile.h")
+    shutil.copy2(os.path.join(ROOT, "src", "progression", "anchor_item_reconcile.h"), reconcile_alias)
     return dest
 
 
@@ -92,7 +101,7 @@ def compile_harness(base, source):
         "-Wextra",
         "-Wno-unused-parameter",
         "-I" + include_dir,
-        "-I" + os.path.join(ROOT, "src"),
+        "-I" + os.path.join(ROOT, "src", "progression"),
         "-I" + ROOT,
         "-DMNSG_ITEM_SYNC_SRC=" + '"%s"' % source,
         HARNESS,
@@ -129,7 +138,7 @@ def baseline_source():
 class LocalSceneFlagTests(unittest.TestCase):
     maxDiff = None
 
-    def test_production_source_keeps_file67_bits_local(self):
+    def test_production_source_keeps_scene_bits_local_and_shares_shop_progress(self):
         rc, output, command = build_and_run(PRODUCTION)
         del command
         self.assertEqual(rc, 0, msg="harness failed:\n%s" % output)
@@ -143,10 +152,13 @@ class LocalSceneFlagTests(unittest.TestCase):
             "6. the merge snapshot form omits them too",
             "7. legitimate neighbours still apply and publish",
             "8. equipment collection flags apply, persist and publish",
+            "9. Cat Eyes quest purchases share through every progression path",
+            "10. keys, world equipment and counts remain shared",
         ):
             self.assertIn(marker, output, msg="region did not run: %s" % marker)
         self.assertIn(
-            "local File67 bits stay local; neighbours unaffected", output
+            "personal scene bits stay local; shared progression unaffected",
+            output,
         )
 
     @unittest.skipUnless(baseline_source(), "pre-edit baseline unavailable")

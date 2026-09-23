@@ -76,7 +76,7 @@ static void **fixture_pointer_slot(void *record, unsigned int offset)
 /* The native tag bit can occur naturally in a host function address. */
 #define CALLBACK_DISABLED (1ul << (sizeof(unsigned long) * 8 - 1))
 #define ANCHOR_TSURAMI_NATIVE_HOST_TEST
-#include "../src/anchor_tsurami_native.c"
+#include "../src/bosses/tsurami/anchor_tsurami_native.c"
 
 unsigned short D_800C7AB2;
 unsigned int D_8015C5E4;

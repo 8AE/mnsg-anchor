@@ -13,7 +13,7 @@ copy present. Fire Ryo's1A4 collection flag was also missing from the durable
 flag catalog; it is now included as `pk_fire_ryo`. This equipment flag is
 separate from a player's current ryo balance.
 
-`src/anchor_world_equipment.c` hooks only the three idle entries. Exact
+`src/world/anchor_world_equipment.c` hooks only the three idle entries. Exact
 room/entity/model/object identity and a set collection flag are required. The
 hook clears contact/received-hit/fast-damage status, marks native removal,
 hides the model and disables the attack cylinder. The original idle callback

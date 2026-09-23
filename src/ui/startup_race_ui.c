@@ -1,11 +1,11 @@
-#include "modding.h"
-#include "recomputils.h"
-#include "recompui.h"
-#include "anchor.h"
-#include "anchor_runtime.h"
-#include "item_sync.h"
-#include "anchor_dialog.h"
-#include "anchor_flag_catalog.h"
+#include "platform/modding.h"
+#include "platform/recomputils.h"
+#include "platform/recompui.h"
+#include "core/anchor.h"
+#include "core/anchor_runtime.h"
+#include "progression/item_sync.h"
+#include "core/anchor_dialog.h"
+#include "progression/anchor_flag_catalog.h"
 
 void anchor_set_current_character_if_needed(void);
 

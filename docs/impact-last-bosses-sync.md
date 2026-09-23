@@ -9,12 +9,12 @@ profiles. The logs establish the baseline; they do not test this new build.
 
 | File | Responsibility |
 | --- | --- |
-| `src/anchor_impact_balberra.c` | Binding, 33 root phases, root HP, 12 weapon/pod checkpoints, part destruction/attack timers and boss cues |
-| `src/anchor_impact_detoile.c` | Binding, 76 root phases, 14 animation clips, shield state, carry dependencies, grapple/release hooks, defeat and boss cues |
-| `src/anchor_impact_boss.c` | Common arena/action/lifecycle fields, auxiliary scalar packing, local child traversal and scalar carry views; carry helpers also serve Taisamba |
-| `src/anchor_impact_native.c` | Checkpoint timing, root readiness, scene/selector/task fences, local-camera separation and mech smoothing |
-| `src/anchor_impact_players.c` | Shared owner-executed controls, native reticles, per-attack aim, initiating-player stick input and ordered hook mashes |
-| `src/anchor_impact_visuals.c` / `src/anchor_impact_sounds.c` | Native render/audio streams, including two-color glow materials and boss-scoped sound reset |
+| `src/bosses/impact/anchor_impact_balberra.c` | Binding, 33 root phases, root HP, 12 weapon/pod checkpoints, part destruction/attack timers and boss cues |
+| `src/bosses/impact/anchor_impact_detoile.c` | Binding, 76 root phases, 14 animation clips, shield state, carry dependencies, grapple/release hooks, defeat and boss cues |
+| `src/bosses/impact/anchor_impact_boss.c` | Common arena/action/lifecycle fields, auxiliary scalar packing, local child traversal and scalar carry views; carry helpers also serve Taisamba |
+| `src/bosses/impact/anchor_impact_native.c` | Checkpoint timing, root readiness, scene/selector/task fences, local-camera separation and mech smoothing |
+| `src/bosses/impact/anchor_impact_players.c` | Shared owner-executed controls, native reticles, per-attack aim, initiating-player stick input and ordered hook mashes |
+| `src/bosses/impact/anchor_impact_visuals.c` / `src/bosses/impact/anchor_impact_sounds.c` | Native render/audio streams, including two-color glow materials and boss-scoped sound reset |
 
 Kashiwagi and Taisamba retain their phase/clip IDs and gameplay behavior. Each
 boss has its own C profile; the old Balberra/D'Etoile catalog fallbacks were moved

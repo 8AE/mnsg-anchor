@@ -2,7 +2,7 @@
 
 Room `0x31`, File_30, US decompressed ROM SHA-256
 `e40bee20508c2e29e651dca4e47504e40f908f0a2186e34a582784bf5a64be4c`.
-The typed crane adapter is implemented in `src/anchor_world_crane.c` and world
+The typed crane adapter is implemented in `src/world/anchor_world_crane.c` and world
 protocol 9. Host and loopback validation is recorded separately from gameplay.
 Ghidra used explicit programs `world_file_30.elf` and `mnsg.us.0.z64`.
 

@@ -13,7 +13,7 @@
 void recomp_free(void *memory);
 int recomp_printf(const char *format, ...);
 
-#include "../src/boss_sync.c"
+#include "../src/bosses/boss_sync.c"
 
 typedef union TestActor
 {

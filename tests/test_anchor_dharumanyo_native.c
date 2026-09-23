@@ -62,7 +62,7 @@ static void **fixture_pointer_slot(void *record, unsigned int offset)
 /* The native tag bit can occur naturally in a host function address. */
 #define CALLBACK_DISABLED (1ul << (sizeof(unsigned long) * 8 - 1))
 #define ANCHOR_DHARUMANYO_NATIVE_HOST_TEST
-#include "../src/anchor_dharumanyo_native.c"
+#include "../src/bosses/dharumanyo/anchor_dharumanyo_native.c"
 
 unsigned short D_800C7AB2;
 void *D_8016DAB4_16E6B4;

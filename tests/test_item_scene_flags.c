@@ -1,4 +1,4 @@
-/* Host regression harness for File67 local scene flags in src/item_sync.c.
+/* Host regression harness for local scene bits and shared quest flags in src/progression/item_sync.c.
  *
  * The production translation unit is compiled as-is on the host with a
  * shimmed `modding.h` (the real one emits Mach-O-incompatible section
@@ -20,7 +20,7 @@
 #include <string.h>
 
 #ifndef MNSG_ITEM_SYNC_SRC
-#define MNSG_ITEM_SYNC_SRC "../src/item_sync.c"
+#define MNSG_ITEM_SYNC_SRC "../src/progression/item_sync.c"
 #endif
 
 /* The save image needs addressable bytes *before* the flag-array base: the
@@ -68,6 +68,7 @@ static char s_last_custom_payload[16384];
 static int s_custom_calls;
 static int s_suppress_progress;
 static int s_failures;
+static const char *s_incoming_packet;
 
 static void record_send(const char *name, int value, int queued, int via_flag_api)
 {
@@ -167,14 +168,25 @@ char *anchor_get_team_id(void)
     return id;
 }
 unsigned int anchor_get_client_id(void) { return 1; }
-int anchor_has_packet(void) { return 0; }
-char *anchor_poll_packet(void) { return 0; }
+int anchor_has_packet(void) { return s_incoming_packet != 0; }
+char *anchor_poll_packet(void)
+{
+    char *copy;
+    size_t size;
+    if (!s_incoming_packet) return 0;
+    size = strlen(s_incoming_packet) + 1;
+    copy = (char *)malloc(size);
+    if (copy) memcpy(copy, s_incoming_packet, size);
+    s_incoming_packet = 0;
+    return copy;
+}
 int anchor_is_connected(void) { return 1; }
 int anchor_is_disabled(void) { return 0; }
 int anchor_set_save_loaded(int is_loaded) { (void)is_loaded; return 0; }
 int anchor_request_team_state(const char *team_id) { (void)team_id; return 0; }
 void anchor_race_on_flag_synced(const char *n, int v) { (void)n; (void)v; }
-void anchor_race_on_remote_flag_synced(const char *n, int v) { (void)n; (void)v; }
+void anchor_race_on_remote_flag_synced(const char *n, int v)
+{ (void)n; (void)v; }
 void anchor_race_on_finish_packet(const char *json) { (void)json; }
 int anchor_race_is_active(void) { return 1; }
 void anchor_race_on_forced_disconnect(void) {}
@@ -318,6 +330,11 @@ int main(void)
 {
     int i;
     int hp_or_ryo_field = 0;
+    static const unsigned int fish_ids[] = {
+        0xa7,0xa8,0xa9,0xaa,0xab,0xac,0xad,0xae,0xaf,
+        0xb0,0xb1,0xb2,0xb3,0xb8,0xb9,0xba,0xbb,0xbc,
+        0xbd,0xbe,0xbf,0xc0,0xc1
+    };
 
     /* The save image must be laid out as [stats][flag array].  This gate runs
      * before any negative-offset access so a reordered link reports a clear
@@ -343,6 +360,12 @@ int main(void)
           "fl_outerspace is not a sync-table key");
     CHECK(!table_has_name("fl_to_space"),
           "fl_to_space is not a sync-table key");
+    for (i = 0; i < (int)(sizeof(fish_ids)/sizeof(fish_ids[0])); ++i) {
+        int matches = 0;
+        for (int j = 0; j < NUM_FLAGS; ++j)
+            matches += s_flag_bits[j].id == fish_ids[i];
+        CHECK(matches == 1, "each native fish flag is shared exactly once");
+    }
 
     /* ── 2. a local value of 1 survives every incoming form ─────────── */
     note("2. a local value of 1 survives direct deltas and snapshots");
@@ -531,6 +554,89 @@ int main(void)
     CHECK(sent_queued("pk_fire_ryo") && sent_queued("pk_bazooka") && sent_queued("pk_hammer"),
           "equipment collections use existing durable queued deltas");
 
+    note("9. Cat Eyes quest purchases share through every progression path");
+    {
+        static const char *shop_names[3] = {
+            "fl_ce_dharma", "fl_ce_notice", "fl_ce_doll"};
+        static const unsigned int shop_ids[3] = {0x1C5, 0x1C6, 0x1C7};
+        char packet[128];
+        clear_save(); sync_caches(); reset_records();
+        for (i = 0; i < 3; ++i)
+        {
+            CHECK(table_has_name(shop_names[i]),
+                  "quest purchase marker is in the durable flag table");
+            CHECK(apply_incoming_flag(shop_names[i], 1) != 0 &&
+                  native_bit(shop_ids[i]),
+                  "direct legacy quest delta sets the save bit");
+            clear_save(); sync_caches(); reset_records();
+            snprintf(packet, sizeof(packet),
+                     "{\"type\":\"SET_FLAG\",\"flag\":\"%s\",\"value\":1,\"clientId\":2}",
+                     shop_names[i]);
+            s_incoming_packet = packet;
+            process_incoming_packets();
+            CHECK(native_bit(shop_ids[i]),
+                  "queued legacy quest delta restores the purchase flag");
+            clear_save(); sync_caches(); reset_records();
+        }
+        apply_team_state("{\"fl_ce_dharma\":1,\"fl_ce_notice\":1,\"fl_ce_doll\":1}", 0);
+        apply_team_state("{\"fl_ce_dharma\":1,\"fl_ce_notice\":1,\"fl_ce_doll\":1}", 1);
+        CHECK(native_bit(0x1C5) && native_bit(0x1C6) && native_bit(0x1C7),
+              "stored and live compact snapshots restore quest purchases");
+        CHECK(SAVE_READ32(0x100) == 0,
+              "quest purchase flags do not synthesize a Doll count increment");
+
+        /* The native shop writes the save bit; the monitor and snapshots
+         * publish its durable quest result without replaying a purchase. */
+        clear_save(); sync_caches(); reset_records();
+        for (i = 0; i < 3; ++i) set_native_bit(shop_ids[i]);
+        reset_records();
+        for (i = 0; i < 8; ++i)
+        {
+            s_set_flag_send_timer = 0;
+            monitor_and_send_changes();
+        }
+        CHECK(sent_queued("fl_ce_dharma") && sent_queued("fl_ce_notice") &&
+                  sent_queued("fl_ce_doll"),
+              "local quest purchases emit durable SET_FLAG deltas");
+        CHECK(build_team_state_json() &&
+                  text_has(s_team_state_json, "fl_ce_dharma") &&
+                  text_has(s_team_state_json, "fl_ce_notice") &&
+                  text_has(s_team_state_json, "fl_ce_doll"),
+              "stored compact snapshot includes quest purchases");
+        (void)broadcast_team_state_snapshot();
+        CHECK(s_custom_calls == 1 &&
+                  text_has(s_last_custom_payload, "fl_ce_dharma") &&
+                  text_has(s_last_custom_payload, "fl_ce_notice") &&
+                  text_has(s_last_custom_payload, "fl_ce_doll"),
+              "live merge snapshot includes quest purchases");
+
+        clear_save(); sync_caches(); reset_records();
+        item_sync_force_flag("fl_ce_doll");
+        CHECK(native_bit(0x1C7) && s_send_count == 1,
+              "debug Force broadcasts the shared quest flag");
+        CHECK(item_sync_write_local_flag_val("fl_ce_notice", 1) &&
+                  native_bit(0x1C6) && s_send_count == 1 &&
+                  build_team_state_json() &&
+                  text_has(s_team_state_json, "fl_ce_notice"),
+              "race local helper persists the shared quest flag for snapshots");
+    }
+
+    note("10. keys, world equipment and counts remain shared");
+    clear_save(); sync_caches(); reset_records();
+    (void)apply_incoming_flag("ky_s_oc_tile", 1);
+    (void)apply_incoming_flag("pk_fire_ryo", 1);
+    (void)apply_incoming_flag("stat_dolls", 2);
+    (void)apply_incoming_flag("stat_doll_p", 1);
+    CHECK(native_bit(0x10A) && native_bit(0x1A4) &&
+              SAVE_READ32(0x100) == 2 && SAVE_READ32(0x0FC) == 1,
+          "dungeon key, found equipment and doll counts still apply");
+    CHECK(build_team_state_json() &&
+              text_has(s_team_state_json, "ky_s_oc_tile") &&
+              text_has(s_team_state_json, "pk_fire_ryo") &&
+              text_has(s_team_state_json, "stat_dolls") &&
+              text_has(s_team_state_json, "stat_doll_p"),
+          "non-shop progression stays in the compact team snapshot");
+
     /* No new personal health / current-ryo sync was introduced. */
     for (i = 0; i < NUM_FIELDS; ++i)
         if (s_fields[i].off == DS_HP_OFFSET ||
@@ -547,7 +653,7 @@ int main(void)
         printf("item scene flags: %d failure(s)\n", s_failures);
         return 1;
     }
-    printf("item scene flags: local File67 bits stay local; "
-           "neighbours unaffected\n");
+    printf("item scene flags: personal scene bits stay local; "
+           "shared progression unaffected\n");
     return 0;
 }

@@ -1,6 +1,6 @@
 /* Real child hooks and restoration code with host native-call substitutes. */
 #include "impact_test_pointers.h"
-#include "item_sync.h"
+#include "progression/item_sync.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,29 +23,34 @@ static char *anchor_update_world_actors(const char *s) {
 }
 static int parent_authority = 1, placed_actor;
 static unsigned int placed_index=3;
+static unsigned int actors[8][64];
 static int enemy_sync_actor_authority(void *a) {
   (void)a;
   return -1;
 }
 #define WORLD_NPC_PTR(p, o) TP(p, o)
 #define WORLD_NPC_DISABLED 0ul
-#include "../src/anchor_world_dynamic.c"
-#include "../src/anchor_world_npc.c"
+#include "../src/world/anchor_world_dynamic.c"
+#include "../src/world/anchor_world_npc.c"
 
 unsigned short D_800C7AB2 = 302;
 unsigned char D_800C7AE2, D_8015CD00[16];
 void *D_801FC604_5B8514, *D_8016DAB4_16E6B4;
 void *D_80236984_5F1E54[1026];
-static unsigned int actors[8][64], objects[8][64], model[2];
+static unsigned int objects[8][64], model[2];
 static unsigned int clips[20];
 static unsigned short resources[2] = {100, 101};
 static int used, loaded = 1, calls, awards, binds, talks, npc_loaded = 1;
+static unsigned char last_spawn_category;
 static unsigned int health, ryo, excluded_health, excluded_ryo;
 static unsigned int shadow_object[64];
 static void *bridge_owned_actor;
 static float shine_x;
 static unsigned int doll_parent;
 static int doll_collected, doll_temp, doll_inits, doll_pickups, doll_cleanups;
+static int fragile_save32, fragile_visual_ticks;
+static unsigned char fish_flags[512];
+static int fish_native_ticks,fish_native_awards,fish_native_cleanups,fish_counter;
 static int doll_dialogue, doll_paused, doll_helper_removals;
 
 unsigned int item_sync_local_player_health(void) { return health; }
@@ -59,13 +64,27 @@ int anchor_world_actor_placed(void *a) {
   (void)a;
   return placed_actor;
 }
+static unsigned int boulder_duplicate_parent,boulder_duplicate_ordinal;
+int anchor_race_boulder_duplicate(void *a,unsigned int *parent,unsigned int *ordinal) {
+  if (a!=actors[7]) return 0;
+  *parent=boulder_duplicate_parent;*ordinal=boulder_duplicate_ordinal;return 1;
+}
+void anchor_race_boulder_forget(void *a) { (void)a; }
+int anchor_world_source_position(unsigned int parent,short out[3]) {
+  if (!anchor_world_boulder_placement(D_800C7AB2,parent,out)) return 0;
+  return 1;
+}
 int anchor_world_bridge_owns(void *a) { return a && a == bridge_owned_actor; }
 int anchor_world_is_paused(void) { return doll_paused; }
 unsigned int anchor_world_doll_parent(void) { return doll_parent; }
 int anchor_world_doll_parent_valid(unsigned int i) {
   return i && i == doll_parent && (D_800C7AB2==0x16a || D_800C7AB2==0x182);
 }
-int func_800240DC_24CDC(int flag) { assert(flag==0xee);return doll_collected; }
+int func_800240DC_24CDC(int flag) {
+  if (flag>=0xa7 && flag<=0xc1) return fish_flags[flag];
+  assert(flag==0xee || flag==0x32);
+  return flag==0xee ? doll_collected : fragile_save32;
+}
 void func_80023DF0_249F0(int flag) { assert(flag==2);doll_temp=1; }
 void func_80035020_35C20(void) { ++doll_helper_removals; }
 void func_8021925C_5D472C(void *a,void *o) {(void)a;(void)o;}
@@ -122,6 +141,46 @@ DYNAMIC_PHASES(DSTUB)
 WORLD_NPC_PHASES(DSTUB)
 DSTUB(func_802130C8_5CE598)
 DSTUB(func_8021332C_5CE7FC)
+void func_0800028C_6BF9DC(void *a,void *o) {(void)a;(void)o;++fragile_visual_ticks;}
+void func_08004CEC_6C443C(void *a,void *o) {(void)o;++fragile_visual_ticks;DPTR(a,0xc)=func_08004D64_6C44B4;}
+void func_08004D64_6C44B4(void *a,void *o) {(void)o;++fragile_visual_ticks;DPTR(a,0xc)=func_08004CEC_6C443C;}
+void func_08004AA0_6C41F0(void *a,void *o) {(void)a;(void)o;++fragile_visual_ticks;}
+void func_08004AB4_6C4204(void *a,void *o) {(void)a;++H(o,0x14);++fragile_visual_ticks;}
+void func_0800664C_6C5D9C(void *a,void *o) {(void)a;(void)o;++fragile_visual_ticks;}
+void func_08006778_6C5EC8(void *a,void *o) {(void)o;DPTR(a,0xc)=func_0800676C_6C5EBC;}
+void func_0800676C_6C5EBC(void *a,void *o) {(void)a;(void)o;++fragile_visual_ticks;}
+void func_08004AE8_6C4238(void *a,void *o) {(void)a;(void)o;++fragile_visual_ticks;}
+void func_08007984_6C70D4(void *a,void *o) {(void)a;(void)o;++fragile_visual_ticks;}
+void func_80214314_5CF7E4(void *a,void *o) {(void)a;(void)o;}
+void func_802141AC_5CF67C(void *a,void *o) {(void)a;(void)o;}
+static int boulder_native_ticks,boulder_native_setup;
+void func_080014B4_6D57F4(void *a,void *o) {
+  (void)o;++boulder_native_ticks;
+  if (B(a,0xd4)==0) B(a,0xd4)=2;
+  else if (B(a,0xd4)==2) B(a,0xd4)=3;
+  else if (B(a,0xd4)==3) {
+    ++boulder_native_setup;H(a,0x5e)=0x191;
+    W(a,0x60)=0x02a00fe1;B(a,0xd4)=4;S(a,0xd6)=0;
+    F(a,0x78)=F(a,0x80)=2;F(a,0x7c)=5;
+  } else if (B(a,0xd4)==4) {
+    if (++S(a,0xd6)>=150) W(a,0x68)|=2;
+  }
+}
+void func_080002C0_72ACF0(void *a,void *o) {
+  world_dynamic_fish_active_pre(a,o);
+  (void)o;++fish_native_ticks;
+  if (fish_flags[W(a,0xd4)]) { ++fish_native_cleanups;W(a,0x68)|=2u;return; }
+  if (W(a,0x68)&0x200u) {
+    ++fish_counter;
+    DPTR(a,0xc)=func_08000668_72B098;
+  }
+}
+void func_08000668_72B098(void *a,void *o) {
+  (void)o;++fish_native_awards;
+  fish_flags[W(a,0xd4)]=1;
+  DPTR(a,0xc)=func_08000928_72B358;
+}
+void func_08000928_72B358(void *a,void *o) {(void)a;(void)o;++fish_native_cleanups;}
 void func_08004550_6C3CA0(void *a,void *o) {
   (void)o;S(a,0x8a)-=2;
   if (!S(a,0x8a)) DPTR(a,0xc)=(void *)func_08004594_6C3CE4;
@@ -285,7 +344,7 @@ void *func_802171A8_5D2678(void *parent, DynamicCallback callback,
                            unsigned char category) {
   void *a, *o;
   (void)parent;
-  (void)category;
+  last_spawn_category = category;
   assert(used < 8);
   a = actors[used];
   o = objects[used++];
@@ -308,6 +367,7 @@ static void fixture(void) {
   memset(actors, 0, sizeof(actors));
   memset(objects, 0, sizeof(objects));
   used = 0;
+  last_spawn_category = 0xff;
   loaded = 1;
   npc_loaded = 1;
   calls = awards = binds = talks = face_calls = 0;
@@ -322,6 +382,9 @@ static void fixture(void) {
   shutter_ordinal = 0;
   doll_parent=0;doll_collected=doll_temp=doll_inits=doll_pickups=doll_cleanups=0;
   doll_dialogue=doll_paused=doll_helper_removals=D_800C7AE2=0;
+  fragile_save32=fragile_visual_ticks=0;
+  memset(fish_flags,0,sizeof(fish_flags));
+  fish_native_ticks=fish_native_awards=fish_native_cleanups=fish_counter=0;
   D_800C7AB2=302;
   robot_inits = robot_ai = robot_deaths = robot_drops = 0;
   bridge_reply = NULL;
@@ -375,6 +438,138 @@ static void tick(DynamicActor *d) {
   world_dynamic_scheduler_begin();
   ((DynamicCallback)DPTR(d->actor, 0xc))(d->actor, DPTR(d->actor, 0x18));
   world_dynamic_scheduler_end();
+}
+static void boulder_lifecycle_test(void) {
+  DynamicActor *d,*duplicate;
+  void *a,*o;
+  fixture();D_800C7AB2=d_room=0x13d;placed_actor=1;placed_index=10;
+  a=actors[0];o=objects[0];used=1;
+  DPTR(a,0x18)=o;DPTR(a,0xc)=func_080014B4_6D57F4;
+  B(a,0x74)=3;B(a,0xd4)=2;H(a,0x5c)=H(a,0x5e)=0x3da;
+  F(o,0x1c)=F(o,0x20)=F(o,0x24)=1;
+  world_dynamic_post(a);
+  d=lookup(a);assert(d && d->kind==WD_BOULDER && d->parent==10);
+  assert(d->row[WD_ORDINAL]==0 && capture(d));
+  assert(d->row[WD_BIRTH_X]==9 && d->row[WD_BIRTH_Y]==-65 &&
+         d->row[WD_BIRTH_Z]==161);
+  memcpy(d->net,d->row,sizeof(d->net));
+  d->net[WBO_INSTANCE]=(int)d->serial;d->net[WBO_RECEIPT]=7;
+  d->net[WD_OWNER]=1;d->have=d->dirty=1;d->owner=1;
+  boulder_native_ticks=boulder_native_setup=0;
+  tick(d);assert(!boulder_native_ticks && B(a,0xd4)==2);
+  d->net[WD_PHASE]=4;d->net[WD_MODEL]=0x191;
+  d->net[WD_ANIMATED]=1;d->net[WD_TIMER]=12;
+  d->net[WD_X]=32100;d->net[WD_VY]=5000;d->dirty=1;
+  tick(d);assert(boulder_native_setup==1 && B(a,0xd4)==4);
+  assert(S(a,0xd6)==12 && F(o,8)==321.f && F(a,0x7c)==5.f);
+  tick(d);assert(boulder_native_setup==1 && S(a,0xd6)==12);
+  /* A proximity recycle does not manufacture an expiry tombstone. */
+  d->row[WD_LIFE]=WD_LIVE;world_dynamic_reuse(a);
+  assert(!d->actor && d->row[WD_LIFE]==WD_LIVE);
+  /* Native task reuse at the same address must establish a fresh generation. */
+  B(a,0x74)=4;B(a,0xd4)=2;H(a,0x5e)=0x3da;
+  DPTR(a,0xc)=func_080014B4_6D57F4;
+  world_dynamic_post(a);d=lookup(a);
+  assert(d && d->generation==4 && d->row[WD_ORDINAL]==0);
+  /* Race's stack-copy constructor has no roster source. Its registry supplies
+   * the same parent with a separate ordinal and a stable original birth. */
+  placed_actor=0;boulder_duplicate_parent=10;boulder_duplicate_ordinal=1;
+  a=actors[7];o=objects[7];DPTR(a,0x18)=o;
+  DPTR(a,0xc)=func_080014B4_6D57F4;
+  B(a,0x74)=9;B(a,0xd4)=2;H(a,0x5c)=H(a,0x5e)=0x3da;
+  F(o,0x1c)=F(o,0x20)=F(o,0x24)=1;
+  world_dynamic_post(a);duplicate=lookup(a);
+  assert(duplicate && duplicate!=d && duplicate->parent==10 &&
+         duplicate->row[WD_ORDINAL]==1 && capture(duplicate));
+  assert(duplicate->row[WD_BIRTH_X]==d->row[WD_BIRTH_X]);
+  assert(!reconstruct(duplicate->row));
+  H(a,0x5e)=0x191;B(a,0xd4)=4;S(a,0xd6)=150;
+  duplicate->animated=1;W(a,0x68)|=2u;
+  assert(capture(duplicate) && duplicate->row[WD_LIFE]==WD_REMOVED);
+  world_dynamic_reuse(a);
+  assert(!duplicate->actor && duplicate->row[WD_LIFE]==WD_REMOVED);
+}
+static void fish_claim_test(void) {
+  DynamicActor *d;
+  void *a,*o;
+  fixture();D_800C7AB2=d_room=0x168;placed_actor=1;placed_index=10;
+  a=actors[0];o=objects[0];DPTR(a,0x18)=o;DPTR(a,0xd0)=objects[3];
+  DPTR(a,0xc)=func_080002C0_72ACF0;B(a,0x74)=4;
+  H(a,0x5c)=H(a,0x5e)=0x338;W(a,0xd4)=0xb8;W(a,0xd8)=0;W(a,0xdc)=0;
+  world_dynamic_post(a);d=lookup(a);
+  assert(d && d->kind==WD_FISH && d->parent==10 && capture(d));
+  assert(d->row[WFISH_FLAG]==0xb8 && d->row[WFISH_VARIANT]==0);
+  assert(anchor_world_dynamic_row_valid(d->row));
+  d->row[WFISH_VARIANT]=1;assert(!anchor_world_dynamic_row_valid(d->row));
+  d->row[WFISH_VARIANT]=0;
+  d->row[WD_X]=1;assert(!anchor_world_dynamic_row_valid(d->row));
+  d->row[WD_X]=0;
+  assert(!reconstruct(d->row));
+  W(a,0x68)|=0x200u;tick(d);
+  assert(d->claimed && fish_counter==0 && !(W(a,0x68)&0x200u));
+  assert(capture(d) && d->row[WD_LIFE]==WD_CLAIM && d->row[WD_LANDED]);
+  tick(d);assert(fish_counter==0);
+  /* A committed same-room winner is the only client allowed through the
+   * native count increment and subsequent flag-setting continuation. */
+  d->row[WD_LIFE]=WD_REMOVED;d->row[WD_OWNER]=2;
+  d->row[WD_COMMITTER]=2;d->row[WD_LANDED]=1;
+  tick(d);assert(fish_counter==1 && d->fish_awarded && fish_native_awards==0);
+  tick(d);assert(fish_native_awards==1 && fish_flags[0xb8]);
+  tick(d);assert(fish_counter==1 && fish_native_awards==1);
+
+  fixture();D_800C7AB2=d_room=0x168;placed_actor=1;placed_index=11;
+  a=actors[0];o=objects[0];DPTR(a,0x18)=o;DPTR(a,0xd0)=objects[3];
+  DPTR(a,0xc)=func_080002C0_72ACF0;B(a,0x74)=5;
+  H(a,0x5c)=H(a,0x5e)=0x338;W(a,0xd4)=0xb9;W(a,0xd8)=1;
+  world_dynamic_post(a);d=lookup(a);assert(d && capture(d));
+  W(a,0x68)|=0x200u;tick(d);assert(d->claimed && fish_counter==0);
+  d->row[WD_LIFE]=WD_REMOVED;d->row[WD_OWNER]=1;
+  d->row[WD_COMMITTER]=2;d->row[WD_LANDED]=1;
+  tick(d);assert(fish_counter==0 && !fish_native_awards);
+  fish_flags[0xb9]=1;tick(d);
+  assert(fish_counter==0 && fish_native_cleanups==1);
+  assert(anchor_world_fish_placement(0x17e,3,0,0));
+  assert(anchor_world_fish_placement(0x180,2,0,0));
+  assert(!anchor_world_fish_placement(0x168,9,0,0));
+  assert(!anchor_world_fish_placement(0x169,10,0,0));
+
+  /* A contact on the very first active tick is held before native count
+   * mutation, even before the common post hook has registered this actor. */
+  fixture();D_800C7AB2=d_room=0x168;placed_actor=1;placed_index=10;
+  a=actors[0];o=objects[0];DPTR(a,0x18)=o;DPTR(a,0xd0)=objects[3];
+  DPTR(a,0xc)=func_080002C0_72ACF0;B(a,0x74)=5;
+  H(a,0x5c)=H(a,0x5e)=0x338;W(a,0xd4)=0xb8;
+  W(a,0x68)|=0x200u;
+  func_080002C0_72ACF0(a,o);
+  d=lookup(a);assert(d && d->claimed && fish_counter==0 &&
+                       !(W(a,0x68)&0x200u));
+
+  /* If the first observed task is already in its award continuation, keep
+   * that in-flight native scene unwrapped; its save flag still syncs. */
+  fixture();D_800C7AB2=d_room=0x168;placed_actor=1;placed_index=10;
+  a=actors[0];o=objects[0];DPTR(a,0x18)=o;DPTR(a,0xd0)=objects[3];
+  DPTR(a,0xc)=func_08000668_72B098;B(a,0x74)=5;
+  H(a,0x5c)=H(a,0x5e)=0x338;W(a,0xd4)=0xb8;
+  world_dynamic_post(a);assert(!lookup(a));
+  func_08000668_72B098(a,o);
+  assert(fish_native_awards==1 && fish_flags[0xb8]);
+
+  /* A proximity unload can reuse the same roster slot with a new task. */
+  fixture();D_800C7AB2=d_room=0x16e;placed_actor=1;placed_index=11;
+  a=actors[0];o=objects[0];DPTR(a,0x18)=o;DPTR(a,0xd0)=objects[3];
+  DPTR(a,0xc)=func_080002C0_72ACF0;B(a,0x74)=6;
+  H(a,0x5c)=H(a,0x5e)=0x338;W(a,0xd4)=0xa7;
+  world_dynamic_post(a);d=lookup(a);assert(d && capture(d));
+  world_dynamic_reuse(a);assert(!d->actor && d->row[WD_LIFE]==WD_LIVE);
+  a=actors[1];o=objects[1];DPTR(a,0x18)=o;DPTR(a,0xd0)=objects[4];
+  DPTR(a,0xc)=func_080002C0_72ACF0;B(a,0x74)=7;
+  H(a,0x5c)=H(a,0x5e)=0x338;W(a,0xd4)=0xa7;
+  world_dynamic_post(a);
+  assert(lookup(a)==d);
+  assert(capture(d));
+  d->fish_awarded=1;W(a,0x68)|=0x200u;
+  func_080002C0_72ACF0(a,o);
+  assert(!fish_counter && !(W(a,0x68)&0x200u));
 }
 static void reconstruction_test(void) {
   int r[WORLD_DYNAMIC_WORDS];
@@ -1038,7 +1233,177 @@ BOMB_COLOUR(func_8021DD4C_5D921C)
 BOMB_COLOUR(func_8021DF60_5D9430)
 #undef BOMB_COLOUR
 #include "test_world_random_native.c"
+#include "test_world_wave_native.c"
+static DynamicActor *fragile_root_fixture(unsigned int room,unsigned int parent,
+                                          unsigned int entity,DynamicCallback idle) {
+  fixture();D_800C7AB2=(unsigned short)room;d_room=room;
+  placed_actor=1;placed_index=parent;used=1;
+  void *a=actors[0],*o=objects[0];
+  DPTR(a,0x18)=o;DPTR(a,0xc)=(void *)idle;
+  H(a,0x5c)=(unsigned short)entity;
+  H(a,0x5e)=(unsigned short)(entity==0x339 ? 0x24f : entity);
+  B(a,0x74)=3;B(a,0x8d)=1;
+  F(o,0x1c)=F(o,0x20)=F(o,0x24)=1.f;
+  H(o,0x7e)=256;
+  world_dynamic_post(a);
+  DynamicActor *d=lookup(a);
+  assert(d && d->kind==WD_FRAGILE && d->ready && d->parent==parent);
+  return d;
+}
+static void fragile_lifecycle_test(void) {
+  static const struct {unsigned int room,parent,entity;DynamicCallback idle;} roots[] = {
+    {0x5,10,0x196,func_0800028C_6BF9DC},
+    {0x81,8,0x330,func_08004CEC_6C443C},
+    {0x91,28,0x331,func_08004AA0_6C41F0},
+    {0x85,12,0x332,func_0800664C_6C5D9C},
+    {0x14e,20,0x339,func_08004AE8_6C4238},
+    {0x81,6,0x3ec,func_08007984_6C70D4}
+  };
+  for(unsigned int i=0;i<sizeof(roots)/sizeof(roots[0]);++i) {
+    DynamicActor *d=fragile_root_fixture(roots[i].room,roots[i].parent,
+                                         roots[i].entity,roots[i].idle);
+    if(roots[i].entity==0x339) d->clip=4;
+    else if(roots[i].entity==0x331) d->clip=1;
+    assert(capture(d) && anchor_world_dynamic_row_valid(d->row));
+    assert(d->row[WD_PHASE]==WF_PHASE && d->row[WF_ROLE]==0 &&
+           d->row[WD_ORDINAL]==0 && d->row[WF_INSTANCE]==(int)d->serial);
+    int r[WORLD_DYNAMIC_WORDS];memcpy(r,d->row,sizeof(r));
+    r[WF_ROLE]=1;r[WD_ORDINAL]=1;
+    if(roots[i].entity!=0x331 && roots[i].entity!=0x332)
+      assert(!anchor_world_dynamic_row_valid(r));
+    memcpy(d->net,d->row,sizeof(d->net));
+    d->net[WF_RECEIPT]=9;d->net[WF_INSTANCE]=(int)d->serial;
+    d->have=d->dirty=1;d->owner=1;
+    unsigned int flags=W(d->actor,0x60);
+    int ticks=fragile_visual_ticks;
+    tick(d);
+    assert(fragile_visual_ticks==ticks+1 && W(d->actor,0x60)==flags);
+    assert(d->row[WF_RECEIPT]==9);
+    world_dynamic_reuse(d->actor);
+    assert(!d->actor && d->row[WD_LIFE]==WD_LIVE && !d->row[WF_PRESENT]);
+    assert(capture(d));
+  }
+  /* Exact source slot and File30 residency are mandatory. */
+  fixture();D_800C7AB2=d_room=0x91;placed_actor=1;placed_index=27;
+  used=1;DPTR(actors[0],0x18)=objects[0];
+  DPTR(actors[0],0xc)=func_08004AA0_6C41F0;
+  H(actors[0],0x5c)=H(actors[0],0x5e)=0x331;
+  B(actors[0],0x74)=3;B(actors[0],0x8d)=1;
+  world_dynamic_post(actors[0]);assert(!lookup(actors[0]));
+  /* Save-completed 0x339 hides locally; it cannot become a shared death. */
+  DynamicActor *d=fragile_root_fixture(0x14e,20,0x339,func_08004AE8_6C4238);
+  d->clip=4;assert(capture(d));
+  fragile_save32=1;
+  assert(!capture(d));
+  W(d->actor,0x68)=0x80;DPTR(d->actor,0x38)=actors[7];
+  world_dynamic_enemy_damage(d->actor);
+  assert(!d->claimed && d->row[WD_LIFE]==WD_LIVE);
+  world_dynamic_reuse(d->actor);
+  assert(d->row[WD_LIFE]==WD_LIVE);
+
+  /* Local lethal admission waits for a real removal receipt; only the
+   * designated committer gets native drops. */
+  d=fragile_root_fixture(0x5,10,0x196,func_0800028C_6BF9DC);
+  assert(capture(d));
+  void *a=d->actor;
+  W(a,0x68)=0x80;DPTR(a,0x38)=actors[7];
+  world_dynamic_enemy_damage(a);
+  assert(d->claimed && B(a,0x8d)==1 && !(W(a,0x68)&0x40080u));
+  assert(capture(d) && d->row[WD_LIFE]==WD_CLAIM && d->row[WD_LANDED]);
+  robot_damage_step(a);assert(!robot_deaths && !robot_drops);
+  d->row[WD_LIFE]=WD_REMOVED;d->row[WD_LANDED]=1;
+  d->row[WD_COMMITTER]=(int)d_self;
+  world_dynamic_enemy_commit(a);
+  assert(d->death_started && (W(a,0x68)&0x40000u));
+  /* A stale local claim view after commit cannot consume the forced native
+   * death bit. The next common step must still perform one death/drop. */
+  d->row[WD_LIFE]=WD_CLAIM;
+  world_dynamic_enemy_damage(a);
+  assert((W(a,0x68)&0x40000u) && B(a,0x8d)==1);
+  d->row[WD_LIFE]=WD_REMOVED;
+  robot_damage_step(a);
+  assert(robot_deaths==1 && robot_drops==1 && d->death_started);
+  robot_damage_step(a);
+  assert(robot_deaths==1 && robot_drops==1);
+  void *loot=func_802171A8_5D2678(a,func_80214314_5CF7E4,9);
+  world_dynamic_child(a,loot);
+  DynamicActor *drop=lookup(loot);
+  assert(drop && drop->eligible && drop->stable_ordinal &&
+         drop->parent==10 && drop->row[WD_ORDINAL]==0 &&
+         drop->row[WD_BASE_Y]==4);
+  world_dynamic_reuse(a);
+  assert(!d->actor && d->row[WD_LIFE]==WD_REMOVED && d->row[WD_COMMITTER]==(int)d_self);
+  d=fragile_root_fixture(0x5,10,0x196,func_0800028C_6BF9DC);
+  assert(capture(d));d->row[WD_LIFE]=WD_REMOVED;d->row[WD_LANDED]=1;
+  d->row[WD_COMMITTER]=1;world_dynamic_enemy_commit(d->actor);
+  assert(d->death_started && (W(d->actor,0x64)&0x8000u) &&
+         (W(d->actor,0x68)&0x40000u));
+  d->row[WD_LIFE]=WD_CLAIM;
+  world_dynamic_enemy_damage(d->actor);
+  assert((W(d->actor,0x68)&0x40000u) && B(d->actor,0x8d)==1);
+  d->row[WD_LIFE]=WD_REMOVED;
+  robot_damage_step(d->actor);
+  assert(robot_deaths==1 && robot_drops==0);
+  robot_damage_step(d->actor);
+  assert(robot_deaths==1 && robot_drops==0);
+
+  /* Native-only children get the same slot identity and claim path, but no
+   * guessed late reconstruction from an absent child descriptor. */
+  fixture();D_800C7AB2=d_room=0x85;placed_actor=1;placed_index=12;used=1;
+  void *root=actors[0];
+  DPTR(root,0x18)=objects[0];H(root,0x5c)=H(root,0x5e)=0x332;
+  B(root,0x74)=3;B(root,0x8d)=1;
+  world_dynamic_fragile332_begin(root);
+  d=lookup(root);
+  assert(d && d->kind==WD_FRAGILE && !d->ready);
+  void *child=func_802171A8_5D2678(root,func_08006778_6C5EC8,0);
+  world_dynamic_child(d->actor,child);
+  DPTR(root,0xc)=func_0800664C_6C5D9C;
+  world_dynamic_post(root);
+  assert(d->ready && capture(d));
+  H(child,0x5c)=H(child,0x5e)=0x332;B(child,0x8d)=1;
+  world_dynamic_animation(child,1);
+  func_08006778_6C5EC8(child,DPTR(child,0x18));
+  assert(DPTR(child,0xc)==func_0800676C_6C5EBC);
+  world_dynamic_post(child);
+  DynamicActor *c=lookup(child);
+  assert(c && c->kind==WD_FRAGILE && c->row[WF_ROLE]==1 && c->parent==12);
+  assert(capture(c) && anchor_world_dynamic_row_valid(c->row));
+  int r[WORLD_DYNAMIC_WORDS];memcpy(r,c->row,sizeof(r));
+  r[WD_CID]=WF_CHILD_ORIGIN;r[WD_SERIAL]=12;
+  assert(!reconstruct(r));
+  W(child,0x68)=0x80;DPTR(child,0x38)=actors[7];
+  world_dynamic_enemy_damage(child);
+  assert(c->claimed && B(child,0x8d)==1);
+  d=fragile_root_fixture(0x91,28,0x331,func_08004AA0_6C41F0);
+  d->clip=1;assert(capture(d));
+  child=func_802171A8_5D2678(d->actor,func_08004AB4_6C4204,0);
+  world_dynamic_child(d->actor,child);
+  H(child,0x5c)=H(child,0x5e)=0x331;B(child,0x8d)=1;
+  world_dynamic_post(child);
+  c=lookup(child);
+  assert(c && c->kind==WD_FRAGILE && c->row[WF_ROLE]==1 &&
+         c->parent==28 && !c->animated && !c->clip);
+  assert(capture(c));
+  memcpy(c->net,c->row,sizeof(c->net));
+  c->net[WF_RECEIPT]=7;c->net[WF_INSTANCE]=(int)c->serial;
+  c->have=c->dirty=1;c->owner=1;
+  unsigned int yaw=H(DPTR(child,0x18),0x14);
+  tick(c);
+  assert(H(DPTR(child,0x18),0x14)==yaw+1);
+  r[WF_VARIANT]=5;assert(!anchor_world_fragile_valid(r));
+  row(r,WD_COIN,1);r[WD_CID]=WF_LOOT_ORIGIN;
+  r[WD_PARENT]=10;r[WD_BASE_Y]=4;r[WD_ORDINAL]=0;
+  assert(anchor_world_dynamic_row_valid(r));
+  r[WD_BASE_Y]=5;assert(!anchor_world_dynamic_row_valid(r));
+  r[WD_ORDINAL]=1;assert(anchor_world_dynamic_row_valid(r));
+  r[WD_BASE_Y]=3;assert(!anchor_world_dynamic_row_valid(r));
+}
 int main(void) {
+  fish_claim_test();
+  boulder_lifecycle_test();
+  fragile_lifecycle_test();
+  wave_lifecycle_test();
   random_lifecycle_test();
   slicer_lifecycle_test();
   nested_doll_test();

@@ -21,7 +21,7 @@ void recomp_free(void *memory);
 int recomp_printf(const char *format, ...);
 unsigned char *recomp_get_mod_file_path(void);
 
-#include "../src/anchor_player_models.c"
+#include "../src/player/anchor_player_models.c"
 
 unsigned short D_800C7AB2;
 unsigned short D_800C7A78;

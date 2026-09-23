@@ -7,7 +7,7 @@
 #define G64_DISABLED (1ul<<(sizeof(unsigned long)*8-1))
 #define RECOMP_HOOK(name)
 #define RECOMP_HOOK_RETURN(name)
-#include "../src/anchor_world_gate64.c"
+#include "../src/world/anchor_world_gate64.c"
 unsigned short D_800C7AB2;
 unsigned char D_800C7AE2;
 void *D_8016DAB4_16E6B4;

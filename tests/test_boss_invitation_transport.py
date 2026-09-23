@@ -470,7 +470,7 @@ class BossInvitationTransportTests(unittest.TestCase):
                 sender.disconnect()
 
     def test_python_destination_map_matches_explicit_native_catalog_constants(self):
-        header = (MODULE_PATH.parents[1] / "include" / "anchor_boss_arenas.h").read_text()
+        header = (MODULE_PATH.parents[1] / "include" / "bosses" / "anchor_boss_arenas.h").read_text()
         constants = {name: int(value.rstrip("uU"), 0) for name, value in re.findall(
             r"^#define\s+(ANCHOR_BOSS_(?:ARENA|ROOM)_[A-Z_]+)\s+(0x[0-9a-fA-F]+[uU]?|[0-9]+)\s*$",
             header, re.MULTILINE)}

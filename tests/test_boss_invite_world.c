@@ -1,5 +1,5 @@
-#include "anchor_boss_invite_world.h"
-#include "item_sync.h"
+#include "bosses/anchor_boss_invite_world.h"
+#include "progression/item_sync.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

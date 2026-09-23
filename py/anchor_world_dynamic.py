@@ -11,6 +11,9 @@ import anchor_world_slicer as slicer
 import anchor_world_random as random_spawner
 import anchor_world_bomb as bomb
 import anchor_world_wave as wave
+import anchor_world_fragile as fragile
+import anchor_world_boulder as boulder
+import anchor_world_fish as fish
 
 PACKET_TYPE = 'MNSG_WORLD_ACTORS'
 WORDS = 83
@@ -44,10 +47,18 @@ SLICER_FLIGHT = slicer.FLIGHT
 RANDOM = random_spawner.KIND
 BOMB = bomb.KIND
 WAVE = wave.KIND
-FAMILY_RECIPES = {SLICER:slicer, RANDOM:random_spawner, BOMB:bomb, WAVE:wave}
+FRAGILE = fragile.KIND
+BOULDER = boulder.KIND
+FISH = fish.KIND
+FAMILY_RECIPES = {SLICER:slicer, RANDOM:random_spawner, BOMB:bomb, WAVE:wave,
+                  FRAGILE:fragile, BOULDER:boulder, FISH:fish}
 FAMILY_ORIGINS = {origin:recipe for recipe in FAMILY_RECIPES.values()
                   for origin in (recipe.ROOT_ORIGIN, recipe.BLADE_ORIGIN, recipe.LOOT_ORIGIN)
                   if origin is not None}
+# A dropped item is typed by the BASE_Y marker its emitter stamped. The slicer
+# and the random spawner share markers 2/3 and are told apart by their entity;
+# the fragile family owns markers 4/5 outright.
+LOOT_MARKERS = {fragile.ROOT_DROP:fragile, fragile.CHILD_DROP:fragile}
 
 # Kept in the same order as anchor_world_dynamic.h and the native codec's lo/hi
 # arrays. The shared window widens for the slicer kind and phase, and every kind
@@ -138,8 +149,12 @@ def producer(row):
     recipe=FAMILY_RECIPES.get(row[KIND]) or FAMILY_ORIGINS.get(row[0])
     if recipe is not None:
         return recipe
-    if row[KIND] in (2,3,4) and row[45] in (2,3):
-        return next((r for r in FAMILY_RECIPES.values() if row[8]==r.ENTITY),None)
+    if row[KIND] in (2,3,4):
+        marker=LOOT_MARKERS.get(row[45])
+        if marker is not None:
+            return marker
+        if row[45] in (2,3):
+            return next((r for r in FAMILY_RECIPES.values() if row[8]==r.ENTITY),None)
     return None
 
 

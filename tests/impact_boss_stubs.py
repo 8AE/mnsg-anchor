@@ -10,12 +10,12 @@ import re
 
 root = Path(__file__).resolve().parents[1]
 clips = json.loads((root / "tests/impact_boss_clips.json").read_text())
-sources = [root / "src/anchor_impact_kashiwagi.c",
-           root / "src/anchor_impact_taisamba.c",
-           root / "src/anchor_impact_balberra.c",
-           root / "src/anchor_impact_detoile.c",
-           root / "src/utils/anchor_impact_catalog.c",
-           root / "src/utils/anchor_impact_visual_catalog.c"]
+sources = [root / "src/bosses/impact/anchor_impact_kashiwagi.c",
+           root / "src/bosses/impact/anchor_impact_taisamba.c",
+           root / "src/bosses/impact/anchor_impact_balberra.c",
+           root / "src/bosses/impact/anchor_impact_detoile.c",
+           root / "src/bosses/impact/anchor_impact_catalog.c",
+           root / "src/bosses/impact/anchor_impact_visual_catalog.c"]
 text = "\n".join(p.read_text() for p in sources)
 for name in sorted(set(re.findall(r'extern void (func_\w+)\(void \*, void \*\);', text))):
     print(f"void {name}(void *t, void *o) {{ (void)t; (void)o; }}")

@@ -43,8 +43,8 @@ all: $(TARGET)
 
 # This callback dispatcher must keep direct branches; the runtime cannot treat
 # compiler-generated jumps to interior blocks as native actor callbacks.
-$(BUILD_DIR)/src/anchor_world_gate64.o: CFLAGS += -fno-jump-tables
-$(BUILD_DIR)/src/anchor_world_doll.o: CFLAGS += -fno-jump-tables
+$(BUILD_DIR)/src/world/anchor_world_gate64.o: CFLAGS += -fno-jump-tables
+$(BUILD_DIR)/src/world/anchor_world_doll.o: CFLAGS += -fno-jump-tables
 
 $(TARGET): $(C_OBJS) $(S_OBJS) $(LDSCRIPT) | $(BUILD_DIR)
 	$(LD) $(C_OBJS) $(S_OBJS) $(LDFLAGS) -o $@

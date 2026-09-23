@@ -244,7 +244,7 @@ class Gate64CodecTests(unittest.TestCase):
         lib=Path(cls.temp.name)/'gate64.dylib'
         subprocess.run(['cc','-shared','-fPIC','-std=c99','-Wall','-Wextra','-Werror',
                         '-Wno-misleading-indentation','-I'+str(ROOT/'include'),
-                        str(ROOT/'src/utils/anchor_world_codec.c'),
+                        str(ROOT/'src/world/anchor_world_codec.c'),
                         str(ROOT/'src/utils/string_utils.c'),'-o',str(lib)],check=True)
         cls.lib=ctypes.CDLL(str(lib))
         cls.Row=ctypes.c_int*w.WORDS

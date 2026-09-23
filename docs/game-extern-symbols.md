@@ -491,7 +491,7 @@ The projectile renderer uses the same plain task/kind-2 object allocator as
 remote characters. It never invokes the native projectile constructors,
 registers a native attack descriptor, or executes projectile update/damage
 callbacks. The following bounded USA native trace established the capture and
-render contract used by `src/anchor_projectile_models.c`.
+render contract used by `src/combat/anchor_projectile_models.c`.
 
 - `func_801E8964_5A4874` dispatches the playable character's projectile requests
   to constructors through its manager at player `+0xdc`.

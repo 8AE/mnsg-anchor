@@ -3,7 +3,7 @@
 #include "impact_test_pointers.h"
 #define IMPACT_DAMAGE_PTR(p,o) TP(p,o)
 #define ANCHOR_IMPACT_DAMAGE_HOST_TEST
-#include "../src/anchor_impact_damage.c"
+#include "../src/bosses/impact/anchor_impact_damage.c"
 static unsigned int state[0xC0];
 unsigned short D_800C7AB2 = 0x260;
 void *D_8020EED0_63A2B0 = state;

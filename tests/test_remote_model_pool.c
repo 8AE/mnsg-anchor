@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #define ANCHOR_MODEL_POOL_HOST_TEST
-#include "../src/global_patches/anchor_remote_model_pool.c"
+#include "../src/player/anchor_remote_model_pool.c"
 
 void *D_8016DAC0_16E6C0[8];
 short D_8016DAD8_16E6D8[8];

@@ -35,9 +35,11 @@ def valid(r):
         return (not any(r[27:31]) and not r[11] and not any(r[18:24]) and
                 not r[67] and not any(r[12:15]) and not any(r[TARGET_X:TARGET_Z+1]) and
                 r[64]>=0 and r[5]!=1 and r[42] in (WAIT,PRODUCER) and -1<=r[31]<=512)
-    return ((r[27]&~4)==0x7e3 and r[28:31]==[0x220,0x8000,0] and r[11]==1 and
+    return (r[27]==(0x7e3 | (4 if role==1 else 0)) and
+            r[28:31]==[0x220,0x8000,0] and r[11]==1 and
             r[19:21]==[128,1] and r[67]==17 and r[18]>=0 and r[64]>=1 and
             r[53]==1 and r[50:53]==[1,10,0] and r[54]==0x21 and r[47:50]==[300,200,-40] and
+            r[55:59]==[2,10,10,5] and
             not r[STOP] and (-1 if r[5]==2 else 0)<=r[31]<=(100 if role==1 else 80))
 
 

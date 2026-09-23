@@ -10,13 +10,13 @@ Boss behavior is separated from the reusable multiplayer machinery:
 
 | File | Responsibility |
 | --- | --- |
-| `src/anchor_impact_kashiwagi.c` | Kashiwagi root binding, 79 phase IDs, 13 animation clips, private scalar mask, reeling hook |
-| `src/anchor_impact_taisamba.c` | Taisamba root binding, 129 phase IDs, 16 animation clips, scalar mask, arena/ascent state, local attachment dependencies, reeling hooks and additional sounds |
-| `src/anchor_impact_boss.c` | Common boss-profile dispatch and native pointer-range checks |
-| `src/anchor_impact_native.c` | Shared root checkpoint capture, validation, scheduler application and mech-pose smoothing |
-| `src/anchor_impact_players.c` | Shared input arbitration, per-attack initiator/aim, guided attacks, hook mashes and native reticles |
-| `src/anchor_impact_visuals.c` / `src/anchor_impact_sounds.c` | Shared authoritative render/audio streams |
-| `src/utils/anchor_impact_catalog.c` | Common ID lookup plus the pre-existing Balberra/D'Etoile catalogs |
+| `src/bosses/impact/anchor_impact_kashiwagi.c` | Kashiwagi root binding, 79 phase IDs, 13 animation clips, private scalar mask, reeling hook |
+| `src/bosses/impact/anchor_impact_taisamba.c` | Taisamba root binding, 129 phase IDs, 16 animation clips, scalar mask, arena/ascent state, local attachment dependencies, reeling hooks and additional sounds |
+| `src/bosses/impact/anchor_impact_boss.c` | Common boss-profile dispatch and native pointer-range checks |
+| `src/bosses/impact/anchor_impact_native.c` | Shared root checkpoint capture, validation, scheduler application and mech-pose smoothing |
+| `src/bosses/impact/anchor_impact_players.c` | Shared input arbitration, per-attack initiator/aim, guided attacks, hook mashes and native reticles |
+| `src/bosses/impact/anchor_impact_visuals.c` / `src/bosses/impact/anchor_impact_sounds.c` | Shared authoritative render/audio streams |
+| `src/bosses/impact/anchor_impact_catalog.c` | Common ID lookup plus the pre-existing Balberra/D'Etoile catalogs |
 
 No second copy of player input, cursor, rendering or transport logic is introduced.
 Kashiwagi's existing phase IDs, clip IDs and scalar mask are preserved. Both clients
@@ -123,7 +123,7 @@ authority path contained the same stage restriction.
 
 Native `FUN_800370B0` enters stage `0x260`; `FUN_80037000` increments the stage
 through `0x263`, then returns to `0x25F`. The shared C predicate in
-`include/utils/anchor_impact_stage.h` now governs native readiness, checkpoint
+`include/bosses/impact/anchor_impact_stage.h` now governs native readiness, checkpoint
 validation, and damage authority. Python accepts the same four-stage range for
 native stage recognition. The transition repair below separately restricts active
 sync to the completed profiles. Story invitation eligibility stays separate.

@@ -31,7 +31,7 @@ def inspect(rom_path, output):
             address += 3
     compiled = [[int(n, 0) for n in match] for match in re.findall(
         r'\{(\d+), (0x[0-9A-F]+), (\d+), (\d+)\}',
-        (ROOT/'include/anchor_dungeon_rooms.inc').read_text())]
+        (ROOT/'include/world/anchor_dungeon_rooms.inc').read_text())]
     assert rows == compiled, 'Room table differs from the native ROM'
     assert [rom[0x675FD0 + i*0x54] for i in range(5)] == [3, 4, 4, 4, 2]
     assert struct.unpack('>f', at(0x8020C820, 4))[0] == 305.0

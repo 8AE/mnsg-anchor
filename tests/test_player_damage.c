@@ -1,6 +1,6 @@
 #define _DARWIN_C_SOURCE
 #define _DEFAULT_SOURCE
-#include "anchor_player_damage.h"
+#include "combat/anchor_player_damage.h"
 
 #include <math.h>
 #include <stdio.h>

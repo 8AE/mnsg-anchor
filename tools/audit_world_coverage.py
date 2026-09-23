@@ -48,11 +48,11 @@ def classifier_source(world, enemy):
     prefix = r'''
 #include <stdio.h>
 #include <string.h>
-#include "anchor_world.h"
-#include "anchor_world_crane.h"
-#include "anchor_world_bridge.h"
-#include "anchor_world_gate64.h"
-#include "anchor_world_doll.h"
+#include "world/anchor_world.h"
+#include "world/anchor_world_crane.h"
+#include "world/anchor_world_bridge.h"
+#include "world/anchor_world_gate64.h"
+#include "world/anchor_world_doll.h"
 #define U8(p,o) (((const unsigned char *)(p))[o])
 #define U16(p,o) ((unsigned short)((U8(p,o)<<8)|U8(p,(o)+1)))
 #define U32(p,o) (((unsigned int)U16(p,o)<<16)|U16(p,(o)+2))
@@ -100,8 +100,8 @@ int main(void) {
 
 def audit(rom, compiler):
     roster = inventory(rom)
-    world = (ROOT/'src/anchor_world.c').read_text()
-    enemy = (ROOT/'src/enemy_sync.c').read_text()
+    world = (ROOT/'src/world/anchor_world.c').read_text()
+    enemy = (ROOT/'src/world/enemy_sync.c').read_text()
     inputs, expected = [], {}
     for room in roster['rooms']:
         inputs.append(f"{room['room']} {len(room['actors'])}")
@@ -142,12 +142,12 @@ def audit(rom, compiler):
     return {
         'romSha256': roster['romSha256'],
         'sourceSha256': {name: hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
-                         for name in ('src/anchor_world.c','src/enemy_sync.c',
-                                      'include/anchor_world.h',
-                                      'include/anchor_world_crane.h',
-                                      'include/anchor_world_bridge.h',
-                                      'include/anchor_world_gate64.h',
-                                      'include/anchor_world_doll.h',
+                         for name in ('src/world/anchor_world.c','src/world/enemy_sync.c',
+                                      'include/world/anchor_world.h',
+                                      'include/world/anchor_world_crane.h',
+                                      'include/world/anchor_world_bridge.h',
+                                      'include/world/anchor_world_gate64.h',
+                                      'include/world/anchor_world_doll.h',
                                       'tools/audit_world_coverage.py',
                                       'tools/inspect_world_roster.py')},
         'actors': len(decisions), 'entityTypes': len(families),

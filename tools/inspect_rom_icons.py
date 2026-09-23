@@ -22,7 +22,7 @@ def inspect(rom_path: Path, output: Path | None = None) -> list[dict]:
         output.mkdir(parents=True, exist_ok=True)
     records = []
     sheets = {}
-    for line in (ROOT/'include/anchor_rom_icon_defs.inc').read_text().splitlines():
+    for line in (ROOT/'include/ui/anchor_rom_icon_defs.inc').read_text().splitlines():
         match = re.fullmatch(r'ICON\((\w+), (.*)\)', line)
         if not match:
             continue

@@ -30,9 +30,9 @@ def main():
     assert int.from_bytes(rom[0x5E3C8C + 0x193 * 4:0x5E3C90 + 0x193 * 4], 'big') == 0x080001BC
     keys = {int(flag, 16): key for flag, key in re.findall(
         r'\{(0x[0-9A-Fa-f]+), 0, "(ky_[^"]+)"\}',
-        (ROOT / 'src/item_sync.c').read_text())}
+        (ROOT / 'src/progression/item_sync.c').read_text())}
     colors = ('SILVER_KEY', 'GOLD_KEY', 'DIAMOND_KEY')
-    enum_names = re.findall(r'^ICON\((\w+),', (ROOT / 'include/anchor_rom_icon_defs.inc').read_text(), re.M)
+    enum_names = re.findall(r'^ICON\((\w+),', (ROOT / 'include/ui/anchor_rom_icon_defs.inc').read_text(), re.M)
     enum_values = {name: i + 1 for i, name in enumerate(enum_names)}
     records = {}
     for offset in range(0, len(rom) - 16, 4):

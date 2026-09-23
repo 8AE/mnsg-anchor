@@ -22,7 +22,7 @@ def c_function(source, name):
 
 class LootRewardTests(unittest.TestCase):
     def test_private_pickups_preserve_other_same_frame_deltas(self):
-        source = (ROOT / "src/item_sync.c").read_text()
+        source = (ROOT / "src/progression/item_sync.c").read_text()
         code = """#include <assert.h>
 static int s_ds_initialized, s_ryo_initialized, s_ds_prev_hp, s_ryo_prev;
 static unsigned int s_ds_prev_char, active_character;

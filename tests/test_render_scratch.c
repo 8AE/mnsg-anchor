@@ -1,4 +1,4 @@
-#include "anchor_render_scratch.h"
+#include "combat/anchor_render_scratch.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

@@ -24,7 +24,7 @@ def function(source, name):
 
 class ResidentRosterNativeTests(unittest.TestCase):
     def test_all_native_source_lists_and_lifecycle(self):
-        source = (ROOT / 'src/enemy_sync.c').read_text()
+        source = (ROOT / 'src/world/enemy_sync.c').read_text()
         types = source[source.index('typedef struct\n{\n    short x;'):
                        source.index('extern EnemyStageActorMetadata')]
         functions = [

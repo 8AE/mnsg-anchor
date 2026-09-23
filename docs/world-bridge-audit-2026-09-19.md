@@ -1,7 +1,7 @@
 # Super Pass Bridge native graph
 
-The protocol11 adapter is implemented in `src/anchor_world_bridge.c` and
-integrated through the placed root in `src/anchor_world.c`. This audit records
+The protocol11 adapter is implemented in `src/world/anchor_world_bridge.c` and
+integrated through the placed root in `src/world/anchor_world.c`. This audit records
 its native boundaries; it is not a live multiplayer certificate. Raw evidence
 is retained locally in `/tmp/mnsg-world-sync/file51-native-audit-2026-09-19.txt`
 and `file51-restore-audit-2026-09-19.txt` in the same directory.

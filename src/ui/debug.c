@@ -25,15 +25,15 @@
  * already includes anchor.c and item_sync.c.
  */
 
-#include "modding.h"
-#include "recompconfig.h"
-#include "recomputils.h"
-#include "recompui.h"
-#include "anchor.h"
-#include "item_sync.h"
-#include "anchor_runtime.h"
-#include "anchor_flag_catalog.h"
-#include "debug_ui.h"
+#include "platform/modding.h"
+#include "platform/recompconfig.h"
+#include "platform/recomputils.h"
+#include "platform/recompui.h"
+#include "core/anchor.h"
+#include "progression/item_sync.h"
+#include "core/anchor_runtime.h"
+#include "progression/anchor_flag_catalog.h"
+#include "ui/debug_ui.h"
 
 /* build_mod.sh produces release (0) and debug (1) variants automatically. */
 #ifndef DEBUG_BUTTON_ENABLED

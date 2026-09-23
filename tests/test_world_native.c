@@ -15,6 +15,7 @@ static int anchor_is_connected(void) { return 1; }
 static int anchor_is_disabled(void) { return 0; }
 static int item_sync_save_is_loaded(void) { return 1; }
 static unsigned int anchor_get_client_id(void) { return 2; }
+void anchor_race_boulder_room_reset(void) {}
 /* A bridge fixture may serve exactly one synthetic frame reply. Every other
  * fixture keeps the NULL this stub always returned. */
 static char bridge_frame_reply[8192];
@@ -35,10 +36,34 @@ static char *anchor_update_world(unsigned int r, unsigned int s, unsigned int v,
   memcpy(copy, bridge_frame_reply, n + 1);
   return copy;
 }
+static char *anchor_update_world_quest(const char *sources, const char *status) {
+  (void)sources; (void)status; return NULL;
+}
 #define WORLD_NPC_PTR(p, o) TP(p, o)
 #define WORLD_NPC_DISABLED 0ul
-#include "../src/anchor_world.c"
-#include "../src/anchor_world_npc.c"
+#include "../src/world/anchor_world.c"
+#include "../src/world/anchor_world_npc.c"
+void anchor_world_quest_set_self(unsigned int self) { (void)self; }
+void anchor_world_quest_frame(unsigned int r,unsigned int s,unsigned int v,int a) {
+  (void)r;(void)s;(void)v;(void)a;
+}
+unsigned int anchor_world_quest_row_count(void) { return 0; }
+const int *anchor_world_quest_rows(void) { static int rows[WORLD_QUEST_WORDS]; return rows; }
+unsigned int anchor_world_quest_status(int rows[][WORLD_QUEST_WORDS],unsigned int c) {
+  (void)rows;(void)c;return 0;
+}
+unsigned int anchor_world_quest_receive(const int rows[][WORLD_QUEST_WORDS],
+                                         unsigned int c,unsigned int self) {
+  (void)rows;(void)c;(void)self;return 0;
+}
+int anchor_world_quest_encode(const int rows[][WORLD_QUEST_WORDS],
+                              unsigned int c,char *out,unsigned int n) {
+  (void)rows;(void)c;if(n<9)return 0;memcpy(out,"{\"a\":[]}",9);return 1;
+}
+int anchor_world_quest_decode(const char *json,int rows[][WORLD_QUEST_WORDS],
+                              unsigned int *c) {
+  (void)json;(void)rows;(void)c;return 0;
+}
 /* Counterweight lifecycle has a dedicated native harness. */
 static int cw_capture_ready,cw_capture_row[ANCHOR_WORLD_WORDS];
 static int cw_confirmed,cw_remote,cw_applies;
@@ -398,6 +423,16 @@ void func_80216DF8_5D22C8(void *a, unsigned int clip) {
   anchor_world_static_model(a, PTR(a, 0x18), clip);
   ++anim_calls;
 }
+static unsigned int file30_bound_slot;
+void func_80216E1C_5D22EC(void *a, unsigned int slot) {
+  file30_bound_slot = slot;
+  F32(PTR(a, 0x18), 0x1c) = F32(PTR(a, 0x18), 0x20) =
+      F32(PTR(a, 0x18), 0x24) = 1.0f;
+  anchor_world_static_model(a, PTR(a, 0x18), slot);
+  ++anim_calls;
+}
+void func_08000970_6C00C0(void *a, void *o) {(void)a;(void)o;}
+void func_08004AE8_6C4238(void *a, void *o) {(void)a;(void)o;}
 void func_801E55A0_5A14B0(void *p) {
   void *work = PTR(p, 0x5c), *held = PTR(work, 0x8c);
   if (held) U32(held, 0x68) &= ~0x8000u;
@@ -2048,7 +2083,135 @@ static void file40_checkpoint_test(void) {
   }
 }
 
+static unsigned short file30_ca_files[] = {0x1b3, 0x157};
+static unsigned int file30_ca_clips[] = {0x08000fd8u};
+static void *file30_ca_model[] = {file30_ca_files, file30_ca_clips};
+static unsigned short file30_339_files[] = {0,0,0,0,0,0,0,0,0x205,0x161};
+static unsigned int file30_339_clips[] = {0,0,0,0,0x08001690u};
+static void *file30_339_model[] = {file30_339_files, file30_339_clips};
+
+static WorldActor *file30_appearance_fixture(unsigned int room,
+                                               unsigned int index,
+                                               unsigned int entity,
+                                               int initially_visible) {
+  WorldActor *w = fixture((unsigned short)entity, 0);
+  unsigned int visual_model = entity == WORLD_FILE30_CA_ENTITY ? entity : 0x24f;
+  unsigned int flags = entity == WORLD_FILE30_CA_ENTITY ? 0x80000020u :
+                                                        0x802006e1u;
+  (void)w;
+  D_800C7AB2 = (unsigned short)room;
+  anchor_world_roster_begin(room);
+  anchor_world_roster_add(index, source, definition);
+  anchor_world_roster_end(index + 1);
+  U16(actor, 0x5e) = initially_visible ? visual_model : entity;
+  U32(actor, 0x60) = initially_visible ? flags : 0;
+  PTR(actor, 0xc) = entity == WORLD_FILE30_CA_ENTITY ?
+                    func_08000970_6C00C0 : func_08004AE8_6C4238;
+  anchor_world_register(actor, source);
+  anchor_world_post(actor);
+  D_80236984_5F1E54[WORLD_FILE30_CA_ENTITY] = file30_ca_model;
+  D_80236984_5F1E54[0x24f] = file30_339_model;
+  return &s_actors[index];
+}
+
+static void file30_appearance_test(void) {
+  WorldActor *w;
+  unsigned int control = 0xaced1234u;
+  int calls;
+  /* The constructor saw an unset flag, then save sync arrived later. */
+  w = file30_appearance_fixture(WORLD_FILE30_CA_ROOM,
+                                 WORLD_FILE30_CA_INDEX,
+                                 WORLD_FILE30_CA_ENTITY, 1);
+  assert(w->file30_appearance == 1 && !w->kind);
+  U32(actor, 0xd0) = control;
+  save_flags[WORLD_FILE30_CA_SAVE >> 3] |=
+      1u << (WORLD_FILE30_CA_SAVE & 7);
+  anchor_world_frame();
+  assert(U32(actor, 0x60) == 0 && U32(actor, 0xd0) == control);
+  assert(PTR(actor, 0xc) == func_08000970_6C00C0 && !flag_writes);
+  calls = anim_calls;
+  anchor_world_frame();
+  assert(anim_calls == calls);
+  /* Clearing a flag restores the exact visible branch, only when its mesh
+   * resources and clip still match the verified File 30 descriptor. */
+  save_flags[WORLD_FILE30_CA_SAVE >> 3] = 0;
+  missing_file = 0x1b3;
+  anchor_world_frame();
+  assert(U32(actor, 0x60) == 0 && anim_calls == calls);
+  missing_file = -1;
+  file30_ca_clips[0] = 0;
+  anchor_world_frame();
+  assert(U32(actor, 0x60) == 0 && anim_calls == calls);
+  file30_ca_clips[0] = 0x08000fd8u;
+  anchor_world_frame();
+  assert(U32(actor, 0x60) == 0x80000020u && anim_calls == calls + 1);
+  assert(F32(object, 0x1c) == 1.1f && F32(object, 0x20) == 1.1f &&
+         F32(object, 0x24) == 1.1f && U32(actor, 0xd0) == control);
+  assert(PTR(actor, 0xc) == func_08000970_6C00C0 && !flag_writes);
+
+  /* A 0x339 initially hidden by its constructor can become visible after
+   * a delayed shared flag clears, with the constructor's pose and slot 4. */
+  for (unsigned int n = 0; n < 2; ++n) {
+    unsigned int room = n ? WORLD_FILE30_339_ROOM_B : WORLD_FILE30_339_ROOM_A;
+    unsigned int index = n ? WORLD_FILE30_339_INDEX_B : WORLD_FILE30_339_INDEX_A;
+    w = file30_appearance_fixture(room, index, WORLD_FILE30_339_ENTITY, 0);
+    assert(w->file30_appearance == 2 && !w->kind);
+    U32(actor, 0xd0) = control;
+    file30_bound_slot = 0;
+    calls = anim_calls;
+    anchor_world_frame();
+    assert(anim_calls == calls + 1 && file30_bound_slot == 4);
+    assert(U16(actor, 0x5e) == 0x24f && U32(actor, 0x60) == 0x802006e1u);
+    assert(U8(actor, 0x6c) == 2 && U16(object, 0x16) == 0x37f);
+    assert(F32(object, 8) == -602.0f && F32(object, 0xc) == -84.0f &&
+           F32(object, 0x10) == -48.0f && F32(object, 0x1c) == 1.0f);
+    assert(U32(actor, 0xd0) == control &&
+           PTR(actor, 0xc) == func_08004AE8_6C4238 && !flag_writes);
+    save_flags[WORLD_FILE30_339_SAVE >> 3] |=
+        1u << (WORLD_FILE30_339_SAVE & 7);
+    anchor_world_frame();
+    assert(U32(actor, 0x60) == 0 && anim_calls == calls + 1);
+    save_flags[WORLD_FILE30_339_SAVE >> 3] = 0;
+    anchor_world_frame();
+    assert(U32(actor, 0x60) == 0x802006e1u &&
+           anim_calls == calls + 2 && U32(actor, 0xd0) == control);
+  }
+  /* A different placed record, an active callback, or a reused pool slot
+   * must not receive this narrow appearance restoration. */
+  w = file30_appearance_fixture(WORLD_FILE30_CA_ROOM,
+                                 WORLD_FILE30_CA_INDEX - 1,
+                                 WORLD_FILE30_CA_ENTITY, 1);
+  assert(!w->file30_appearance);
+  save_flags[WORLD_FILE30_CA_SAVE >> 3] |=
+      1u << (WORLD_FILE30_CA_SAVE & 7);
+  anchor_world_frame();
+  assert(U32(actor, 0x60) == 0x80000020u);
+  w = file30_appearance_fixture(WORLD_FILE30_CA_ROOM,
+                                 WORLD_FILE30_CA_INDEX,
+                                 WORLD_FILE30_CA_ENTITY, 1);
+  U32(definition, 8) = 1;
+  anchor_world_roster_begin(WORLD_FILE30_CA_ROOM);
+  anchor_world_roster_add(WORLD_FILE30_CA_INDEX, source, definition);
+  anchor_world_roster_end(WORLD_FILE30_CA_INDEX + 1);
+  assert(!s_actors[WORLD_FILE30_CA_INDEX].file30_appearance);
+  anchor_world_register(actor, source);
+  anchor_world_post(actor);
+  anchor_world_frame();
+  assert(U32(actor, 0x60) == 0x80000020u);
+  w = file30_appearance_fixture(WORLD_FILE30_CA_ROOM,
+                                 WORLD_FILE30_CA_INDEX,
+                                 WORLD_FILE30_CA_ENTITY, 1);
+  PTR(actor, 0xc) = idle;
+  anchor_world_frame();
+  assert(U32(actor, 0x60) == 0x80000020u);
+  PTR(actor, 0xc) = func_08000970_6C00C0;
+  ++U8(actor, 0x74);
+  anchor_world_frame();
+  assert(U32(actor, 0x60) == 0x80000020u && !flag_writes);
+}
+
 int main(void) {
+  file30_appearance_test();
   file40_checkpoint_test();
   rope_checkpoint_test();
   spike_checkpoint_test();

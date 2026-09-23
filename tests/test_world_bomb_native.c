@@ -7,7 +7,7 @@
  * are the parent's dynamic.c integration points; until they land this file is
  * compiled against a patched copy of the tree (see the handoff run command). */
 #include "impact_test_pointers.h"
-#include "item_sync.h"
+#include "progression/item_sync.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,9 +32,54 @@ static unsigned int placed_index = 8;
 static int enemy_sync_actor_authority(void *a) { (void)a; return -1; }
 #define WORLD_NPC_PTR(p, o) TP(p, o)
 #define WORLD_NPC_DISABLED 0ul
-#include "../src/anchor_world_dynamic.c"
-#include "../src/anchor_world_npc.c"
-#include "../src/anchor_world_bomb.inc"
+#include "../src/world/anchor_world_dynamic.c"
+#include "../src/world/anchor_world_npc.c"
+#include "../src/world/anchor_world_bomb.inc"
+
+/* The bomb harness links the complete dynamic source. File_46 wave natives
+ * are unreachable in this room, but their typed callback symbols must link. */
+unsigned short D_8015CDB4, D_8015CDC0;
+void *D_801FC60C_5B851C;
+#define WAVE_STUB(name) void name(void *a, void *o) { (void)a; (void)o; }
+WAVE_STUB(func_0800370C_70480C)
+WAVE_STUB(func_0800376C_70486C)
+WAVE_STUB(func_080037B0_7048B0)
+WAVE_STUB(func_08003B4C_704C4C)
+WAVE_STUB(func_08003C90_704D90)
+WAVE_STUB(func_08003D64_704E64)
+WAVE_STUB(func_08003E60_704F60)
+WAVE_STUB(func_08003F68_705068)
+WAVE_STUB(func_08004034_705134)
+WAVE_STUB(func_80212088_5CD558)
+#undef WAVE_STUB
+/* File30 fragile callbacks are unreachable in this File40 bomb fixture. */
+#define FRAGILE_STUB(name) void name(void *a, void *o) { (void)a; (void)o; }
+FRAGILE_STUB(func_0800028C_6BF9DC)
+FRAGILE_STUB(func_08004CEC_6C443C)
+FRAGILE_STUB(func_08004D64_6C44B4)
+FRAGILE_STUB(func_08004AA0_6C41F0)
+FRAGILE_STUB(func_08004AB4_6C4204)
+FRAGILE_STUB(func_0800664C_6C5D9C)
+FRAGILE_STUB(func_08006778_6C5EC8)
+FRAGILE_STUB(func_0800676C_6C5EBC)
+FRAGILE_STUB(func_08004AE8_6C4238)
+FRAGILE_STUB(func_08007984_6C70D4)
+FRAGILE_STUB(func_80214314_5CF7E4)
+FRAGILE_STUB(func_802141AC_5CF67C)
+#undef FRAGILE_STUB
+void func_080014B4_6D57F4(void *a,void *o) { (void)a;(void)o; }
+void func_080002C0_72ACF0(void *a,void *o) { (void)a;(void)o; }
+void func_08000668_72B098(void *a,void *o) { (void)a;(void)o; }
+void func_08000928_72B358(void *a,void *o) { (void)a;(void)o; }
+int anchor_race_boulder_duplicate(void *a,unsigned int *parent,unsigned int *ordinal) {
+  (void)a;(void)parent;(void)ordinal;return 0;
+}
+void anchor_race_boulder_forget(void *a) { (void)a; }
+int anchor_world_source_position(unsigned int parent,short out[3]) {
+  (void)parent;(void)out;return 0;
+}
+int func_08003A30_704B30(void *a) { (void)a; return 0; }
+void func_80219E08_5D52D8(void *a, float scale) { (void)a; (void)scale; }
 
 unsigned short D_800C7AB2 = 0x65;
 unsigned char D_800C7AE2, D_8015CD00[16];

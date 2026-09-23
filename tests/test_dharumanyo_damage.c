@@ -70,7 +70,7 @@ static void write_pointer(void *record, unsigned int offset, void *value)
 #define DHARUMANYO_DAMAGE_POST(p) (fixture_for(p)->post)
 #define DHARUMANYO_DAMAGE_CALLBACKS_DISABLED(p) 0
 #define ANCHOR_DHARUMANYO_DAMAGE_HOST_TEST
-#include "../src/anchor_dharumanyo_damage.c"
+#include "../src/bosses/dharumanyo/anchor_dharumanyo_damage.c"
 
 unsigned short D_800C7AB2;
 void *D_801FC604_5B8514;

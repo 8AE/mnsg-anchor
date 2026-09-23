@@ -440,7 +440,7 @@ class DynamicCodecTests(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         lib=Path(cls.tmp.name)/'codec.so'
         subprocess.run(['cc','-shared','-fPIC','-I'+str(root/'include'),
-            str(root/'src/utils/anchor_world_dynamic_codec.c'),str(root/'src/utils/string_utils.c'),
+            str(root/'src/world/anchor_world_dynamic_codec.c'),str(root/'src/utils/string_utils.c'),
             '-o',str(lib)],check=True)
         cls.lib=ctypes.CDLL(str(lib))
         cls.lib.anchor_world_dynamic_row_valid.argtypes=[ctypes.POINTER(ctypes.c_int)]

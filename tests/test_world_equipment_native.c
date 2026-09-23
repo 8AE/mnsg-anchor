@@ -4,7 +4,7 @@
 #define EQ_PTR(p,o) TP(p,o)
 #define EQ_DISABLED 0ul
 #define RECOMP_HOOK(name)
-#include "../src/anchor_world_equipment.c"
+#include "../src/world/anchor_world_equipment.c"
 
 unsigned short D_800C7AB2;
 static unsigned int a[64],o[64],shine[64],shine_object[64];

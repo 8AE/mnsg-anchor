@@ -319,8 +319,8 @@ class DollCodecTests(unittest.TestCase):
         cls.temp=tempfile.TemporaryDirectory()
         world=Path(cls.temp.name)/'world.dylib'
         dyn=Path(cls.temp.name)/'dynamic.dylib'
-        for lib,src in ((world,'src/utils/anchor_world_codec.c'),
-                        (dyn,'src/utils/anchor_world_dynamic_codec.c')):
+        for lib,src in ((world,'src/world/anchor_world_codec.c'),
+                        (dyn,'src/world/anchor_world_dynamic_codec.c')):
             subprocess.run(['cc','-shared','-fPIC','-std=c99','-Wall','-Wextra','-Werror',
                             '-Wno-misleading-indentation','-I'+str(ROOT/'include'),
                             str(ROOT/src),str(ROOT/'src/utils/string_utils.c'),

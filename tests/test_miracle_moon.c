@@ -13,7 +13,7 @@ static void write_pointer(void *record, unsigned int offset, void *pointer)
     memcpy((unsigned char *)record + offset, &pointer, sizeof(pointer));
 }
 #define MOON_READ_POINTER(p, off) read_pointer(p, off)
-#include "../src/anchor_miracle_moon.c"
+#include "../src/progression/anchor_miracle_moon.c"
 
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "%s:%d: %s\n", __func__, __LINE__, #condition); return 1; \

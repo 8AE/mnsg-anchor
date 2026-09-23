@@ -1,7 +1,7 @@
 # Tsurami native synchronization evidence
 
-The implementation is in `src/anchor_tsurami_native.c`, with the public integer
-checkpoint layout in `include/anchor_tsurami_native.h`. Native behavior below
+The implementation is in `src/bosses/tsurami/anchor_tsurami_native.c`, with the public integer
+checkpoint layout in `include/bosses/tsurami/anchor_tsurami_native.h`. Native behavior below
 was checked against the documentation checkout, the Hyper Tsurami reference,
 recovered file 29 disassembly/decompilation, and the local upstream recompilation.
 Compilation and host fixtures do not certify two running game clients.
