@@ -8,14 +8,14 @@
 #define ANCHOR_IMPACT_READ_PTR(p,o) TP(p,o)
 #define ANCHOR_IMPACT_AI(p) TU32(p,0x0C)
 #define ANCHOR_IMPACT_SET_AI(p,v) (TU32(p,0x0C) = (v))
-#include "../src/anchor_impact_kashiwagi.c"
-#include "../src/anchor_impact_taisamba.c"
-#include "../src/anchor_impact_balberra.c"
-#include "../src/anchor_impact_detoile.c"
-#include "../src/anchor_impact_boss.c"
-#include "../src/utils/anchor_impact_catalog.c"
-#include "../src/utils/anchor_impact_visual_catalog.c"
-#include "../src/anchor_impact_native.c"
+#include "../src/bosses/impact/anchor_impact_kashiwagi.c"
+#include "../src/bosses/impact/anchor_impact_taisamba.c"
+#include "../src/bosses/impact/anchor_impact_balberra.c"
+#include "../src/bosses/impact/anchor_impact_detoile.c"
+#include "../src/bosses/impact/anchor_impact_boss.c"
+#include "../src/bosses/impact/anchor_impact_catalog.c"
+#include "../src/bosses/impact/anchor_impact_visual_catalog.c"
+#include "../src/bosses/impact/anchor_impact_native.c"
 
 static unsigned int battle[0x300/4], root[64], model[64], aux[8];
 static unsigned int weapon[64], carrier[64], carrier_model[64];

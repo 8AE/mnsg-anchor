@@ -51,9 +51,9 @@ Modified files:
 
 Untracked files:
 
-- `include/anchor_impact_players.h`
-- `include/utils/anchor_impact_players_codec.h`
-- `src/utils/anchor_impact_players_codec.c`
+- `include/bosses/impact/anchor_impact_players.h`
+- `include/bosses/impact/anchor_impact_players_codec.h`
+- `src/bosses/impact/anchor_impact_players_codec.c`
 - `tests/test_impact_players.py`
 
 No native player renderer exists yet. No existing C bridge or frame hook calls the new Python player channel. The current worktree therefore does not implement remote reticles or shot rendering.
@@ -116,7 +116,7 @@ The version 2 scope work fixes that design by carrying and checking stage and en
 
 ## Existing native implementation
 
-`include/anchor_impact_native.h` defines a five-word root snapshot:
+`include/bosses/impact/anchor_impact_native.h` defines a five-word root snapshot:
 
 1. boss HP from shared state `+0x60`;
 2. Ryo ammunition from `+0x64`;
@@ -124,7 +124,7 @@ The version 2 scope work fixes that design by carrying and checking stage and en
 4. pause byte from `+0x2C0`;
 5. encounter clock from `+0x2C8`.
 
-`src/anchor_impact_native.c` captures all five words but applies only the three health/ammunition values. It leaves boss callbacks, transforms, animation, and attack actors under each client's local AI. The scheduler hook never holds follower AI. This matches the recording.
+`src/bosses/impact/anchor_impact_native.c` captures all five words but applies only the three health/ammunition values. It leaves boss callbacks, transforms, animation, and attack actors under each client's local AI. The scheduler hook never holds follower AI. This matches the recording.
 
 The current damage path already prevents a follower from changing shared boss HP directly. It restores the local HP, sends the delta to the authority, and lets the authority call the native damage function. Preserve that ownership path.
 
@@ -253,7 +253,7 @@ The untracked player codec defines:
 - 16 peers and 16 attacks per frame;
 - a 4,096-byte input JSON buffer and 8,192-byte output limit.
 
-Review it before integration. The interrupted renderer implementation had not created `src/anchor_impact_players.c`, and no build checked the codec.
+Review it before integration. The interrupted renderer implementation had not created `src/bosses/impact/anchor_impact_players.c`, and no build checked the codec.
 
 ## Boss movement and AI work remaining
 
@@ -285,8 +285,8 @@ Increase `ANCHOR_IMPACT_ROOT_WORDS` only after the field list is final. Increase
 Finish the player path in this order:
 
 1. Complete the Python identity cleanup described above.
-2. Add `anchor_impact_players_update(...)` to `include/anchor.h` and `src/anchor.c`; call Python `anchor_mnsg.update_impact_players(...)` and return an allocated JSON string.
-3. Complete `src/anchor_impact_players.c` using the verified renderer and shot design.
+2. Add `anchor_impact_players_update(...)` to `include/core/anchor.h` and `src/core/anchor.c`; call Python `anchor_mnsg.update_impact_players(...)` and return an allocated JSON string.
+3. Complete `src/bosses/impact/anchor_impact_players.c` using the verified renderer and shot design.
 4. Call `anchor_impact_players_tick(active && !paused)` from `anchor_impact_sync_frame()` after the main coordinator has established the current role and encounter.
 5. Call `anchor_impact_players_reset()` on inactive, visit-change, bind-change, and disconnect paths. Deactivate retained visuals before clearing their slot metadata.
 6. Keep player attack visuals independent from authority. Each sender publishes its own successful native shot; every other client creates one non-colliding visual.

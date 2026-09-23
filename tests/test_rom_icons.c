@@ -1,7 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
 
-#include "anchor_rom_icons.h"
+#include "ui/anchor_rom_icons.h"
 
 #define SHEET_WIDTH 64u
 #define SHEET_HEIGHT 32u

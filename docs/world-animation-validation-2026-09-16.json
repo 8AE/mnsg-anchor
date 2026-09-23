@@ -1,0 +1,72 @@
+{
+  "date": "2026-09-16",
+  "worldSyncVersion": 3,
+  "playtest": "Screen Recording 2026-09-16 at 21.01.54.mov",
+  "changes": [
+    "Preserve native local coin texture loop and cursor; shared timer/blink/removal unchanged",
+    "Reverse animated travel doors after remote interaction/departure using native animation step; local input may reopen",
+    "Send door reverse/stop edges within existing 50ms floor; exclude older world protocol versions"
+  ],
+  "nativeTests": {
+    "worldHarness": "Passed with UBSan and release float flags",
+    "coinRegression": "Pre-fix implementation fails local spin-loop assertion",
+    "scenarios": [
+      "10 local coin loops across shared lifetime snapshots for owner and replica",
+      "shared expiry removes spinning coin",
+      "remote door departure triggers reverse clip",
+      "closed endpoint stops playback and retains mesh enable",
+      "late reverse checkpoint continues between packets",
+      "local input reopens during closure",
+      "progression barrier excluded"
+    ]
+  },
+  "pythonTests": {
+    "run": 316,
+    "skipped": 1,
+    "failed": 0,
+    "focusedWorld": 46
+  },
+  "loopbackTCP": {
+    "worldActors": 256,
+    "parts": 11,
+    "maxPacketBytes": 2668,
+    "doorChecks": [
+      "traveller room departure metadata",
+      "remaining simulator elected",
+      "late reverse checkpoint",
+      "closed checkpoint"
+    ],
+    "dynamicActors": 128,
+    "dynamicMaxPacketBytes": 2366,
+    "lootChecks": [
+      "claim/commit",
+      "native award waits for send",
+      "handoff"
+    ]
+  },
+  "packetAudit": {
+    "errors": 0,
+    "warnings": 0
+  },
+  "builds": "Release/debug MIPS builds and collision dispatch checks passed",
+  "nativeReference": {
+    "build": "Passed",
+    "tests": 34
+  },
+  "limitations": [
+    "Native host harnesses substitute game routines; no fresh two-client in-game test of these final packages.",
+    "Static scripted door pieces and progression barriers retain native behavior."
+  ],
+  "packages": [
+    {
+      "path": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 521638,
+      "sha256": "78408f5a49f918cb536115cb8309d73465b804dcfedfea49231f29e4d4ed9d8e"
+    },
+    {
+      "path": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 521842,
+      "sha256": "f7b2fa68213b1fedfd3103ee9f88be2efe791915ede66e35ad92632049d0c623"
+    }
+  ]
+}

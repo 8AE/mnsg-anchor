@@ -1,4 +1,4 @@
-#include "anchor_rom_icons.h"
+#include "ui/anchor_rom_icons.h"
 
 #define FLUTE_SHEET_WIDTH  64u
 #define FLUTE_SHEET_HEIGHT 32u
@@ -31,7 +31,7 @@ static const AnchorRomIconInfo s_icons[ANCHOR_ICON_COUNT] = {
     {0},
 #define ICON(name, resource, rom, packed, sw, sh, x, y, w, h, flip, mirror) \
     {resource, rom, packed, sw, sh, x, y, w, (w) * (1u + (mirror)), h, flip, mirror},
-#include "anchor_rom_icon_defs.inc"
+#include "ui/anchor_rom_icon_defs.inc"
 #undef ICON
 };
 

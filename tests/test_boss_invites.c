@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include "anchor_boss_invites.h"
-#include "anchor_boss_invite_world.h"
-#include "anchor_dialog.h"
+#include "bosses/anchor_boss_invites.h"
+#include "bosses/anchor_boss_invite_world.h"
+#include "core/anchor_dialog.h"
 
 static int connected = 1, disabled, loaded = 1, current_arena, prompt_safe = 1;
 static int current_visit = 4, published_arena = -1, published_visit = -1;

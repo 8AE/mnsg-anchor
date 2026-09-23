@@ -42,6 +42,8 @@ def load_client(cid=1, session=101, team="blue", room=10):
     client._connected = True
     client._client_id = cid
     client._interaction_session = session
+    # Fixtures represent a connection after its initial membership snapshot.
+    client._world_roster_session = session
     client._team_id = team
     client._player_name = f"Player {cid}"
     client.set_save_loaded(True)
@@ -468,7 +470,7 @@ class BossInvitationTransportTests(unittest.TestCase):
                 sender.disconnect()
 
     def test_python_destination_map_matches_explicit_native_catalog_constants(self):
-        header = (MODULE_PATH.parents[1] / "include" / "anchor_boss_arenas.h").read_text()
+        header = (MODULE_PATH.parents[1] / "include" / "bosses" / "anchor_boss_arenas.h").read_text()
         constants = {name: int(value.rstrip("uU"), 0) for name, value in re.findall(
             r"^#define\s+(ANCHOR_BOSS_(?:ARENA|ROOM)_[A-Z_]+)\s+(0x[0-9a-fA-F]+[uU]?|[0-9]+)\s*$",
             header, re.MULTILINE)}

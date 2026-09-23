@@ -5,7 +5,7 @@ char *anchor_impact_players_update(int, unsigned int, unsigned int, unsigned int
 void recomp_free(void *);
 #define ANCHOR_IMPACT_PLAYERS_HOST_TEST
 #define IP_READ_PTR(p, o) TP(p, o)
-#include "../src/anchor_impact_players.c"
+#include "../src/bosses/impact/anchor_impact_players.c"
 
 static unsigned int state[0xC0], manager[0x80], local_task[0x80], local_object[0x80], local_backlink[4];
 static unsigned char system_data[0x40000], resource[16];

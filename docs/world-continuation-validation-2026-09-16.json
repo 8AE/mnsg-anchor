@@ -1,0 +1,67 @@
+{
+  "date": "2026-09-16",
+  "worldSyncVersion": 4,
+  "goalStatus": "progress; universal room coverage remains unfinished",
+  "changes": [
+    "22 native File_59 town NPC continuations with private scalar checkpoints",
+    "Pickpocket escape-route identity and waypoint validation, local table reconstruction",
+    "Native face selectors restored without overwriting the mouth selector with a path pointer",
+    "Local blinking, local conversation continuations, and native resource guards",
+    "Indexed rotor 0x356 and ride-triggered platform 0x3B4 phases/timers/motion",
+    "Protocol-4 continuation edges at the existing 50ms floor"
+  ],
+  "nativeValidation": {
+    "method": "Actual C implementation under UBSan with release floating-point flags and host native-call substitutes",
+    "passed": true,
+    "checks": [
+      "placed pickpocket continuation and native route handoff",
+      "local dialogue return target preserved",
+      "dynamic NPC reconstruction retains all three face selectors",
+      "repeated checkpoints do not reset local blinking",
+      "missing File_59 overlay defers reconstruction",
+      "escape waypoint sentinel and cross-model callback rejection",
+      "indexed rotor cycle restore and invalid fractional cycle rejection",
+      "ride-triggered platform remote wait, native movement and handoff",
+      "existing loot, coin loop, door closing, resource and pool reuse regressions"
+    ]
+  },
+  "pythonTests": {
+    "full": 319,
+    "skipped": 1,
+    "failed": 0,
+    "focusedWorld": 49,
+    "nativePythonParity": "All 22 continuation families and invalid scalar/route boundaries"
+  },
+  "loopbackTCP": {
+    "upstreamRevision": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "bind": "127.0.0.1:45387",
+    "serverStopped": true,
+    "placed": {"actors": 256, "parts": 11, "maxPacketBytes": 3100, "passed": true},
+    "dynamic": {"actors": 128, "parts": 11, "maxPacketBytes": 2582, "passed": true},
+    "checks": [
+      "NUL framing, sender exclusion and team isolation",
+      "complete reordered batches and late NPC checkpoint",
+      "NPC canonical birth identity preserved across origin disconnect",
+      "pickup claim/commit and award waits for successful send",
+      "door traveller departure, reverse checkpoint and closure"
+    ],
+    "maximumWidthNpcPacketBytesWith128ByteTeam": 6040,
+    "packetCapIncludingNul": 8192
+  },
+  "packetAudit": {"literalSends": 22, "errors": 0, "warnings": 0},
+  "builds": "Release and debug MIPS builds, collision dispatch checks and package integrity passed",
+  "packages": {
+    "build/mnsg_multiplayer_anchor.nrm": "a1ed578c71e35c35f1594d43726504b4da35b21d821eaa0d8f0e98470f623e12",
+    "build/debug_mnsg_multiplayer_anchor.nrm": "57e02645a626905f64101f69f07697e272a569a249d903394ced8e029c2ecb8f"
+  },
+  "embeddedPython": "All three world modules match the working source in both packages",
+  "nativeReference": {
+    "localBuild": "passed",
+    "tests": "passed",
+    "published": false,
+    "newTablesVerifiedInGeneratedPage": true,
+    "inventoryPreview": "Full scanner reports 711 additions and 2 removals including unrelated prior work; broad replacement was not adopted. Verified task findings were added to the existing runtime value page and maintenance evidence."
+  },
+  "freshTwoClientGameRun": false,
+  "remaining": "See world-controller-audit-2026-09-16.md. Multi-child puzzles, private quest/controller graphs and unaudited actor families still need implementation."
+}

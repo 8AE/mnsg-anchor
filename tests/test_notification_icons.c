@@ -1,7 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "anchor_rom_icons.h"
+#include "ui/anchor_rom_icons.h"
 
 static const AnchorRomIconInfo *s_expected;
 static int s_wrong_address, s_wrong_size, s_wrong_end, s_decodes;

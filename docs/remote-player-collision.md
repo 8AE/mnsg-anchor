@@ -13,7 +13,7 @@ playable character's input, combat, camera, or gravity callbacks.
 
 The receiving client's own playable body still uses its normal native world
 collision. Corrections caused by incoming player pressure also remain safe
-against its world: `src/anchor_collision_world.c` uses the native static and dynamic wall correction
+against its world: `src/combat/anchor_collision_world.c` uses the native static and dynamic wall correction
 queries (`func_8002EB10_2F710`, `func_80030730_31330`) and nearest geometry ray
 query (`func_8002C9D4_2D5D4`). Sweeps cover the body's leading edge, shoulders,
 feet, and head; the wall probes use the native normal-player envelope, scaled
@@ -23,7 +23,7 @@ into 32-unit segments because the dynamic query internally initializes its
 nearest squared distance to 2000. Extreme position corrections advance at most
 512 world units per update and still check intervening geometry.
 
-`src/utils/anchor_collision_math.c` sweeps cylinders against peer bodies and
+`src/combat/anchor_collision_math.c` sweeps cylinders against peer bodies and
 preserves tangential movement. The per-character radii/heights come from the
 native unsigned tables at `D_801FC660_5B8570` / `D_801FC668_5B8578`, multiplied by
 the model scale. Native code uses those tables for hit detection; the mod uses
@@ -35,7 +35,7 @@ Overlapping spawns try bounded alternative separation directions; a model with
 no free placement stays hidden and retries instead of becoming an overlapping
 or invisible obstacle.
 
-`src/anchor_collision_actors.c` reads live native enemy combat cylinders from
+`src/combat/anchor_collision_actors.c` reads live native enemy combat cylinders from
 the current task list, validating each native backlink and display record. It
 uses explicit enemy/boss IDs; a shared actor-manager group does not make an
 elevator, prop, spawner or projectile an enemy. Radius, height and local offsets

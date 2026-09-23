@@ -23,17 +23,17 @@
  *       drives the timer and the player-list refresh.
  */
 
-#include "modding.h"
-#include "recomputils.h"
-#include "recompui.h"
-#include "recompconfig.h"
-#include "anchor.h"
-#include "anchor_boss_invite_world.h"
-#include "anchor_runtime.h"
-#include "debug_ui.h"
+#include "platform/modding.h"
+#include "platform/recomputils.h"
+#include "platform/recompui.h"
+#include "platform/recompconfig.h"
+#include "core/anchor.h"
+#include "bosses/anchor_boss_invite_world.h"
+#include "core/anchor_runtime.h"
+#include "ui/debug_ui.h"
 #include "utils/array_utils.h"
 #include "utils/json_utils.h"
-#include "anchor_rom_icons.h"
+#include "ui/anchor_rom_icons.h"
 
 /* =========================================================================
    Tunables

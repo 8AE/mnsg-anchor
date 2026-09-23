@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "alternative_ebisumaru/anchor_alternative_model.h"
+#include "player/alternative_ebisumaru/anchor_alternative_model.h"
 
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "%s:%d: %s\n", __func__, __LINE__, #condition); return 1; \

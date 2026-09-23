@@ -1,0 +1,132 @@
+{
+  "date": "2026-09-19",
+  "scope": "File62 0x3D6 container and nested File26 Silver Doll, rooms 0x16A/0x182",
+  "world_protocol": 13,
+  "base_commit": "40a500150db2ff8ebfc7f55f0d320ebedbac9a4e",
+  "git_state": "intentional uncommitted work preserved; no commit or push",
+  "native_rom_sha256": "e40bee20508c2e29e651dca4e47504e40f908f0a2186e34a582784bf5a64be4c",
+  "checks": [
+    {
+      "command": "bash tests/run_world_sync.sh",
+      "result": "pass",
+      "native_harnesses": 6,
+      "container_native_checks": 86,
+      "python_world_tests": 138,
+      "log": "/tmp/mnsg-doll-world-tests.log"
+    },
+    {
+      "command": "PYTHONPATH=py python3 -m unittest discover -s tests -p 'test_*.py'",
+      "result": "pass",
+      "run": 408,
+      "passed": 407,
+      "skipped": 1,
+      "skip": "Unrelated projectile test cannot open a loopback listener in the sandbox",
+      "log": "/tmp/mnsg-doll-python-tests.log"
+    },
+    {
+      "command": "python3 tools/test_world_doll_anchor_local.py --port 45387",
+      "result": {
+        "ok": true,
+        "max_packet_bytes": 609,
+        "checks": [
+          "container bootstrap and reopening",
+          "late-entry descent",
+          "duplicate birth coalescing",
+          "collector arbitration",
+          "failed-send award barrier",
+          "removal survives owner departure",
+          "sender exclusion",
+          "team isolation",
+          "bounded team-only transient packets"
+        ]
+      }
+    },
+    {
+      "command": "python3 ~/.codex/skills/mnsg-anchor-network/scripts/audit_anchor_packets.py .",
+      "literal_sends": 22,
+      "errors": 0,
+      "warnings": 0,
+      "log": "/tmp/mnsg-doll-packet-audit.log"
+    },
+    {
+      "command": "./build_mod.sh -j4",
+      "result": "both packages built",
+      "warnings": "Existing unused notif_ensure_init warning in both variants",
+      "log": "/tmp/mnsg-doll-build.log"
+    },
+    {
+      "command": "npm run build && npm test in sibling mnsg-documentation",
+      "result": "pass; 34 tests and 0 site validation errors",
+      "browser": "Rendered nested-doll-container-lifetime anchor contains new allocation-context row; temporary tab closed",
+      "logs": [
+        "/tmp/mnsg-doll-docs-build.log",
+        "/tmp/mnsg-doll-docs-tests.log"
+      ]
+    }
+  ],
+  "local_anchor": {
+    "listener": "127.0.0.1:45387",
+    "server_go_sha256": "de5ad21c2b521d3beeb4da11c6559746184084581e45336c9ea4d19fd8030283",
+    "prior_setup_revision": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "git_revision_note": "Prior setup provenance; scratch checkout has no git metadata",
+    "peers": 3,
+    "teams": 2,
+    "stopped": true
+  },
+  "packages": [
+    {
+      "path": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 593444,
+      "sha256": "b58b755ce826059029e5419b016d72978f65d22a703015d6ba7935f996cd2b9a",
+      "zip_integrity": "pass",
+      "bundled_python_matches_source": true
+    },
+    {
+      "path": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 593743,
+      "sha256": "8f8daa19945e6d53e60f41427818897ab1aad38c9e28db17774ec97b32daec35",
+      "zip_integrity": "pass",
+      "bundled_python_matches_source": true
+    }
+  ],
+  "source_sha256": {
+    "Makefile": "5312dcb98bc340233ca1064c31b8b2c26a2ea3036f4b8e6b8630aad8f4bde34f",
+    "include/anchor_world_doll.h": "72e80e345cee9f811802791799bf9e2e092fd3ac69a421d082c7fc9f73b9b0e8",
+    "include/anchor_world_dynamic.h": "5435efe9e462e1c905cf49ec27fecca77db3370a598268d7957513f031c3bd71",
+    "src/anchor_world_doll.c": "03c194d8a0b669197386deefd1e558d6883c7e559cea9244314cab308ba280c2",
+    "src/anchor_world.c": "1ef76e7ceacf54ff871112531d440a7a35528d93b7fc0f76abc5155bd1c2237a",
+    "src/anchor_world_dynamic.c": "9eb96584d03497145f91ec9663c5cd85e710320f1b6e32776c1e761a16d36690",
+    "src/utils/anchor_world_codec.c": "c66ba5f4bf10af5474e1b37a6c6436209686281284d3b370e8fcb057ab9b469d",
+    "src/utils/anchor_world_dynamic_codec.c": "35e09e3cdf349b28606e10e455a5157561cb54622a3492681cb57463b7b54bd6",
+    "py/anchor_world.py": "a1903323a0d7b61d234dd45b1ae16d30a5e30d8172ea2a04ad20ec81c81ca33b",
+    "py/anchor_world_dynamic.py": "737c4a24215a26c13747891d46d78665c4f9d87eb1c439cb83dde3e625786397",
+    "tests/run_world_sync.sh": "695b1c25f2b069221344add2bce0564384aba7ead9aa38e7cd8635e91c1ab7f6",
+    "tests/test_world_doll_native.c": "471ed773400b9af675b4281c33f5a0b1dacbffdff478ba5c316f4b4bb3eb59bb",
+    "tests/test_world_native.c": "c23c8d1a53c11537203a7ebf627a5921725c4bafdd8e752c2fe5551833453011",
+    "tests/test_world_dynamic_native.c": "435b79436f01a2bab6a7f9ed3f1f7bf7f8b0cfa9186c2bb5f2822ba665da17e3",
+    "tests/test_world_doll_transport.py": "1d08fc61a0a2bca8fcdd0c5edaa0d0ade3a9742ca5527437be37e27aeceb95d0",
+    "tools/test_world_doll_anchor_local.py": "ea5cce730f6e0c324c2c8e35b69063a391272b50d55a62b201f67d6aaffa4eca",
+    "docs/world-sync.md": "2eff768636804cb5c9d42e6d51517e255639deb54c53230e7d925c1ffc8a4254",
+    "docs/world-controller-audit-2026-09-16.md": "cdef0ecb653343eef63b455c6dbb52d42f143a5c2ca17be01b9f731c74b9e799",
+    "docs/world-doll-audit-2026-09-19.md": "4a83317d9dcf07f5ed8263e2a71f755e777ffb1ce431c7c594df3128e4037df7",
+    "docs/world-file53-audit-2026-09-19.md": "dd0fbf18bf1fd257d022276258ac81495e6144e3d052bce45490d2077a62fe10",
+    "docs/world-quest-native-audit-2026-09-19.md": "376f36e7c06bd48149125eaaa6e2f894159806a0c5bb483c7e344b30f91a7d5f"
+  },
+  "limitations": [
+    "No fresh two-client game run; native hooks/resources/collision and visual fidelity need playtest in both rooms.",
+    "Universal coverage remains unfinished: File53, File46 Koryuta, File62 Kihachi, File67 travel flags and File74/75 coupled scenes remain under investigation.",
+    "No publication or deployment performed."
+  ],
+  "followup_audit": {
+    "path": "docs/world-file53-audit-2026-09-19.md",
+    "status": "Native graph and durable dialogue commit verified; shared visuals and scene handoff remain unimplemented",
+    "reference_build": "pass",
+    "reference_tests": 34,
+    "reference_site_errors": 0,
+    "browser": "Verified rendered gateway-coupled-scene-lifetime table; temporary tab closed and server stopped",
+    "logs": [
+      "/tmp/mnsg-file53-docs-build.log",
+      "/tmp/mnsg-file53-docs-tests.log"
+    ]
+  }
+}

@@ -1,4 +1,4 @@
-#include "anchor_render_scratch.h"
+#include "combat/anchor_render_scratch.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -369,7 +369,7 @@ static void alternative_object_is_budgeted_and_redirected(void)
     s_alternative = 0;
 }
 
-static void alternative_object_with_failed_budget_stays_visible(void)
+static void alternative_object_with_failed_budget_skips_draw(void)
 {
     unsigned int *head;
     unsigned char *matrix;
@@ -385,8 +385,8 @@ static void alternative_object_with_failed_budget_stays_visible(void)
     matrix = D_80168504_169104;
     memcpy(old, s_objects.bytes, sizeof(old));
     anchor_render_scratch_begin_object(s_objects.bytes);
-    /* An alternative object whose budget fails is left visible for the native draw. */
-    assert((s_objects.bytes[0x64] & 1u) == 0);
+    /* A failed budget skips the native draw without changing persistent visibility. */
+    assert(s_objects.bytes[0x64] & 1u);
     anchor_render_scratch_end_object();
     assert(memcmp(old, s_objects.bytes, sizeof(old)) == 0);
     assert(D_8015C5CC_15D1CC == head && D_80168504_169104 == matrix);
@@ -394,7 +394,7 @@ static void alternative_object_with_failed_budget_stays_visible(void)
     s_alternative = 0;
 }
 
-static void single_segment_alternative_pointer_stays_visible(void)
+static void single_segment_alternative_pointer_skips_draw(void)
 {
     unsigned int *head;
     unsigned char *matrix;
@@ -403,8 +403,8 @@ static void single_segment_alternative_pointer_stays_visible(void)
     setup_native();
     /* The single-segment composite stamps +0x2c = 0x08000000 | header offset
      * and keeps a clothed context. The budget preflight only walks 0x60000000
-     * model pointers, so an alternative draw is never redirected: the fallback must
-     * leave it visible and reserve no scratch. */
+     * model pointers, so an unsupported alternative draw is skipped without
+     * reserving scratch. */
     word(s_objects.bytes, 0x2c, 0x08002100u);
     word(s_objects.bytes, 0x30, 0xc01fc680u);
     s_alternative = 1;
@@ -412,7 +412,7 @@ static void single_segment_alternative_pointer_stays_visible(void)
     matrix = D_80168504_169104;
     memcpy(old, s_objects.bytes, sizeof(old));
     anchor_render_scratch_begin_object(s_objects.bytes);
-    assert((s_objects.bytes[0x64] & 1u) == 0);
+    assert(s_objects.bytes[0x64] & 1u);
     anchor_render_scratch_end_object();
     assert(memcmp(old, s_objects.bytes, sizeof(old)) == 0);
     assert(D_8015C5CC_15D1CC == head && D_80168504_169104 == matrix);
@@ -429,8 +429,8 @@ int main(void)
     exhaustion_skips_only_the_draw_and_preserves_colliders();
     invitation_reserves_native_window_commands();
     alternative_object_is_budgeted_and_redirected();
-    alternative_object_with_failed_budget_stays_visible();
-    single_segment_alternative_pointer_stays_visible();
+    alternative_object_with_failed_budget_skips_draw();
+    single_segment_alternative_pointer_skips_draw();
     puts("Render scratch and native preflight tests passed");
     return 0;
 }

@@ -1,4 +1,4 @@
-#include "anchor_projectile_motion.h"
+#include "combat/anchor_projectile_motion.h"
 
 #include <assert.h>
 #include <math.h>

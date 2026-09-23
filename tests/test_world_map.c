@@ -1,6 +1,6 @@
 #define ANCHOR_WORLD_MAP_HOST_TEST
 
-#include "../src/anchor_world_map.c"
+#include "../src/world/anchor_world_map.c"
 
 #include <assert.h>
 #include <stdio.h>

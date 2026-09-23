@@ -6,7 +6,7 @@ reuse, expiry, and Off / Important / All filters are retained. Unknown checks
 and unavailable resources keep their text and hide the icon, including when a
 slot previously displayed an icon. No images are imported into the mod package.
 
-The 39 recipes in `include/anchor_rom_icon_defs.inc` load 25 original ROM sheets
+The 39 recipes in `include/ui/anchor_rom_icon_defs.inc` load 25 original ROM sheets
 through `func_80014698_15298` and `func_800144E8_150E8`. Resource ID, stored ROM
 address, and packed size are checked before the native decoder writes. All
 sheets decode to 4096 bytes; separate aligned scratch holds the largest packed

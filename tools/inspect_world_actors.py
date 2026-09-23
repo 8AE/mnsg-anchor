@@ -49,5 +49,5 @@ if __name__=='__main__':
     content='/* Derived from verified native path opcode boundaries. Regenerate with tools/inspect_world_actors.py. */\nstatic const unsigned char world_path_pc[163][32] = {\n'
     content+=''.join('    {'+','.join(str(v) for v in row)+'}, /* '+str(i)+' */\n' for i,row in enumerate(rows))+'};\n'
     if a.write:a.write.write_text(content)
-    else:assert Path('include/anchor_world_paths.inc').read_text()==content
+    else:assert Path('include/world/anchor_world_paths.inc').read_text()==content
     print('Verified 163 NPC path instruction masks')

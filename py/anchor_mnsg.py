@@ -33,7 +33,7 @@ Key packet types received from the server:
   REQUEST_TEAM_STATE - A teammate is requesting the full team state.
   <custom type>      - Custom packet broadcast by another client.
 
-Item-sync protocol (implemented in src/item_sync.c):
+Item-sync protocol (implemented in src/progression/item_sync.c):
   On connect with a valid save:
     1. anchor_mnsg.request_team_state() is called so the server delivers
        the compact team snapshot followed by queued SET_FLAG deltas.
@@ -87,6 +87,8 @@ import anchor_impact
 import anchor_impact_visual
 import anchor_impact_sound
 import anchor_world
+import anchor_world_dynamic
+import anchor_world_quest
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -111,6 +113,7 @@ _server_message: str = ""
 
 # Map of clientId -> client state dict, updated from ALL_CLIENT_STATE packets.
 _player_states: "dict[int, dict]" = {}
+_world_roster_session: int = 0
 _player_states_lock = threading.Lock()
 
 # Lock protecting _sock writes to prevent concurrent send races.
@@ -176,6 +179,8 @@ _impact_players = anchor_impact.ImpactPlayerTransport()
 _impact_visuals = anchor_impact_visual.ImpactVisualTransport()
 _impact_sounds = anchor_impact_sound.ImpactSoundTransport()
 _world = anchor_world.WorldTransport()
+_world_actors = anchor_world_dynamic.DynamicTransport(_world)
+_world_quest = anchor_world_quest.QuestTransport(_world)
 _impact_debug_str: str = ""
 
 ###############################################################################
@@ -215,6 +220,8 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     anchor_tsurami.PACKET_TYPE: 8 * 1024,
     anchor_impact.PACKET_TYPE: 8 * 1024,
     anchor_world.PACKET_TYPE: anchor_world.PACKET_BYTES,
+    anchor_world_dynamic.PACKET_TYPE: anchor_world_dynamic.PACKET_BYTES,
+    anchor_world_quest.PACKET_TYPE: anchor_world_quest.PACKET_BYTES,
     anchor_impact.PLAYER_PACKET_TYPE: anchor_impact.PLAYER_PACKET_BYTES,
     anchor_impact_visual.PACKET_TYPE: anchor_impact_visual.PACKET_BYTES,
     anchor_impact_sound.PACKET_TYPE: anchor_impact_sound.PACKET_BYTES,
@@ -655,7 +662,7 @@ def _merge_client_state(
 
 def _replace_all_client_states(states: list) -> None:
     """Apply membership metadata without popping live same-room transforms."""
-    global _client_id
+    global _client_id, _world_roster_session
 
     with _player_states_lock:
         previous_players = dict(_player_states)
@@ -667,6 +674,8 @@ def _replace_all_client_states(states: list) -> None:
             if member.get("self"):
                 _client_id = cid
             client_state = member.get("clientState", member)
+            if member.get("self") and client_state.get("interactionSession") == _interaction_session:
+                _world_roster_session = _interaction_session
             room_id = int(client_state.get("currentRoomId", -1))
             previous = previous_players.get(cid, {})
             name = (client_state.get("name", "") or
@@ -1064,6 +1073,14 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_boss_arena(packet)
                     continue
 
+                if ptype == anchor_world_dynamic.PACKET_TYPE:
+                    with _player_states_lock:
+                        _world_actors.receive(_boss_context(), packet, time.monotonic())
+                    continue
+                if ptype == anchor_world_quest.PACKET_TYPE:
+                    with _player_states_lock:
+                        _world_quest.receive(_boss_context(), packet, time.monotonic())
+                    continue
                 if ptype == anchor_world.PACKET_TYPE:
                     with _player_states_lock:
                         _world.receive(_boss_context(), packet, time.monotonic())
@@ -1212,6 +1229,8 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _impact_visuals.reset()
         _impact_sounds.reset()
         _world.reset()
+        _world_actors.reset()
+        _world_quest.reset()
 
 
 ###############################################################################
@@ -3779,6 +3798,60 @@ def _decode_png_rgba(png: bytes) -> bytes:
     return _struct.pack(">II", width, height) + bytes(rgba)
 
 
+def update_world_actors(state_json: str) -> str:
+    supplied = {}
+    if isinstance(state_json, str) and len(state_json.encode()) <= anchor_world_dynamic.STATE_BYTES:
+        try:
+            supplied = json.loads(state_json)
+        except (ValueError, RecursionError):
+            pass
+    if not isinstance(supplied, dict):
+        supplied = {}
+    now = time.monotonic()
+    with _player_states_lock:
+        result, packets = _world_actors.update(_boss_context(), supplied.get('a', []), now)
+    success = True
+    for packet in packets:
+        success = _send_raw(packet) and success
+    with _player_states_lock:
+        _world_actors.sent(packets, success, now)
+        result = _world_actors.native_result(result)
+    return json.dumps(result, separators=(',', ':'))
+
+
+def update_world_quest(sources_json: str, status_json: str) -> str:
+    """Exchange complete room-scoped quest visuals with the native adapter.
+
+    An empty reply means that another room member has not supplied a complete
+    snapshot yet. The C caller must leave existing native proxies untouched.
+    """
+    def rows(value):
+        if not isinstance(value, str) or len(value.encode()) > anchor_world_quest.STATE_BYTES:
+            return None
+        try:
+            parsed = json.loads(value)
+        except (ValueError, RecursionError):
+            return None
+        return parsed.get('a') if isinstance(parsed, dict) else None
+
+    sources, status = rows(sources_json), rows(status_json)
+    if sources is None or status is None:
+        return ''
+    now = time.monotonic()
+    with _player_states_lock:
+        result, packets = _world_quest.update(_boss_context(), sources, status, now)
+    success = True
+    for packet in packets:
+        if not _send_raw(packet):
+            success = False
+            break
+    with _player_states_lock:
+        _world_quest.sent(packets, success, now)
+    if not result['ready']:
+        return ''
+    return json.dumps({'a': result['a']}, separators=(',', ':'))
+
+
 def update_world(room: int, signature: int, visit: int, state_json: str) -> str:
     """One bounded native checkpoint exchange, coalesced off the event FIFO."""
     supplied = {}
@@ -3791,7 +3864,8 @@ def update_world(room: int, signature: int, visit: int, state_json: str) -> str:
         supplied = {}
     now = time.monotonic()
     with _player_states_lock:
-        result, packets = _world.update(_boss_context(), room, signature, visit,
+        context = dict(_boss_context(),worldRosterReady=_world_roster_session == _interaction_session)
+        result, packets = _world.update(context, room, signature, visit,
             supplied.get('a', []), supplied.get('d', '00' * 32), now)
         dirty = _world.dirty
     if dirty and _connected:

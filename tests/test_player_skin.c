@@ -8,7 +8,7 @@
 #include <string.h>
 
 #define ANCHOR_PLAYER_SKIN_HOST_TEST
-#include "../src/alternative_ebisumaru/anchor_player_skin.c"
+#include "../src/player/alternative_ebisumaru/anchor_player_skin.c"
 
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "%s:%d: %s\n", __func__, __LINE__, #condition); return 1; \

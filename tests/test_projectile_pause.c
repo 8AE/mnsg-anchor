@@ -10,7 +10,7 @@
 #define RECOMP_HOOK(name)
 #define RECOMP_HOOK_RETURN(name)
 #define recomp_free free
-#include "../src/anchor_projectiles.c"
+#include "../src/combat/anchor_projectiles.c"
 
 void *D_801FC604_5B8514;
 void *D_801FC60C_5B851C;

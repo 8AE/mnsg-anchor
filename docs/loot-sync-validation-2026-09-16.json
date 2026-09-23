@@ -1,0 +1,54 @@
+{
+  "date": "2026-09-16",
+  "scope": "Enemy/container loot registration, shared claims/removal and private health/ryo rewards",
+  "playtest": "Screen Recording 2026-09-16 at 20.35.34.mov",
+  "cause": "Linked shadow binder calls overwrote the primary coin/health clip with slot 0, failing dynamic classification.",
+  "changes": [
+    "Track static model binding only for the primary object",
+    "Restore native 0x8000 loot orientation",
+    "Exclude actual capped pickup gains from legacy health/ryo delta sharing"
+  ],
+  "validation": {
+    "previousCodeRegression": "Native shadow-registration assertion fails on pre-fix implementation",
+    "worldNative": "Passed with UBSan and release float flags",
+    "worldPython": 43,
+    "fullPython": {
+      "run": 313,
+      "skipped": 1,
+      "failed": 0
+    },
+    "loopbackTCP": {
+      "actors": 128,
+      "parts": 11,
+      "maxPacketBytes": 2366,
+      "checks": [
+        "late entry",
+        "duplicate rejection",
+        "sender/team isolation",
+        "guest pickup claim and commit",
+        "award waits for send",
+        "disconnect/handoff"
+      ]
+    },
+    "releaseAndDebug": "Passed, including collision dispatch and package integrity",
+    "nativeReference": {
+      "build": "Passed",
+      "tests": 34
+    }
+  },
+  "limitations": [
+    "No fresh two-client gameplay run of these final packages has been performed by the agent. Native harnesses substitute game calls."
+  ],
+  "packages": [
+    {
+      "path": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 521338,
+      "sha256": "dcf00b1d5114a0ce5fbe40767d8a53c2794b2085bdc66008498eef06633f23a1"
+    },
+    {
+      "path": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 521678,
+      "sha256": "fa77f4ce758be0d3b6242bdc0e6f82db3393e7978404f3f46667ec6d1b6323e5"
+    }
+  ]
+}

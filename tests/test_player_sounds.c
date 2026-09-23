@@ -25,7 +25,7 @@ int anchor_player_models_peek_epoch(void);
 int anchor_player_models_peek_scripted(void);
 int anchor_player_models_is_local_sound_task(const void *task);
 
-#include "../src/anchor_player_sounds.c"
+#include "../src/player/anchor_player_sounds.c"
 
 typedef struct MockSound
 {

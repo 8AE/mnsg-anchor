@@ -10,7 +10,7 @@
 #define RECOMP_HOOK_RETURN(name)
 void recomp_free(void *memory);
 int recomp_printf(const char *format, ...);
-#include "../src/boss_sync.c"
+#include "../src/bosses/boss_sync.c"
 
 typedef union TestActor { void *align; unsigned char bytes[0x200]; } TestActor;
 unsigned short D_800C7AB2;

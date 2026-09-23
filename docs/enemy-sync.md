@@ -107,7 +107,7 @@ signature rejects clients whose room layout differs (randomizers, version
 mismatch), and the actor id prevents a recycled address from matching the wrong
 enemy. Bosses, reward controllers, spawners, projectiles, hazards and
 destructibles are excluded by an explicit sorted actor-id table in
-`src/enemy_sync.c`.
+`src/world/enemy_sync.c`.
 
 ## Native integration
 

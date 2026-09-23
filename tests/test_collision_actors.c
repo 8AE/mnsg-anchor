@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "anchor_collision_actors.h"
+#include "combat/anchor_collision_actors.h"
 
 /* Native pointer words retain their 32-bit layout on a 64-bit host. */
 unsigned char D_8006D328_6DF28[0x20] __attribute__((aligned(16)));

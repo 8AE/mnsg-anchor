@@ -1,4 +1,4 @@
-#include "utils/anchor_impact_codec.h"
+#include "bosses/impact/anchor_impact_codec.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

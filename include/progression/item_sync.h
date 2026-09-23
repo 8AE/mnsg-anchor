@@ -1,0 +1,17 @@
+#ifndef MNSG_ITEM_SYNC_H
+#define MNSG_ITEM_SYNC_H
+
+int item_sync_save_is_loaded(void);
+unsigned int item_sync_local_player_health(void);
+unsigned int item_sync_local_player_ryo(void);
+void item_sync_exclude_pvp_damage(unsigned int damage);
+void item_sync_exclude_loot_reward(unsigned int health, unsigned int ryo);
+void item_sync_apply_benkei_postfight_state(void);
+void item_sync_mark_boss_defeat_announced(const char *flag_name);
+void item_sync_commit_boss_completion(const char *flag_name);
+
+void item_sync_force_flag(const char *name);
+void item_sync_force_flag_val(const char *name, int value);
+int item_sync_write_local_flag_val(const char *name, int value);
+
+#endif

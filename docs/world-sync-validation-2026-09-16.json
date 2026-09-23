@@ -1,0 +1,93 @@
+{
+  "date": "2026-09-16",
+  "baseCommit": "aab796626799533a160c98724d464918b4a86687",
+  "worldProtocolVersion": 2,
+  "placedRowWords": 39,
+  "dynamicRowWords": 74,
+  "checks": {
+    "python": {
+      "tests": 312,
+      "skipped": 1,
+      "result": "pass"
+    },
+    "nativeWorld": {
+      "result": "pass",
+      "implementation": "actual C with native-call substitutes",
+      "sanitizer": "UBSan",
+      "floatFlags": "release -ffast-math -fno-unsafe-math-optimizations"
+    },
+    "impactRegression": {
+      "result": "pass",
+      "pythonTests": 47,
+      "nativeHarnesses": true
+    },
+    "nativePathMasks": {
+      "result": "pass",
+      "routes": 163
+    },
+    "documentation": {
+      "build": "pass",
+      "tests": 34,
+      "publication": "not requested"
+    },
+    "placedTcp": {
+      "result": "pass",
+      "clients": 3,
+      "actors": 256,
+      "parts": 11,
+      "maxPacketBytes": 2667
+    },
+    "dynamicTcp": {
+      "ok": true,
+      "actors": 128,
+      "parts": 11,
+      "max_packet_bytes": 2366,
+      "checks": [
+        "atomic late-entry current state",
+        "duplicate rejection",
+        "sender exclusion",
+        "team isolation",
+        "pickup claim/commit",
+        "native award waits for commit send",
+        "origin disconnect/handoff"
+      ]
+    },
+    "packetAudit": "reviewed as supplemental static inventory",
+    "build": "release and debug pass"
+  },
+  "limits": {
+    "liveTwoClientGameTest": false,
+    "universalCoverage": false,
+    "remaining": [
+      "Room-specific puzzle and temporary-room-flag controllers",
+      "Custom scripted NPC continuations beyond common dialogue/path state",
+      "Minigame and cutscene controls remain local",
+      "Repeated scripted NPC rebirths at the same descriptor need game testing"
+    ],
+    "dynamicRecords": 128,
+    "placedRosterEntries": 256,
+    "removalHistory": 4096,
+    "largestNumericDefaultTeamPacketBytes": 5475
+  },
+  "anchor": {
+    "revision": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "listener": "127.0.0.1:45387",
+    "isolation": "disposable checkout and private test rooms"
+  },
+  "artifacts": [
+    {
+      "path": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 521252,
+      "sha256": "59596c7b1afe4f730ecc389a759ed2a6f0ff40e455db4abdea84560c133b7325",
+      "zipIntegrity": true,
+      "embeddedDynamicPythonMatchesSource": true
+    },
+    {
+      "path": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 521470,
+      "sha256": "a7f620ecb2e9c66d9f4ce36705b4073dfb3ed71818ed7e21d0ed29e480525630",
+      "zipIntegrity": true,
+      "embeddedDynamicPythonMatchesSource": true
+    }
+  ]
+}

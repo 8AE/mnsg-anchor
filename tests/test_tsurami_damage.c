@@ -15,7 +15,7 @@ static void write_pointer(void *record, unsigned int offset, void *value)
 }
 #define TSURAMI_READ_POINTER(p, off) read_pointer(p, off)
 #define TSURAMI_WRITE_POINTER(p, off, value) write_pointer(p, off, value)
-#include "../src/anchor_tsurami_damage.c"
+#include "../src/bosses/tsurami/anchor_tsurami_damage.c"
 
 #define CHECK(test) do { if (!(test)) { \
     fprintf(stderr, "%s:%d: %s\n", __func__, __LINE__, #test); return 1; \

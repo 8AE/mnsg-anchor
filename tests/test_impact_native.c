@@ -4,7 +4,7 @@
 #define ANCHOR_IMPACT_READ_PTR(p, o) TP(p, o)
 #define ANCHOR_IMPACT_AI(p) TU32(p, 0x0C)
 #define ANCHOR_IMPACT_SET_AI(p, v) (TU32(p, 0x0C) = (v))
-#include "../src/anchor_impact_native.c"
+#include "../src/bosses/impact/anchor_impact_native.c"
 
 static unsigned char state[0x300], system_data[0x40000];
 static unsigned int task[0x100], object[0x80], hand[0x80];

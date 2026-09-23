@@ -1,0 +1,154 @@
+{
+  "date": "2026-09-16T23:32:50.667238-04:00",
+  "worldSyncVersion": 6,
+  "universalCoverage": false,
+  "completedInThisPass": [
+    "File_44 0x228: gated initialization, one-time definition decode, origin/destination motion and native model selection",
+    "File_44 0x1FE: local fire ownership, shake, melt/wait/reform phases, timer, direction and tint",
+    "Parent-owned collider reconstruction with local pointers, generation checks, pool reuse and culling cleanup",
+    "Resource-gated initialization and allocation retry without double decode",
+    "Gate-open pre-initializer checkpoint preserves its temporary flag and activation rank",
+    "All 33 placed 0x1F4 records classified as static geometry"
+  ],
+  "nativeChecks": {
+    "command": "bash tests/run_world_sync.sh",
+    "result": "passed",
+    "implementation": "Production C under UBSan and release floating-point flags; native game routines substituted in host harness",
+    "focusedPythonTests": 56,
+    "scenarios": [
+      "gate-open before initialization",
+      "initialized checkpoint rejects stale gate state",
+      "native model wave missing",
+      "one-time parameter decode",
+      "child allocation retry",
+      "all melt phases and shake checkpoint",
+      "packed tint reconstructs local display list",
+      "child origin and collision state",
+      "mismatched definition rejected",
+      "local fire defeats stale remote pose",
+      "child generation mismatch",
+      "pool reuse detaches parent",
+      "parent culling retires child",
+      "retained reload restores parent and child",
+      "sync reset leaves native child alive"
+    ]
+  },
+  "pythonTests": {
+    "run": 326,
+    "skipped": 1,
+    "failures": 0
+  },
+  "builds": {
+    "release": "passed",
+    "debug": "passed",
+    "collisionDispatchChecks": "passed",
+    "warnings": [
+      "Existing unused notif_ensure_init in src/ui/anchor_ui.c:90"
+    ]
+  },
+  "loopbackTCP": {
+    "listener": "127.0.0.1:45387",
+    "serverRevisionFromPreviousSetup": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "placed": {
+      "ok": true,
+      "actors": 256,
+      "parts": 11,
+      "max_packet_bytes": 3171,
+      "checks": [
+        "NUL framing",
+        "atomic reordered batch",
+        "roster-validated root identity",
+        "sender exclusion",
+        "team isolation",
+        "pickup tombstones",
+        "interaction ownership",
+        "peer expiry",
+        "door traveller departure",
+        "door reverse late entry",
+        "door closed checkpoint",
+        "native NPC continuation checkpoint",
+        "switch and mechanism checkpoints",
+        "switch activation overrides older observer",
+        "pause presence after ownership handoff",
+        "save-aware constructor yields to moving checkpoint",
+        "linked platform child and tint checkpoint",
+        "local fire ownership",
+        "gate-open checkpoint before model initialization"
+      ]
+    },
+    "dynamic": {
+      "ok": true,
+      "actors": 128,
+      "parts": 11,
+      "max_packet_bytes": 2582,
+      "checks": [
+        "atomic late-entry current state",
+        "duplicate rejection",
+        "sender exclusion",
+        "team isolation",
+        "pickup claim/commit",
+        "native award waits for commit send",
+        "origin disconnect/handoff"
+      ]
+    },
+    "cleanup": "All test sockets closed and disposable server stopped"
+  },
+  "packetBudget": {
+    "route": "transient targetTeamId; no offline queue",
+    "rowWords": 48,
+    "rowsPerPacket": 24,
+    "maxParts": 11,
+    "maxPacketBytes": 8192,
+    "steadyChangedHz": 5,
+    "unchangedHz": 1,
+    "edgeFloorMs": 50
+  },
+  "packetAudit": {
+    "paths": [
+      "py",
+      "src"
+    ],
+    "literalSends": 17,
+    "errors": 0,
+    "warnings": 0
+  },
+  "nativeReference": {
+    "build": "passed",
+    "tests": 34,
+    "validationErrors": [],
+    "table": "D_8015CDE0#world-mechanism-state",
+    "published": false
+  },
+  "packages": [
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 536145,
+      "sha256": "ceefddefe48cb534cc1d4786428668d0a18eb38e5efaa47cc5daac5927e4eff1",
+      "zipIntegrity": "passed",
+      "worldPythonSources": "matched"
+    },
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 536355,
+      "sha256": "5bd72fcf31fa5c5659bbd87f66461611be5c5e2c395fe70c610d037e81bd7eeb",
+      "zipIntegrity": "passed",
+      "worldPythonSources": "matched"
+    }
+  ],
+  "sourceSha256": {
+    "src/anchor_world.c": "89c8c7d96a40c823761017462fbd5764d88f0f692c4fa16828d3c11a9f400ad7",
+    "src/utils/anchor_world_codec.c": "fa3a65249d3c071b44130d91a07e799c7150dd86b0a0d2c9567772e6b17015a5",
+    "py/anchor_world.py": "fe0d9cbb2a6efc80185eee024258af5bb15253e5d3da04d295a09c0a675d7dc8",
+    "tests/test_world_native.c": "e1a0175816516f61c4ee4fb5668b78c59a8abd074605c8a60b78470634bb137b",
+    "tests/test_world_transport.py": "78e746e427039e644a22ad09ae40aecaffa7f0093e2f0f3dc3d3e248119a4c1e",
+    "tools/test_world_anchor_local.py": "9c1f83b7b015e832a9ad57a6f0134f90ba7766fc31f84c060a9ede03c0a86497"
+  },
+  "remaining": [
+    "Explicit incumbent/bootstrap acknowledgment for already-initialized cyclic actors on lower-ID late entry",
+    "Room-specific controller graphs and child identities in world-controller-audit-2026-09-16.md",
+    "Scripted NPC continuations outside the implemented common/File_59 paths",
+    "Dynamic invocation audit for gated 0x1F4 and unused File_50 timer/reset paths",
+    "Full placed/dynamic family classification",
+    "Fresh two-client in-game verification"
+  ]
+}

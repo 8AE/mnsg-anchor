@@ -1,0 +1,240 @@
+{
+  "date": "2026-09-19",
+  "scope": "File24 placed spike floors and jump ropes; File67 local travel-choice/cue flags",
+  "world_protocol": 14,
+  "base_commit": "40a500150db2ff8ebfc7f55f0d320ebedbac9a4e",
+  "git_state": "Intentional prior uncommitted work preserved; no commit, push, publication or runtime mod install performed",
+  "changes": {
+    "spikes": {
+      "entity": "0x3CA",
+      "placements": 46,
+      "rooms": [
+        "0x32",
+        "0x34",
+        "0x3A"
+      ],
+      "variant": 27,
+      "marker": 76
+    },
+    "ropes": {
+      "entity": "0x1AA",
+      "placements": 6,
+      "room": "0x41",
+      "variant": 28,
+      "marker": 77
+    },
+    "local_travel_flags": [
+      "0x6B fl_outerspace",
+      "0x6C fl_to_space"
+    ]
+  },
+  "checks": [
+    {
+      "command": "bash tests/run_world_sync.sh",
+      "result": "pass",
+      "native_harnesses": 6,
+      "python_world_tests": 150,
+      "log": "/tmp/mnsg-file24-world-tests.log"
+    },
+    {
+      "command": "PYTHONPATH=py python3 -m unittest discover -s tests -p 'test_*.py'",
+      "result": "pass",
+      "run": 420,
+      "passed": 419,
+      "skipped": 1,
+      "skip": "Existing projectile loopback listener test is unavailable in the sandbox",
+      "log": "/tmp/mnsg-file24-python-tests.log"
+    },
+    {
+      "command": "python3 tests/test_world_local_scene_flags.py --source /tmp/mnsg-world-sync/item-sync-before-local-scene-flags.c --expect-fail",
+      "result": "baseline failed the intended 9 assertions; current production regression passed",
+      "logs": [
+        "/tmp/mnsg-travel-before.log",
+        "/tmp/mnsg-travel-regression.log"
+      ]
+    },
+    {
+      "command": "python3 tools/test_world_spike_anchor_local.py --port 45387 --family spike",
+      "result": {
+        "ok": true,
+        "family": "spike",
+        "max_packet_bytes": 728,
+        "checks": [
+          "lower-ID late entry waits for applied receipt",
+          "independent placed identities",
+          "paused reverse frame and timer preserved",
+          "unpaused owner handoff",
+          "owner disconnect continuity",
+          "duplicate rejection",
+          "sender exclusion",
+          "team isolation",
+          "bounded transient team packets"
+        ],
+        "native_receipts": "simulated; no in-game renderer/contact execution"
+      }
+    },
+    {
+      "command": "python3 tools/test_world_spike_anchor_local.py --port 45387 --family rope",
+      "result": {
+        "ok": true,
+        "family": "rope",
+        "max_packet_bytes": 732,
+        "checks": [
+          "lower-ID late entry waits for applied receipt",
+          "independent placed identities",
+          "full 16-bit rotation preserved",
+          "unpaused owner handoff",
+          "owner disconnect continuity",
+          "duplicate rejection",
+          "sender exclusion",
+          "team isolation",
+          "bounded transient team packets"
+        ],
+        "native_receipts": "simulated; no in-game renderer/contact execution"
+      }
+    },
+    {
+      "command": "python3 tools/audit_world_coverage.py /Users/ahmad/git/Goemon64Recomp/mnsg.us.decompressed.z64 --output /tmp/mnsg-world-sync/production-placement-coverage-2026-09-19.json",
+      "result": "all46spikes and6ropes match production placed-world classification",
+      "log": "/tmp/mnsg-file24-placement-audit.log"
+    },
+    {
+      "command": "python3 ~/.codex/skills/mnsg-anchor-network/scripts/audit_anchor_packets.py .",
+      "literal_sends": 22,
+      "errors": 0,
+      "warnings": 0,
+      "log": "/tmp/mnsg-file24-packet-audit.log"
+    },
+    {
+      "command": "./build_mod.sh -j4",
+      "result": "release and debug packages built; both collision-dispatch checks passed",
+      "warnings": "Existing unused notif_ensure_init warning in both variants",
+      "log": "/tmp/mnsg-file24-build.log"
+    },
+    {
+      "command": "npm run build && npm test in sibling mnsg-documentation",
+      "result": "34 tests pass; 0 site-validation errors;310 native API pages",
+      "logs": [
+        "/tmp/mnsg-file24-reference-build.log",
+        "/tmp/mnsg-file24-reference-test.log"
+      ],
+      "browser": "Both new function pages, exact-symbol and semantic value searches, and rendered spike/rope field tables verified in the local browser; temporary tabs closed",
+      "example_check": "Both new C observation examples passed MIPS clang syntax-only checks against project headers"
+    },
+    {
+      "command": "git diff --check in both repositories",
+      "result": "pass"
+    }
+  ],
+  "local_anchor": {
+    "listener": "127.0.0.1:45387",
+    "server_go_sha256": "de5ad21c2b521d3beeb4da11c6559746184084581e45336c9ea4d19fd8030283",
+    "prior_setup_revision": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "git_revision_note": "Prior setup provenance; scratch checkout has no git metadata. Inspected current source was executed with go run.",
+    "peers_per_case": 3,
+    "teams": 2,
+    "native_receipts": "simulated",
+    "stopped": true,
+    "log": "/tmp/mnsg-file24-anchor-server.log",
+    "server_log_note": "Startup banner still names upstream43383; inspected listener and actual tests use127.0.0.1:45387. Shutdown emitted its normal goroutine dump and closed-listener message."
+  },
+  "traffic_budget": {
+    "route": "MNSG_WORLD: assigned root clientId, quiet targetTeamId, transient latest state, no offline queue",
+    "cadence": "200ms changed-state checkpoints;50ms hard edge floor;unchanged keepalive1s",
+    "per_packet_cap": 8192,
+    "rows_per_packet": 24,
+    "max_parts": 11,
+    "synthetic_extreme_coordinates": {
+      "21_spikes": {
+        "packets": 1,
+        "bytes": 3458,
+        "bytes_per_second_at_5hz": 17290,
+        "bytes_per_second_at_20hz_bound": 69160
+      },
+      "6_ropes": {
+        "packets": 1,
+        "bytes": 1332,
+        "bytes_per_second_at_5hz": 6660,
+        "bytes_per_second_at_20hz_bound": 26640
+      }
+    },
+    "fanout": "Per-sender egress is multiplied by T-1 same-team peers; estimates exclude other world families, TCP overhead, metadata and roster updates. Not a capacity/stress claim."
+  },
+  "packages": [
+    {
+      "path": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 596038,
+      "sha256": "8c6a4591f0522d3f439ec0a1a6b44e8dc4d73fcb7f13db4a4e6782a22fc67456",
+      "zip_integrity": "pass",
+      "bundled_python_matches_source": true,
+      "verified_python_files": [
+        "anchor_mnsg.py",
+        "anchor_impact_visual.py",
+        "anchor_impact_sound.py",
+        "anchor_world_npc.py",
+        "anchor_world_dynamic.py",
+        "anchor_tsurami.py",
+        "anchor_impact.py",
+        "anchor_dharumanyo.py",
+        "anchor_congo.py",
+        "anchor_world.py",
+        "anchor_boss_transport.py"
+      ]
+    },
+    {
+      "path": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 595900,
+      "sha256": "f022b9edb2a4c2c2f387580c1a65d0801ab93569a1a790249cb3ac224c93968d",
+      "zip_integrity": "pass",
+      "bundled_python_matches_source": true,
+      "verified_python_files": [
+        "anchor_mnsg.py",
+        "anchor_impact_visual.py",
+        "anchor_impact_sound.py",
+        "anchor_world_npc.py",
+        "anchor_world_dynamic.py",
+        "anchor_tsurami.py",
+        "anchor_impact.py",
+        "anchor_dharumanyo.py",
+        "anchor_congo.py",
+        "anchor_world.py",
+        "anchor_boss_transport.py"
+      ]
+    }
+  ],
+  "source_sha256": {
+    "src/anchor_world.c": "a0844434badd7389a3fd766fd52a114b8f6602dfc5fa5f7724c72d493b91290e",
+    "include/anchor_world.h": "66383b52496e5ddad123ff7b3136647acbfb36860e7b80bb265e3c54c5b26c1e",
+    "src/utils/anchor_world_codec.c": "cec93f5811b254bc2322ac0248f129cd5f730ab2898d23e9c45742abcce48b93",
+    "py/anchor_world.py": "2ae9b4ada289684fefb71201bb17f33b71d2e3d577c0063b3b85daf49073376a",
+    "src/item_sync.c": "7d014fc5e590ae8e01e90da0425f8e8232c882857303b8ac46f78c8b76339097",
+    "src/ui/debug.c": "e03e26e5f274ed6b15bd4f11ec17bff84e97e4b9ac0f62ebc25f460b67ae3e7a",
+    "tests/test_world_native.c": "155b70db907fa52485daacbd5200988ac36f94d0c084675677ecc61f041d50c5",
+    "tests/test_world_spike.py": "2f58c972e93b61a7f9c7ae30d0086a2f08d19d77ae74520ec4b5e9156ac0c56d",
+    "tests/test_world_rope.py": "83941c8561fc9ad64385bbecbe09d7359e36f8ad37d6bb615b3ec6e68f1ccf0f",
+    "tests/test_item_scene_flags.c": "f5c10595d814f4d004587ccf7cffe893080496bdaa1aefa84f55e3459396d792",
+    "tests/test_world_local_scene_flags.py": "437940fc4f812c0652ca27b7068c720071ab8d7b9728a896a8240eea67d19228",
+    "tests/run_world_sync.sh": "695b1c25f2b069221344add2bce0564384aba7ead9aa38e7cd8635e91c1ab7f6",
+    "tools/test_world_spike_anchor_local.py": "fe581b89dc71bd086b81811f5d1e503e04ede8841d53d1632d756690589b350d",
+    "tools/audit_world_coverage.py": "4b5e61caa1899830b98f16befffb78cb651a618d42fa2727c38b107bd340f2c9",
+    "tools/inspect_world_roster.py": "2d4ec33b67e2da8b3d0c5da178965eb43a3a54ddf068c914571553bd1a47dd81",
+    "docs/world-sync.md": "2dcfa5bbbfe4ad74868c5090987fd07f47475774764c92d27b35322f1ea1f1fb",
+    "docs/world-spike-audit-2026-09-19.md": "592cbb94d7ee480341a96eefa94a9df24d50b49920c0496f67d264ec5ddae8d2",
+    "docs/world-rope-audit-2026-09-19.md": "325a3132bac44800696430b49f6d0021b7a849c1ec2b6779c50b37b8dafc07d6",
+    "docs/world-travel-flags-audit-2026-09-19.md": "c63fcc35defc7e43e935f53631a8304fe9c6df0bb3b026f227d2be807cd16e4d",
+    "docs/world-controller-audit-2026-09-16.md": "910f079628b2b30554be80624f963c12d33e4f160008948eeb141c8dbc18ecdd",
+    "docs/world-placement-coverage-2026-09-19.json": "42a82e9b27a98cf65e078559b10e161557ab7b2b667ee2cf0cbb06efdda9cb44"
+  },
+  "native_evidence": {
+    "/tmp/mnsg-world-sync/file24-spike-native-audit-2026-09-19.txt": "ee2e858de150b3d4153062483ea8948b4f7963754f116e85743a1b37e084f384",
+    "/tmp/mnsg-world-sync/file24-rope-native-audit-2026-09-19.txt": "10b376ad030a139e22490dcc59a6ae6facad0a1e5787916c115d7e9d44282a66"
+  },
+  "review": "Parent inspected native evidence, production apply/capture/scheduling and transport paths and ran verification. Separate review worker failed without an assessment; no independent review is claimed. Native specialist confirmed rope fields against disassembly.",
+  "limitations": [
+    "No fresh two-client in-game validation. Host callback stubs and simulated receipts do not execute the real renderer/contact engine.",
+    "Universal coverage remains unfinished: remaining placed traps/mechanisms, coupled NPC presentation graphs and dynamic producer/child inventory require further work.",
+    "Classifier counts are not universal lifecycle coverage; remaining evidence includes static scenery, runtime NPC promotion and boss/save-derived actors as well as gaps.",
+    "Local travel flag exclusion prevents new replication; it cannot identify or migrate an already-written historical choice flag.",
+    "Local documentation built and browser-checked; not published."
+  ]
+}

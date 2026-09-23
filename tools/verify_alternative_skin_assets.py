@@ -47,7 +47,7 @@ def main(rom_path: Path) -> None:
     if broad_end - broad_start != 0x114F0 or broad_end - broad_start > 0x18000:
         raise ValueError("playable broad file does not fit before opening mesh")
 
-    source = Path(__file__).resolve().parents[1] / "src/alternative_ebisumaru/anchor_alternative_model.c"
+    source = Path(__file__).resolve().parents[1] / "src/player/alternative_ebisumaru/anchor_alternative_model.c"
     mapping = {
         int(clothed, 16): int(alternative, 16)
         for clothed, alternative in re.findall(

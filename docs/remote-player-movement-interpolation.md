@@ -132,7 +132,7 @@ instead of deriving a false high velocity across unrelated coordinates.
 
 ## Receiver reconstruction
 
-`src/anchor_remote_motion.c` follows the native command-before-integration
+`src/player/anchor_remote_motion.c` follows the native command-before-integration
 order without running a second gameplay simulation:
 
 - A new coherent packet installs its newest endpoint velocity for the current

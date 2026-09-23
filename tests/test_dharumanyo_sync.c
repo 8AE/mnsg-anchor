@@ -1,8 +1,8 @@
-#include "anchor_dharumanyo_sync.h"
-#include "anchor_dharumanyo_native.h"
-#include "anchor_dharumanyo_damage.h"
-#include "anchor_player_models.h"
-#include "utils/anchor_dharumanyo_codec.h"
+#include "bosses/dharumanyo/anchor_dharumanyo_sync.h"
+#include "bosses/dharumanyo/anchor_dharumanyo_native.h"
+#include "bosses/dharumanyo/anchor_dharumanyo_damage.h"
+#include "player/anchor_player_models.h"
+#include "bosses/dharumanyo/anchor_dharumanyo_codec.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,5 +1,5 @@
-#include "anchor_projectiles.h"
-#include "anchor_projectile_source.h"
+#include "combat/anchor_projectiles.h"
+#include "combat/anchor_projectile_source.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

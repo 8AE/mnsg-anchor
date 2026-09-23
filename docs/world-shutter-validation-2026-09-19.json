@@ -1,0 +1,181 @@
+{
+  "date": "2026-09-19",
+  "worldSyncVersion": 10,
+  "universalCoverage": false,
+  "completedInThisPass": [
+    "File_30 entity0x354 room0xB2 retained shutter phase, timer and monotone emission identity",
+    "File_32 entity0xFC route57 overlapping robots, current-state reconstruction and owner handoff",
+    "Replica lethal-hit arbitration before the native immediate-death helper, failed-send retry and a single death committer",
+    "Local native death sound and fragments, arbiter-only native loot emission with stable inherited identity",
+    "Extended coin and health identities retain full emission ordinals without cross-kind collisions"
+  ],
+  "nativeChecks": {
+    "command": "bash tests/run_world_sync.sh",
+    "result": "passed",
+    "implementation": "Three production-C host harnesses under UBSan and release floating-point flags; native routines substituted",
+    "focusedPythonTests": 97,
+    "scenarios": [
+      "shutter phase, pause, culling and retained-controller restoration",
+      "emission identity saturation and overlapping generations",
+      "resource and local-task guards for deferred native robot initialization",
+      "route checkpoint, local shadow ownership and required native collision flags",
+      "immediate lethal-hit deferral and native cooldown",
+      "replica commit preserves original death committer",
+      "single local death effect pair with native initializer ABI",
+      "stable high-ordinal loot identity and native reconstruction",
+      "existing NPC, pickup, platform, physics and crane regressions"
+    ]
+  },
+  "pythonTests": {
+    "run": 367,
+    "skipped": 1,
+    "failures": 0
+  },
+  "builds": {
+    "release": "passed",
+    "debug": "passed",
+    "collisionDispatchChecks": "passed"
+  },
+  "loopbackTCP": {
+    "listener": "127.0.0.1:45387",
+    "serverRevisionFromPreviousSetup": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "nativeReceiptSimulation": "TCP probes simulate native receipt; production-C harnesses independently test receipt application",
+    "placed": {
+      "ok": true,
+      "actors": 256,
+      "parts": 11,
+      "max_packet_bytes": 3346,
+      "checks": [
+        "NUL framing",
+        "atomic reordered batch",
+        "roster-validated root identity",
+        "sender exclusion",
+        "team isolation",
+        "pickup tombstones",
+        "interaction ownership",
+        "peer expiry",
+        "door traveller departure",
+        "door reverse late entry",
+        "door closed checkpoint",
+        "native NPC continuation checkpoint",
+        "physics puzzle reward checkpoint",
+        "completed puzzle outranks delayed retry",
+        "reward timer handoff without rewind",
+        "switch and mechanism checkpoints",
+        "switch activation overrides older observer",
+        "pause presence after ownership handoff",
+        "save-aware constructor yields to moving checkpoint",
+        "linked platform child and tint checkpoint",
+        "local fire ownership",
+        "gate-open checkpoint before model initialization",
+        "lower-ID occupied-room bootstrap",
+        "native receipt required before takeover",
+        "local instance and receipt stripped from wire"
+      ]
+    },
+    "dynamic": {
+      "ok": true,
+      "actors": 128,
+      "parts": 11,
+      "max_packet_bytes": 2608,
+      "checks": [
+        "atomic late-entry current state",
+        "duplicate rejection",
+        "sender exclusion",
+        "team isolation",
+        "pickup claim/commit",
+        "native award waits for commit send",
+        "origin disconnect/handoff"
+      ]
+    },
+    "shutter": {
+      "ok": true,
+      "max_packet_bytes": 552,
+      "checks": [
+        "overlapping emission identities",
+        "current-state late entry",
+        "replica lethal claim",
+        "one native death committer",
+        "failed-send retry",
+        "owner disconnect handoff",
+        "route-end removal without loot",
+        "sender exclusion",
+        "team isolation"
+      ]
+    },
+    "cleanup": "All probe clients exited; disposable server stopped with SIGINT; no listener remained"
+  },
+  "packetBudget": {
+    "route": "Transient targetTeamId, quiet, no offline queue; existing per-recipient team fan-out",
+    "placedRowWords": 50,
+    "dynamicRowWords": 83,
+    "placedRowsPerPacket": 24,
+    "dynamicRowsPerPacket": 12,
+    "maxParts": 11,
+    "maxPacketBytes": 8192,
+    "changedHz": 5,
+    "unchangedHz": 1,
+    "edgeFloorMs": 50,
+    "newPacketTypes": 0
+  },
+  "packetAudit": {
+    "literalSends": 22,
+    "errors": 0,
+    "warnings": 0
+  },
+  "nativeReference": {
+    "build": "passed",
+    "tests": 34,
+    "valueRows": 1101,
+    "validationErrors": [],
+    "published": false
+  },
+  "review": {
+    "performed": "Independent read-only review plus commander native call-path verification and regression checks",
+    "fixed": [
+      "route status0x400 encoded as boolean consistently",
+      "post-update removal cannot overwrite a committed death arbiter",
+      "generic flag sanitization cannot discard a local robot shadow",
+      "extended loot identity does not mask or collide high ordinals"
+    ]
+  },
+  "remaining": [
+    "Other controller families and scripted NPC continuations in world-controller-audit-2026-09-16.md",
+    "Gated dynamic invocation of0x1F4 and complete placed/dynamic family classification",
+    "Fresh two-client in-game shutter timing, overlapping robots, combat, loot, late entry and owner departure matrix"
+  ],
+  "packages": [
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 561299,
+      "sha256": "a40bc546f657e8c97fa5bda48ae9ccad448eb4e1c243cf7c9f09807dd1f53bdb",
+      "zipIntegrity": "passed",
+      "pythonSources": "matched",
+      "pythonSourceCount": 11
+    },
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 561670,
+      "sha256": "b6d1124c26d0536e5fdcededdf856e889e3e1b1e5859f3ad6ad8b76a342332b7",
+      "zipIntegrity": "passed",
+      "pythonSources": "matched",
+      "pythonSourceCount": 11
+    }
+  ],
+  "sourceSha256": {
+    "include/anchor_world.h": "80654cdc7277d61b754d9d785e6630a6f17d846837b81fb4ffd98b23e8a4613a",
+    "include/anchor_world_dynamic.h": "174ee3716d65bddd68b8d85515db04c842b25eba4136c627cf3cebbd9cdb5e57",
+    "src/anchor_world.c": "696017139d0b95d5a6121ea6b5f076e8d8c2126e7240b51376b177631907a4a6",
+    "src/anchor_world_dynamic.c": "bc39e8b05ffc7f20fa0a1071dc165c9e8203154b789329664b4b0c3bd293a00f",
+    "py/anchor_world.py": "d3f854186656125b9453e284dfbe1bcb4c64484e6afd50665c352aa43a8b61db",
+    "py/anchor_world_dynamic.py": "f2a91847536bb96437a83505dea9f26809737aaabac5bdc714c42ede7bfbc8d0",
+    "src/utils/anchor_world_codec.c": "098d198d4261e020f220ce0d61cded79068134f60a1beb21f581c17f0c9f4446",
+    "src/utils/anchor_world_dynamic_codec.c": "1a70fd4a0349b2c4bf3443f9419193218fa7c54e6f4ae89a850ccdf3a703313c",
+    "tests/test_world_transport.py": "da8f4742dd17ee61d99c66f2f5ca12ccffb80d4551bf4cd069d6636fd712680a",
+    "tests/test_world_dynamic.py": "b2e672e68e9612bbc9fd51c2e517d1f2e1cc8eb69e3f96d072671baad50ccc61",
+    "tests/test_world_native.c": "25f828c6bfb89cacfe8fabb9cb389083b867153ca834e0c7dc20605874f1da1c",
+    "tests/test_world_dynamic_native.c": "4993e8d1a96961d21a066ed10e514c33b8ea3ad3fe55c54fa6a37897cb9862a8",
+    "tools/test_world_shutter_anchor_local.py": "7a49d72d6f602024c7ef3e2a5a80d7a465f7aacced17b0b8696aee1d3e6f659e",
+    "docs/world-shutter-audit-2026-09-19.md": "9ad888fb47151ae1254d00e9eca72edc0393ccdb89c3b93ee80d246133cdf811"
+  }
+}

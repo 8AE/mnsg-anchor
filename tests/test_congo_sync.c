@@ -1,8 +1,8 @@
-#include "anchor_congo_sync.h"
-#include "anchor_congo_native.h"
-#include "anchor_congo_damage.h"
-#include "anchor_player_models.h"
-#include "utils/anchor_congo_codec.h"
+#include "bosses/congo/anchor_congo_sync.h"
+#include "bosses/congo/anchor_congo_native.h"
+#include "bosses/congo/anchor_congo_damage.h"
+#include "player/anchor_player_models.h"
+#include "bosses/congo/anchor_congo_codec.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

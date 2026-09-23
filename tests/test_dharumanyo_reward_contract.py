@@ -6,8 +6,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ITEM_SYNC = (ROOT / "src" / "item_sync.c").read_text()
-BOSS_SYNC = (ROOT / "src" / "boss_sync.c").read_text()
+ITEM_SYNC = (ROOT / "src" / "progression" / "item_sync.c").read_text()
+BOSS_SYNC = (ROOT / "src" / "bosses" / "boss_sync.c").read_text()
 ANCHOR_CLIENT = (ROOT / "py" / "anchor_mnsg.py").read_text()
 
 

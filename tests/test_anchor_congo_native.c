@@ -23,7 +23,7 @@ static CongoCallback *test_cb(void *p,int post)
 #define CONGO_AI(p) (*test_cb((void *)(p),0))
 #define CONGO_POST(p) (*test_cb((void *)(p),1))
 #define ANCHOR_CONGO_NATIVE_HOST_TEST
-#include "../src/anchor_congo_native.c"
+#include "../src/bosses/congo/anchor_congo_native.c"
 unsigned short D_800C7AB2=0x16;
 unsigned char D_8015C562_15D162;
 unsigned char D_8015CC30_15D830[0x100];

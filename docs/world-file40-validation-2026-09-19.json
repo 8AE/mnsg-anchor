@@ -1,0 +1,222 @@
+{
+  "date": "2026-09-19",
+  "scope": "File40 giant tops/rotating platforms and File30 equipment reconciliation",
+  "world_protocol": 15,
+  "base_commit": "40a500150db2ff8ebfc7f55f0d320ebedbac9a4e",
+  "git_state": "Prior uncommitted work preserved; no commit, push, publication or runtime installation",
+  "changes": {
+    "top": {
+      "entity": "0x365",
+      "placements": 7,
+      "variant": 29,
+      "marker": 78
+    },
+    "rotor": {
+      "entity": "0x366",
+      "placements": 5,
+      "variant": 30,
+      "marker": 79
+    },
+    "equipment": {
+      "entities": [
+        "0x3D2",
+        "0x3D4",
+        "0x3D5"
+      ],
+      "flags": [
+        "0x1A6",
+        "0x1A4",
+        "0x1A5"
+      ],
+      "new_catalog_flag": "pk_fire_ryo",
+      "ordinary_health_and_ryo": "collector-local"
+    }
+  },
+  "checks": [
+    {
+      "command": "bash tests/run_world_sync.sh",
+      "result": "pass",
+      "native_harnesses": 7,
+      "python_world_tests": 154,
+      "log": "/tmp/mnsg-equipment-file40-world-tests.log"
+    },
+    {
+      "command": "PYTHONPATH=py python3 -m unittest discover -s tests -p 'test_*.py'",
+      "result": "pass",
+      "run": 424,
+      "passed": 423,
+      "skipped": 1,
+      "skip": "Existing projectile loopback listener test cannot bind inside sandbox",
+      "log": "/tmp/mnsg-file40-python-tests.log"
+    },
+    {
+      "command": "Anchor packet static audit",
+      "literal_sends": 22,
+      "errors": 0,
+      "warnings": 0,
+      "log": "/tmp/mnsg-file40-packet-audit.log"
+    },
+    {
+      "command": "production ROM classifier under UBSan",
+      "result": "all12 File40 placements match",
+      "counts": {
+        "needs_other_evidence": 2259,
+        "placed_world": 884,
+        "regular_enemy": 742,
+        "coupled_bridge_member": 3
+      },
+      "log": "/tmp/mnsg-file40-placement-audit.log"
+    },
+    {
+      "command": "./build_mod.sh -j4",
+      "result": "release/debug builds and both collision-dispatch checks pass",
+      "warnings": "Existing unused notif_ensure_init warning",
+      "log": "/tmp/mnsg-file40-build.log"
+    },
+    {
+      "command": "native API npm run build and npm test",
+      "result": "34 tests pass;318 symbol pages;85 value tables;1167 rows;0 validation errors",
+      "logs": [
+        "/tmp/mnsg-file40-reference-build.log",
+        "/tmp/mnsg-file40-reference-test.log"
+      ],
+      "browser": "All8 new pages, exact-symbol search, Fire Ryo semantic search, equipment flag rows and File40 field table checked locally; temporary tab/server closed",
+      "examples": "All8 C examples passed MIPS clang syntax-only checks"
+    },
+    {
+      "command": "git diff --check in both repos",
+      "result": "pass"
+    }
+  ],
+  "local_anchor": {
+    "listener": "127.0.0.1:45387",
+    "server_go_sha256": "de5ad21c2b521d3beeb4da11c6559746184084581e45336c9ea4d19fd8030283",
+    "cases": [
+      {
+        "ok": true,
+        "family": "top",
+        "max_packet_bytes": 732,
+        "checks": [
+          "lower-ID late entry waits for applied receipt",
+          "independent placed identities",
+          "static-model phase and yaw preserved",
+          "unpaused owner handoff",
+          "owner disconnect continuity",
+          "duplicate rejection",
+          "sender exclusion",
+          "team isolation",
+          "bounded transient team packets"
+        ],
+        "native_receipts": "simulated; no in-game renderer/contact execution"
+      },
+      {
+        "ok": true,
+        "family": "rotor",
+        "max_packet_bytes": 716,
+        "checks": [
+          "lower-ID late entry waits for applied receipt",
+          "independent placed identities",
+          "static-model phase and yaw preserved",
+          "unpaused owner handoff",
+          "owner disconnect continuity",
+          "duplicate rejection",
+          "sender exclusion",
+          "team isolation",
+          "bounded transient team packets"
+        ],
+        "native_receipts": "simulated; no in-game renderer/contact execution"
+      }
+    ],
+    "peers_per_case": 3,
+    "teams": 2,
+    "native_receipts": "simulated",
+    "stopped": true,
+    "log": "/tmp/mnsg-file40-anchor-server.log"
+  },
+  "packet_contract": {
+    "route": "MNSG_WORLD with assigned root clientId and quiet targetTeamId; no offline queue",
+    "durability": "latest transient checkpoint; established receipts preserve continuity",
+    "cadence": "200ms changed state;50ms hard edge floor;1s keepalive",
+    "payload_cap": 8192,
+    "rows_per_packet": 24,
+    "fanout": "T-1 same-team peers per sender; no route/cadence increase from these families",
+    "observed_two_row_packets": "top732 bytes;rotor716 bytes;not a server-capacity or stress test"
+  },
+  "packages": [
+    {
+      "path": "build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 597935,
+      "sha256": "5b0b6c8ce84bbcf4038d2deb515273a15a1a471ddfc6d5bdb1052c0ab73746fd",
+      "zip_integrity": "pass",
+      "bundled_python_matches_source": true,
+      "verified_python_files": [
+        "anchor_mnsg.py",
+        "anchor_world.py",
+        "anchor_world_npc.py",
+        "anchor_world_dynamic.py",
+        "anchor_boss_transport.py",
+        "anchor_congo.py",
+        "anchor_dharumanyo.py",
+        "anchor_tsurami.py",
+        "anchor_impact.py",
+        "anchor_impact_visual.py",
+        "anchor_impact_sound.py"
+      ]
+    },
+    {
+      "path": "build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 598077,
+      "sha256": "7047900776272646c59110a8eb6448a71936ebfc65958c004647e307d5e71d30",
+      "zip_integrity": "pass",
+      "bundled_python_matches_source": true,
+      "verified_python_files": [
+        "anchor_mnsg.py",
+        "anchor_world.py",
+        "anchor_world_npc.py",
+        "anchor_world_dynamic.py",
+        "anchor_boss_transport.py",
+        "anchor_congo.py",
+        "anchor_dharumanyo.py",
+        "anchor_tsurami.py",
+        "anchor_impact.py",
+        "anchor_impact_visual.py",
+        "anchor_impact_sound.py"
+      ]
+    }
+  ],
+  "source_sha256": {
+    "src/anchor_world.c": "c3f2af92a789e21ce1be4453846ede569dec2649b112bc502a664e1660e7603b",
+    "src/anchor_world_equipment.c": "8df860f0408a9b15eec8a0e74ccd7e19ba8f2b744e7ff185fc00ed52f8c67071",
+    "include/anchor_world.h": "adff87dad2b0b59095f8eebc6364f1ee73fea03c8c47b31ba323b1e75f4d714e",
+    "src/utils/anchor_world_codec.c": "e982f9664b8e893458f7cb52975128773d57ddf68941f1e9b8dd2ad1b55121cc",
+    "py/anchor_world.py": "ed76c125bb156a1b8603b4efcce12f15a87e1cd28be50324ae6accfbeef83a41",
+    "src/item_sync.c": "b704b9c535107f844d972840d0d525bda9264f42d774a91e5a72e9c9bfe3fc8f",
+    "src/ui/debug.c": "33270ed1d891f482f054a5782dd0826292ef9ee2a7e4216802cfc3a6e9544698",
+    "tests/test_world_native.c": "573ea1737d401d225ca89353ffc5bdde1436beb52eba02cef95387fa66fd8679",
+    "tests/test_world_equipment_native.c": "ad6885d11e588edb44d04a3032c318f4fa6e98f075d8237a64c30140e4dc378e",
+    "tests/test_world_file40.py": "4daea64c81cb299ac718c204027d40e45d5be38b9284debe3f1ec6d229f72f4a",
+    "tests/test_item_scene_flags.c": "7f2dcb37d7412db5a161d502534ca022faff69e3e73abef0f60096f806cdffb7",
+    "tests/test_world_local_scene_flags.py": "42450910ff625f5f4ac65e390036022e74ee285303f986d6f932582d2bf330d0",
+    "tests/run_world_sync.sh": "860e17237751d7d6ac8269c012673243d574fe13eab2d07189534af8756d76cd",
+    "tools/test_world_spike_anchor_local.py": "25a0b568e45ba1e05ef746fcb97e91bb6ac90d109f074617a21a718ab2876d7c",
+    "docs/world-sync.md": "b3bae444d1e006f5bf68c4e0bfa2a27cf332a25be31e68b649c05565c2b17343",
+    "docs/world-file40-audit-2026-09-19.md": "ce0add8d1fe325e9bbd87f076ee956a89e1a30e354e4b99e62a553b1b4f9f26b",
+    "docs/world-equipment-audit-2026-09-19.md": "3f285d238080624a0fc3bc2a86c2d4a37413bd3a6da370977999dd97a21620fa",
+    "docs/world-placement-coverage-2026-09-19.json": "357040e8bf02acf3df8df56d0be7c9e7116b933c59dfc2b52633bde7611ce266",
+    "docs/world-controller-audit-2026-09-16.md": "94946e05eae0c403e5d8178434cfcbecb4db441d39fca191b8434c1ba68bd60e",
+    "docs/world-file30-audit-2026-09-19.md": "62d94d4affd5f1798a0990b421e80f23b234843223660024b9242f789a9e5fe4"
+  },
+  "native_evidence": {
+    "/tmp/mnsg-world-sync/file40-mechanism-native-audit-2026-09-19.txt": "71d6e9ee006ec59a4be5a1dc26124e6dfc9a29769fc28f07e4dcfc7c5617fdea",
+    "/tmp/mnsg-world-sync/file30-continuation-audit-2026-09-19.txt": "60b6f3f3742db69967402d5b1a1e996deeb0b54d857c6207357bcb8b5e5f9fc6",
+    "/tmp/mnsg-world-sync/file30-slicer-native-audit-2026-09-19.txt": "bccdb52f9e8e9250faeab72301b8f1cd27b95d5cf461899b795bc414e7aa8348"
+  },
+  "review": "Parent inspected production codec/capture/apply/scheduler, equipment flag/contact path and native evidence, and ran all listed verification. Native specialist supplied File40 disassembly audit; no independent code review claimed.",
+  "limitations": [
+    "No fresh two-client in-game riding/contact/renderer/dialogue validation. Host stand-ins and simulated receipts are not native runtime proof.",
+    "Universal coverage remains unfinished, including File30 slicer/RNG spawners, File40 bomb block/coupled graph and custom quest NPC presentations.",
+    "Placement classification counts do not measure universal lifecycle coverage.",
+    "Local native documentation validated but not published."
+  ],
+  "next_adapter": "Slicer root/blade native audit completed as evidence only; no slicer implementation included in these packages."
+}

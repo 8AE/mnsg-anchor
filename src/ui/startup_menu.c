@@ -1,7 +1,7 @@
-#include "modding.h"
-#include "recompui.h"
-#include "anchor.h"
-#include "anchor_runtime.h"
+#include "platform/modding.h"
+#include "platform/recompui.h"
+#include "core/anchor.h"
+#include "core/anchor_runtime.h"
 
 /* Race mode is still under development. Keep its implementation available,
  * but compile its startup-menu entry and dispatch path out for now. */

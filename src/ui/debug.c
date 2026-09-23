@@ -25,15 +25,15 @@
  * already includes anchor.c and item_sync.c.
  */
 
-#include "modding.h"
-#include "recompconfig.h"
-#include "recomputils.h"
-#include "recompui.h"
-#include "anchor.h"
-#include "item_sync.h"
-#include "anchor_runtime.h"
-#include "anchor_flag_catalog.h"
-#include "debug_ui.h"
+#include "platform/modding.h"
+#include "platform/recompconfig.h"
+#include "platform/recomputils.h"
+#include "platform/recompui.h"
+#include "core/anchor.h"
+#include "progression/item_sync.h"
+#include "core/anchor_runtime.h"
+#include "progression/anchor_flag_catalog.h"
+#include "ui/debug_ui.h"
 
 /* build_mod.sh produces release (0) and debug (1) variants automatically. */
 #ifndef DEBUG_BUTTON_ENABLED
@@ -460,6 +460,7 @@ static const AnchorFlagEntry s_entries[] = {
     {"eq_bazooka", "Yae Bazooka", 0},
     {"eq_fire_ryo", "Fire Ryo", 0},
     {"pk_camera", "Camera Minigame Collected", 0},
+    {"pk_fire_ryo", "Fire Ryo / Medal of Flames Collected", 0},
     {"pk_bazooka", "Yae Bazooka Collected", 0},
     {"pk_hammer", "Meat Hammer Collected", 0},
 
@@ -696,8 +697,6 @@ static const AnchorFlagEntry s_entries[] = {
     /* ── World / Story Events ────────────────────────────────────────── */
     {0, "World Events", 0},
     {"fl_koryuta", "Freed Koryuta the Dragon", 0},
-    {"fl_outerspace", "Went to Outer Space", 0},
-    {"fl_to_space", "Going to Outer Space", 0},
     {"fl_baron_iga", "Met Baron in Iga", 0},
     {"fl_mokubei", "Mokubei Can Upgrade Weapons", 0},
     {"fl_wiseman", "Met Ghost of Wise Man", 0},
@@ -711,10 +710,10 @@ static const AnchorFlagEntry s_entries[] = {
     {"fl_turtle_wall", "Turtle Shrine Yamato Wall", 0},
     {"fl_turtle_gate", "Turtle Shrine Red Gate", 0},
     {"fl_yamato_open", "Yamato Shrine Unlocked", 0},
-    {"cr_off_txt", "Crane Power Off Text", 0},
-    {"cr_entered", "Crane Game Entered", 0},
+    {"cr_power", "Crane Powered On", 0},
     {"cam_grab", "Camera Grabbed", 0},
     {"cam_belt", "Camera On Belt", 0},
+    {"cam_charge", "Camera Can Charge", 0},
     {"cr_help", "Crane Game Help Text", 0},
     {"wl_mc_left", "Wall: Musical Castle Left Entrance", 0},
     {"wl_mc_box", "Wall: Musical Castle Metal Box", 0},

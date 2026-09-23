@@ -22,7 +22,7 @@ class RaceModeVisibilityTests(unittest.TestCase):
         self.assertNotIn("anchor_startup_multiplayer_open_for_race", disabled_source)
 
     def test_race_implementation_is_preserved_for_later(self) -> None:
-        runtime_header = (ROOT / "include" / "anchor_runtime.h").read_text()
+        runtime_header = (ROOT / "include" / "core" / "anchor_runtime.h").read_text()
         multiplayer_ui = (
             ROOT / "src" / "ui" / "startup_multiplayer_ui.c"
         ).read_text()

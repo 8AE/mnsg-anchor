@@ -1,5 +1,5 @@
-#include "anchor_player_attack.h"
-#include "anchor_player_models.h"
+#include "combat/anchor_player_attack.h"
+#include "player/anchor_player_models.h"
 
 #include <assert.h>
 #include <math.h>

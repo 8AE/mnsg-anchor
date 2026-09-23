@@ -5,7 +5,7 @@
 #include <string.h>
 #include <stdint.h>
 #define ANCHOR_DUNGEON_MAPS_HOST_TEST
-#include "../src/anchor_dungeon_maps.c"
+#include "../src/world/anchor_dungeon_maps.c"
 
 static const void *pointers[8192];
 static unsigned int pointer_count;

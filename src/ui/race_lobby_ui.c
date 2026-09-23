@@ -1,8 +1,8 @@
-#include "modding.h"
-#include "recomputils.h"
-#include "recompui.h"
-#include "anchor.h"
-#include "anchor_runtime.h"
+#include "platform/modding.h"
+#include "platform/recomputils.h"
+#include "platform/recompui.h"
+#include "core/anchor.h"
+#include "core/anchor_runtime.h"
 #include "utils/array_utils.h"
 #include "utils/json_utils.h"
 

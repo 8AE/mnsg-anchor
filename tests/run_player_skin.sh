@@ -12,17 +12,17 @@ trap 'rm -rf "$TMP"' EXIT
 "$TMP/skin"
 
 "$CC" -std=c99 -Wall -Wextra -Werror -Iinclude \
-    tests/test_alternative_model.c src/alternative_ebisumaru/anchor_alternative_model.c -o "$TMP/alternative_model"
+    tests/test_alternative_model.c src/player/alternative_ebisumaru/anchor_alternative_model.c -o "$TMP/alternative_model"
 "$TMP/alternative_model"
 
 "$CC" -std=c99 -Wall -Wextra -Werror -Iinclude \
-    tests/test_remote_appearance.c src/utils/anchor_remote_appearance.c \
+    tests/test_remote_appearance.c src/player/anchor_remote_appearance.c \
     -o "$TMP/remote_appearance"
 "$TMP/remote_appearance"
 
 "$CC" -std=c99 -Wall -Wextra -Werror -DANCHOR_RENDER_SCRATCH_HOST_TEST -Iinclude \
-    tests/test_render_scratch.c src/anchor_render_scratch.c \
-    src/utils/anchor_render_budget.c -o "$TMP/render_scratch"
+    tests/test_render_scratch.c src/combat/anchor_render_scratch.c \
+    src/combat/anchor_render_budget.c -o "$TMP/render_scratch"
 "$TMP/render_scratch"
 
 PYTHONPATH=py python3 -m unittest tests.test_appearance_skin_flags

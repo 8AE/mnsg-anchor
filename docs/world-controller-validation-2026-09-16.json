@@ -1,0 +1,144 @@
+{
+  "date": "2026-09-16T22:56:19.734239-04:00",
+  "worldSyncVersion": 5,
+  "universalCoverage": false,
+  "completedInThisPass": [
+    "Placed File_50 0x226 modes 0/1: local hit, pressed pose, typed temporary/save flag, settled state and single local spark burst",
+    "File_30 0x324 variants 0-11 and 0x326 variants 0-7: current native continuation, motion and endpoints",
+    "Controller checkpoint retention through proximity culling and native reload; reset clears retained state",
+    "Controller progress arbitration rejects stale idle phases, and independent pause presence permits handoff without a full row",
+    "Save-aware 0x326 constructor endpoint yields to an actual move already in progress",
+    "File_30 0x32A classified as static tinted geometry"
+  ],
+  "nativeChecks": {
+    "command": "bash tests/run_world_sync.sh",
+    "implementation": "Production C under UBSan and release floating-point flags; native game routines substituted in the host harness",
+    "result": "passed",
+    "focusedPythonTests": 53,
+    "scenarios": [
+      "temporary/save switch hits under stale idle snapshots",
+      "remote pressed pose and flag application",
+      "duplicate burst suppression",
+      "late burst-boundary reconstruction",
+      "local callback pointer reconstruction",
+      "definition/phase validation",
+      "flag-driven mechanism handoff",
+      "rider cannot seize a flag-driven mechanism",
+      "paused retained presence while culled",
+      "native reload restores retained phase and pose",
+      "reset clears retained state",
+      "save-aware constructor follows moving checkpoint"
+    ]
+  },
+  "pythonTests": {
+    "run": 323,
+    "skipped": 1,
+    "failures": 0
+  },
+  "builds": {
+    "release": "passed",
+    "debug": "passed",
+    "collisionDispatchChecks": "passed",
+    "warnings": [
+      "Existing unused notif_ensure_init in src/ui/anchor_ui.c:90"
+    ]
+  },
+  "loopbackTCP": {
+    "listener": "127.0.0.1:45387",
+    "serverRevisionFromPreviousSetup": "bf7b43c10b19428ceba54772c7bae3abca44a345",
+    "placed": {
+      "ok": true,
+      "actors": 256,
+      "parts": 11,
+      "max_packet_bytes": 3171,
+      "checks": [
+        "NUL framing",
+        "atomic reordered batch",
+        "roster-validated root identity",
+        "sender exclusion",
+        "team isolation",
+        "pickup tombstones",
+        "interaction ownership",
+        "peer expiry",
+        "door traveller departure",
+        "door reverse late entry",
+        "door closed checkpoint",
+        "native NPC continuation checkpoint",
+        "switch and mechanism checkpoints",
+        "switch activation overrides older observer",
+        "pause presence after ownership handoff",
+        "save-aware constructor yields to moving checkpoint"
+      ]
+    },
+    "dynamic": {
+      "ok": true,
+      "actors": 128,
+      "parts": 11,
+      "max_packet_bytes": 2582,
+      "checks": [
+        "atomic late-entry current state",
+        "duplicate rejection",
+        "sender exclusion",
+        "team isolation",
+        "pickup claim/commit",
+        "native award waits for commit send",
+        "origin disconnect/handoff"
+      ]
+    },
+    "cleanup": "All test sockets closed and disposable server stopped"
+  },
+  "packetBudget": {
+    "rowWords": 48,
+    "rowsPerPacket": 24,
+    "maxParts": 11,
+    "maxPacketBytes": 8192,
+    "steadyChangedHz": 5,
+    "unchangedHz": 1,
+    "edgeFloorMs": 50,
+    "pauseBitmapBytesPerPart": 71,
+    "route": "transient targetTeamId; no offline queue"
+  },
+  "packetAudit": {
+    "literalSends": 22,
+    "errors": 0,
+    "warnings": 0
+  },
+  "nativeReference": {
+    "build": "passed",
+    "tests": "passed",
+    "newTable": "D_8015CDE0#room-switch-continuations",
+    "published": false
+  },
+  "packages": [
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/mnsg_multiplayer_anchor.nrm",
+      "bytes": 531826,
+      "sha256": "88281ac68a923b294f8a61ac9e87dae574ecbac7c351af552de30e751d12a3df",
+      "zipIntegrity": "passed",
+      "worldPythonSources": "matched"
+    },
+    {
+      "path": "/Users/ahmad/git/mnsg-recomp-example/build/debug_mnsg_multiplayer_anchor.nrm",
+      "bytes": 532118,
+      "sha256": "973d34a47baf58d08bc131778daded1d6b089aba3efb4f5dd6ef4b1f67800ba6",
+      "zipIntegrity": "passed",
+      "worldPythonSources": "matched"
+    }
+  ],
+  "sourceSha256": {
+    "include/anchor_world.h": "7ea9a62b6d1eebe31f6e0cc98a7958a09ca94e414965716dcac8bb22922988d1",
+    "src/anchor_world.c": "a1b39d26a559ba8858549c4caa5cddb678f395698df2492a78915a34f0a76a79",
+    "src/utils/anchor_world_codec.c": "a884262fbd4e2078dd94afca67967a54f1d4a78df1608ae763f0b0e808c555a1",
+    "py/anchor_world.py": "bb23f177e69d1551bb7bf9473b82da332cc6e3bc3f8ff1e57fd59d13a6c67193",
+    "tests/test_world_native.c": "137a217e1369502d58f57b8d5fee9d965283b5caac4dc7f91267711783dec78b",
+    "tests/test_world_transport.py": "76f659de159c496eda4e480cf5ec46b6ceecdfd62379b44dcebd8d4add403c2a",
+    "tools/test_world_anchor_local.py": "8a5a7b9931b83e3e856db2b23833f5629df2e1f0cbb112692d9bc89ef1ecb015"
+  },
+  "remaining": [
+    "Room-specific controller graphs and child identities listed in world-controller-audit-2026-09-16.md",
+    "Dynamic invocation audit of unused File_50 timer/reset paths",
+    "Remaining scripted NPC continuations",
+    "Full placed/dynamic family classification",
+    "Fresh in-game two-client verification"
+  ]
+}

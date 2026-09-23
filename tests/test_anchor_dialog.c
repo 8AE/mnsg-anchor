@@ -2,7 +2,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "../src/anchor_dialog.c"
+#include "../src/core/anchor_dialog.c"
 
 DialogWord *D_80077858_78458;
 void *D_80077860_78460 = (void *)1;

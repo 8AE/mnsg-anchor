@@ -1,5 +1,5 @@
 #define ANCHOR_ACTORS_HOST_TEST
-#include "../src/anchor_actors.c"
+#include "../src/player/anchor_actors.c"
 
 #include <assert.h>
 #include <stdio.h>

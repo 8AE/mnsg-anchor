@@ -19,11 +19,11 @@
  * directly; the frame hook drains those flags on the next frame.
  */
 
-#include "modding.h"
-#include "recomputils.h"
-#include "recompui.h"
-#include "recompconfig.h"
-#include "anchor.h"
+#include "platform/modding.h"
+#include "platform/recomputils.h"
+#include "platform/recompui.h"
+#include "platform/recompconfig.h"
+#include "core/anchor.h"
 #include "utils/room_utils.h"
 #include "utils/string_utils.h"
 

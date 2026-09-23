@@ -8,7 +8,7 @@ The supplied crash report identifies the GAME thread in `func_8001904C_19C4C`, r
 
 A character's visible root is only one kind-2 record. Drawing its animated model allocates additional cached child and sibling records. The previous pool patch kept the stock 192-record backing pool and assumed one record per remote player. The native child, sibling, and root-cache constructors dereference failed allocations before their callers can handle them.
 
-`src/global_patches/anchor_remote_model_pool.c` now adds initialized 0x98-byte records to the actual native free list as needed. The native task free list similarly gains initialized 0xf0-byte task records. Chunks are retained and reattached after the respective engine pool resets; ordinary native deletion returns individual records for reuse. Successful allocation preserves the engine's counters and list ownership. Cache construction also checks allocation failure before dereferencing a new record.
+`src/player/anchor_remote_model_pool.c` now adds initialized 0x98-byte records to the actual native free list as needed. The native task free list similarly gains initialized 0xf0-byte task records. Chunks are retained and reattached after the respective engine pool resets; ordinary native deletion returns individual records for reuse. Successful allocation preserves the engine's counters and list ownership. Cache construction also checks allocation failure before dereferencing a new record.
 
 CPU records in these chunks are accepted by multiplayer pointer validation only when they belong to registered pool storage. The change does not treat arbitrary extended addresses as valid game objects.
 
