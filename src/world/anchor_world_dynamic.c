@@ -14,6 +14,14 @@
 #include "world/anchor_world_bridge.h"
 #include "world/anchor_world_doll.h"
 #include "world/anchor_world.h"
+#include "world/anchor_castle_return_sign.h"
+#ifdef WORLD_DYNAMIC_HOST_TEST
+#ifndef WORLD_DYNAMIC_CASTLE_SIGN_OWNS
+#define WORLD_DYNAMIC_CASTLE_SIGN_OWNS(actor) 0
+#endif
+#else
+#define WORLD_DYNAMIC_CASTLE_SIGN_OWNS(actor) anchor_castle_return_sign_owns_task(actor)
+#endif
 #include "world/anchor_world_npc.h"
 #include "world/anchor_world_slicer.h"
 #include "world/anchor_world_random.h"
@@ -452,7 +460,8 @@ void world_dynamic_reuse(void *actor) {
 RECOMP_HOOK("func_80221A90_5DCF60")
 void world_dynamic_npc(void *actor) {
   DynamicActor *d;
-  if (d_building || anchor_world_actor_placed(actor) || anchor_world_bridge_owns(actor))
+  if (d_building || WORLD_DYNAMIC_CASTLE_SIGN_OWNS(actor) ||
+      anchor_world_actor_placed(actor) || anchor_world_bridge_owns(actor))
     return;
   d = allocate(actor);
   if (!d)

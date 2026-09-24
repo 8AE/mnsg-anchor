@@ -16,6 +16,8 @@ static int published_f90, published_f91, warp_f90, warp_f91;
 static const char *packet;
 static char shown_name[257], shown_arena[64];
 static AnchorDialogResult choice = ANCHOR_DIALOG_PENDING;
+static AnchorDialogOwner dialog_owner = ANCHOR_DIALOG_OWNER_NONE;
+static int sign_pending;
 static const char invite[] = "{\"cid\":2,\"session\":123,\"seq\":7,\"arena\":1,\"name\":\"Ahmad\"}";
 
 int anchor_is_connected(void) { return connected; }
@@ -37,6 +39,7 @@ unsigned int anchor_boss_invite_world_stage(void) { return (unsigned)current_sta
 unsigned int anchor_boss_invite_world_field90(void) { return 0; }
 unsigned int anchor_boss_invite_world_field91(void) { return 0; }
 int anchor_boss_invite_world_can_prompt(void) { return prompt_safe; }
+int anchor_castle_return_sign_pending(void) { return sign_pending; }
 int anchor_boss_invite_world_warp(int arena)
 {
     assert(!modal); /* no transition while native text owns input */
@@ -93,16 +96,27 @@ int anchor_dialog_begin(const char *name, const char *arena)
     strcpy(shown_name, name);
     strcpy(shown_arena, arena);
     modal = 1;
+    dialog_owner = ANCHOR_DIALOG_OWNER_BOSS_INVITE;
     return 1;
 }
-AnchorDialogResult anchor_dialog_poll(void)
+AnchorDialogResult anchor_dialog_poll_for(AnchorDialogOwner owner)
 {
-    assert(modal);
-    if (choice != ANCHOR_DIALOG_PENDING)
+    if (owner != dialog_owner)
+        return ANCHOR_DIALOG_IDLE;
+    if (choice != ANCHOR_DIALOG_PENDING) {
         modal = 0;
+        dialog_owner = ANCHOR_DIALOG_OWNER_NONE;
+    }
     return choice;
 }
-void anchor_dialog_cancel(void) { ++cancels; modal = 0; }
+void anchor_dialog_cancel_for(AnchorDialogOwner owner)
+{
+    if (owner != dialog_owner)
+        return;
+    ++cancels;
+    modal = 0;
+    choice = ANCHOR_DIALOG_CANCELLED;
+}
 int anchor_dialog_busy(void) { return modal; }
 
 static void begin(void)
@@ -123,6 +137,10 @@ int main(void)
     assert(starts == 0 && peeks == 0 && dismissals == 0);
     assert(published_arena == 0 && published_visit == 4);
     prompt_safe = 1;
+    sign_pending = 1;
+    anchor_boss_invites_update();
+    assert(starts == 0 && peeks == 0);
+    sign_pending = 0;
     dialog_available = 0;
     anchor_boss_invites_update();
     assert(starts == 0 && packet && frees == 1);
@@ -264,6 +282,33 @@ int main(void)
            warp_stage_value == 546 && warp_f90 == 4660 && warp_f91 == 43981);
     assert(published_stage == 0); /* The receiver's own stage is unrelated. */
     assert(!packet);
+
+    /* A sign-owned Yes must not turn into a boss invitation acceptance. */
+    packet = invite;
+    choice = ANCHOR_DIALOG_PENDING;
+    anchor_boss_invites_update();
+    assert(modal && dialog_owner == ANCHOR_DIALOG_OWNER_BOSS_INVITE);
+    dialog_owner = ANCHOR_DIALOG_OWNER_CASTLE_RETURN;
+    choice = ANCHOR_DIALOG_YES;
+    int prior_warps = warps;
+    anchor_boss_invites_update();
+    assert(warps == prior_warps && dialog_owner == ANCHOR_DIALOG_OWNER_CASTLE_RETURN);
+    assert(modal && !packet); /* The stale invite was dismissed. */
+
+    /* Revoking an invite must not cancel an unrelated sign dialog. */
+    modal = 0;
+    dialog_owner = ANCHOR_DIALOG_OWNER_NONE;
+    packet = invite;
+    choice = ANCHOR_DIALOG_PENDING;
+    dialog_owner = ANCHOR_DIALOG_OWNER_BOSS_INVITE;
+    anchor_boss_invites_update();
+    assert(modal && packet);
+    dialog_owner = ANCHOR_DIALOG_OWNER_CASTLE_RETURN;
+    int prior_cancels = cancels;
+    current = 0;
+    anchor_boss_invites_update();
+    assert(cancels == prior_cancels && dialog_owner == ANCHOR_DIALOG_OWNER_CASTLE_RETURN);
+    assert(modal && !packet);
 
     puts("boss invitation coordinator: deferred UI, Yes/No, cancellation and native warp ordering passed");
     return 0;

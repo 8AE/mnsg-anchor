@@ -234,15 +234,21 @@ static void to_choice(void)
     for (int i = 0; i < 10 && !choice; ++i)
         frame_tick(0, 0);
     assert(choice);
-    assert(anchor_dialog_poll() == ANCHOR_DIALOG_PENDING);
+    assert(anchor_dialog_poll_for(s_owner) == ANCHOR_DIALOG_PENDING);
 }
 static void check_result(const char *arena, int button, int selection,
                          AnchorDialogResult expected)
 {
+    AnchorDialogOwner owner = arena ? ANCHOR_DIALOG_OWNER_BOSS_INVITE :
+                                      ANCHOR_DIALOG_OWNER_CASTLE_RETURN;
     reset_test();
     silent_flag = 1;
     D_800C7AE0 = 4; /* A separate native flag is never overwritten. */
-    assert(anchor_dialog_begin("Ahmad", arena));
+    if (arena)
+        assert(anchor_dialog_begin("Ahmad", arena));
+    else
+        assert(anchor_dialog_begin_castle_return());
+    assert(!anchor_dialog_begin_castle_return()); /* One scenario owner. */
     assert(anchor_dialog_world_paused());
     assert(D_800C7AE0 == 4 && !silent_flag);
     assert(D_800C7AE2 == 0);
@@ -251,33 +257,71 @@ static void check_result(const char *arena, int button, int selection,
     assert(D_801C7900_1C8500 == 1);
     to_choice();
     char expected_prompt[160];
-    snprintf(expected_prompt, sizeof(expected_prompt),
-             "Ahmad\nentered %s.\nWould you like to join them?\n", arena);
+    if (arena)
+        snprintf(expected_prompt, sizeof(expected_prompt),
+                 "Ahmad\nentered %s.\nWould you like to join them?\n", arena);
+    else
+        snprintf(expected_prompt, sizeof(expected_prompt),
+                 "Return to Ugo Stone Circle?\n");
     assert(strstr(rendered, expected_prompt));
     assert(strstr(rendered, "Yes") && strstr(rendered, "No"));
     frame_tick(button, selection);
-    assert(anchor_dialog_poll() == ANCHOR_DIALOG_PENDING);
+    assert(anchor_dialog_poll_for(owner) == ANCHOR_DIALOG_PENDING);
     frame_tick(0, 0); /* Choice callback + close command. */
     assert(closing == 2);
-    assert(anchor_dialog_poll() == ANCHOR_DIALOG_PENDING && D_800C7AE0 == 4);
+    assert(anchor_dialog_poll_for(owner) == ANCHOR_DIALOG_PENDING && D_800C7AE0 == 4);
     frame_tick(0, 0);
-    assert(anchor_dialog_poll() == ANCHOR_DIALOG_PENDING);
+    assert(anchor_dialog_poll_for(owner) == ANCHOR_DIALOG_PENDING);
     frame_tick(0, 0);
     frame_tick(0, 0); /* Native END clears VM PC after the close animation. */
     assert(anchor_dialog_world_paused()); /* Holds through the closing frame. */
     assert(world_updates == 0 && interface_updates == native_scenario_ticks);
     assert(*(unsigned short *)(D_8015C5C8_15D1C8 + SYS_TASK_MASK) == 0x14);
-    assert(anchor_dialog_poll() == expected);
+    assert(anchor_dialog_poll_for(owner) == expected);
     assert(!anchor_dialog_busy() && !D_80167C48_168848[0]);
     assert(!anchor_dialog_world_paused());
     assert(D_800C7AE0 == 4 && silent_flag == 1 && frees == 1);
     assert(D_800C7AE2 == 0);
-    assert(anchor_dialog_poll() == ANCHOR_DIALOG_IDLE);
+    assert(anchor_dialog_poll_for(owner) == ANCHOR_DIALOG_IDLE);
     frame_tick(0, 0);
     assert(world_updates == 4); /* World resumes on either choice, including B. */
 }
 int main(void)
 {
+    check_result(0, 1, 0, ANCHOR_DIALOG_YES);
+    check_result(0, 1, 1, ANCHOR_DIALOG_NO);
+    check_result(0, 2, 0, ANCHOR_DIALOG_NO);
+
+    reset_test();
+    assert(anchor_dialog_begin_castle_return());
+    to_choice();
+    anchor_dialog_cancel_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE);
+    assert(anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE) ==
+           ANCHOR_DIALOG_IDLE && anchor_dialog_busy());
+    frame_tick(1, 0);
+    for (int i = 0; i < 10 && D_80077858_78458; ++i)
+        frame_tick(0, 0);
+    assert(!D_80077858_78458 && anchor_dialog_busy());
+    assert(!anchor_dialog_begin("A", "Congo's Arena"));
+    assert(anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE) ==
+           ANCHOR_DIALOG_IDLE);
+    assert(anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_CASTLE_RETURN) ==
+           ANCHOR_DIALOG_YES);
+    assert(anchor_dialog_begin("A", "Congo's Arena"));
+    anchor_dialog_cancel_for(ANCHOR_DIALOG_OWNER_CASTLE_RETURN);
+    assert(anchor_dialog_busy());
+    anchor_dialog_cancel_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE);
+    assert(!anchor_dialog_busy());
+    assert(!anchor_dialog_begin_castle_return());
+    assert(anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_CASTLE_RETURN) ==
+           ANCHOR_DIALOG_IDLE);
+    assert(anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE) ==
+           ANCHOR_DIALOG_CANCELLED);
+    assert(anchor_dialog_begin_castle_return());
+    anchor_dialog_cancel_for(ANCHOR_DIALOG_OWNER_CASTLE_RETURN);
+    assert(anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_CASTLE_RETURN) ==
+           ANCHOR_DIALOG_CANCELLED);
+
     for (unsigned int i = 0; i < sizeof(arena_labels) / sizeof(arena_labels[0]); ++i) {
         const char *arena = arena_labels[i];
         check_result(arena, 1, 0, ANCHOR_DIALOG_YES);

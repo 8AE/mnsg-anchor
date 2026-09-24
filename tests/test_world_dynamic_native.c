@@ -22,6 +22,11 @@ static char *anchor_update_world_actors(const char *s) {
   return result;
 }
 static int parent_authority = 1, placed_actor;
+static void *tracked_castle_sign;
+static int test_castle_sign_owns(void *actor) {
+  return actor && actor == tracked_castle_sign;
+}
+#define WORLD_DYNAMIC_CASTLE_SIGN_OWNS(actor) test_castle_sign_owns(actor)
 static unsigned int placed_index=3;
 static unsigned int actors[8][64];
 static int enemy_sync_actor_authority(void *a) {
@@ -376,6 +381,7 @@ static void fixture(void) {
   excluded_health = excluded_ryo = 0;
   parent_authority = 1;
   placed_actor = 0;
+  tracked_castle_sign = 0;
   placed_index=3;resources[0]=100;resources[1]=101;
   bridge_owned_actor = 0;
   stable_loot_ordinal = -1;
@@ -1037,6 +1043,19 @@ static void bridge_cohort_exclusion_test(void) {
   world_dynamic_path(a,0x44);DynamicActor *d=lookup(a);
   assert(d && d->kind==WD_NPC && d->path && d->row[WD_ROUTE]==0x44);
 }
+static void castle_sign_exclusion_test(void) {
+  fixture();
+  void *sign = actors[0], *ordinary = actors[1];
+  DPTR(sign,0x18)=objects[0];H(sign,0x5c)=H(sign,0x5e)=0x8b;
+  DPTR(ordinary,0x18)=objects[1];H(ordinary,0x5c)=H(ordinary,0x5e)=0x8b;
+  tracked_castle_sign=sign;
+  world_dynamic_npc(sign);
+  world_dynamic_path(sign,0x44);
+  assert(!lookup(sign)); /* No generic callback wrapper or alternate gate. */
+  world_dynamic_npc(ordinary);
+  DynamicActor *d=lookup(ordinary);
+  assert(d && d->kind==WD_NPC && d->talkable);
+}
 static DynamicActor *doll_fixture(void) {
   fixture();D_800C7AB2=d_room=0x16a;doll_parent=8;
   H(actors[7],0x3c)=23;H(actors[7],0x3e)=48;H(actors[7],0x40)=6;
@@ -1408,6 +1427,7 @@ int main(void) {
   slicer_lifecycle_test();
   nested_doll_test();
   bridge_cohort_exclusion_test();
+  castle_sign_exclusion_test();
   shutter_enemy_test();
   native_npc_reconstruction_test();
   local_coin_spin_and_shared_lifetime_test();

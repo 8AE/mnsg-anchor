@@ -20,6 +20,7 @@ extern unsigned short D_800C7AB2;
 #include "core/anchor_dialog.h"
 #include "progression/item_sync.h"
 #include "utils/json_utils.h"
+#include "world/anchor_castle_return_sign.h"
 
 typedef struct
 {
@@ -34,6 +35,11 @@ typedef struct
 } ArenaInvitation;
 
 static ArenaInvitation s_invitation;
+
+int anchor_boss_invites_active(void)
+{
+    return s_invitation.cid != 0;
+}
 
 static void clear_invitation(void)
 {
@@ -67,7 +73,8 @@ void anchor_boss_invites_update(void)
     {
         if (s_invitation.cid)
         {
-            anchor_dialog_cancel();
+            anchor_dialog_cancel_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE);
+            (void)anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE);
             dismiss_invitation();
         }
         /* A loaded client that returns to file select emits an exit, even
@@ -111,14 +118,16 @@ void anchor_boss_invites_update(void)
                                                s_invitation.session,
                                                s_invitation.sequence))
         {
-            anchor_dialog_cancel();
+            anchor_dialog_cancel_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE);
+            (void)anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE);
             dismiss_invitation();
             return;
         }
 
         if (!s_invitation.joining)
         {
-            AnchorDialogResult result = anchor_dialog_poll();
+            AnchorDialogResult result =
+                anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE);
             if (result == ANCHOR_DIALOG_PENDING)
                 return;
             if (result != ANCHOR_DIALOG_YES)
@@ -148,7 +157,8 @@ void anchor_boss_invites_update(void)
         return;
     }
 
-    if (!anchor_boss_invite_world_can_prompt() || anchor_dialog_busy())
+    if (!anchor_boss_invite_world_can_prompt() || anchor_dialog_busy() ||
+        anchor_castle_return_sign_pending())
         return;
     json = anchor_get_boss_invitation_json();
     if (!json)

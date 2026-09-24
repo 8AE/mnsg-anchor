@@ -68,6 +68,7 @@ static int s_saved_silent_flag;
 static unsigned char *s_scheduler_system;
 static int s_scenario_ticked;
 static AnchorDialogResult s_result;
+static AnchorDialogOwner s_owner;
 
 static int owns_script(void)
 {
@@ -128,6 +129,15 @@ static void build_prompt(const char *name, const char *arena)
     *out = TEXT_END;
 }
 
+static void build_castle_return_prompt(void)
+{
+    unsigned short *out = s_prompt;
+    *out++ = TEXT_WHITE;
+    append_ascii(&out, "Return to Ugo Stone Circle?");
+    *out++ = TEXT_NEWLINE;
+    *out = TEXT_END;
+}
+
 static void build_script(void)
 {
     /* Native 0x8011 parses four-word records until 0x8012. Selecting a
@@ -181,14 +191,20 @@ static void clear_gameplay_input(void)
         ((volatile unsigned char *)D_800C7DB0_C89B0)[offset] = 0;
 }
 
-int anchor_dialog_begin(const char *name, const char *arena)
+static int begin_dialog(AnchorDialogOwner owner, const char *name,
+                        const char *arena)
 {
-    if (s_active || D_80077858_78458 || !D_80077860_78460 || !D_801FC604_5B8514 ||
+    /* Every completed result belongs to its original caller until consumed. */
+    if (s_active || s_result != ANCHOR_DIALOG_IDLE ||
+        D_80077858_78458 || !D_80077860_78460 || !D_801FC604_5B8514 ||
         !D_80167C54_168854 || (D_800C7AE0 & 3u) || D_800C7AE2 ||
         D_80167C48_168848[0] || D_80167C48_168848[1] || D_80167C48_168848[2])
         return 0;
 
-    build_prompt(name, arena);
+    if (owner == ANCHOR_DIALOG_OWNER_CASTLE_RETURN)
+        build_castle_return_prompt();
+    else
+        build_prompt(name, arena);
     build_script();
     s_saved_silent_flag = func_800240DC_24CDC(0x82) != 0;
     if (!func_8003D468_3E068(0, -1)) {
@@ -209,15 +225,28 @@ int anchor_dialog_begin(const char *name, const char *arena)
     s_manager = D_80077860_78460;
     s_window = D_80167C48_168848[0];
     s_result = ANCHOR_DIALOG_PENDING;
+    s_owner = owner;
     s_active = 1;
     clear_gameplay_input();
     D_80077858_78458 = s_script;
     return 1;
 }
 
-AnchorDialogResult anchor_dialog_poll(void)
+int anchor_dialog_begin(const char *name, const char *arena)
+{
+    return begin_dialog(ANCHOR_DIALOG_OWNER_BOSS_INVITE, name, arena);
+}
+
+int anchor_dialog_begin_castle_return(void)
+{
+    return begin_dialog(ANCHOR_DIALOG_OWNER_CASTLE_RETURN, 0, 0);
+}
+
+AnchorDialogResult anchor_dialog_poll_for(AnchorDialogOwner owner)
 {
     AnchorDialogResult result;
+    if (owner == ANCHOR_DIALOG_OWNER_NONE || owner != s_owner)
+        return ANCHOR_DIALOG_IDLE;
     if (s_active) {
         if (D_80077860_78460 != s_manager ||
             (D_80077858_78458 && !owns_script())) {
@@ -236,12 +265,18 @@ AnchorDialogResult anchor_dialog_poll(void)
     }
     result = s_result;
     s_result = ANCHOR_DIALOG_IDLE;
+    s_owner = ANCHOR_DIALOG_OWNER_NONE;
     return result;
 }
 
-void anchor_dialog_cancel(void)
+AnchorDialogResult anchor_dialog_poll(void)
 {
-    if (!s_active)
+    return anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE);
+}
+
+void anchor_dialog_cancel_for(AnchorDialogOwner owner)
+{
+    if (owner == ANCHOR_DIALOG_OWNER_NONE || owner != s_owner || !s_active)
         return;
     if (D_80077860_78460 != s_manager ||
         (D_80077858_78458 && !owns_script())) {
@@ -253,6 +288,11 @@ void anchor_dialog_cancel(void)
         s_result = ANCHOR_DIALOG_CANCELLED;
         finish_owned_dialog();
     }
+}
+
+void anchor_dialog_cancel(void)
+{
+    anchor_dialog_cancel_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE);
 }
 
 int anchor_dialog_busy(void) { return s_active; }
