@@ -1,4 +1,5 @@
 #include "combat/anchor_remote_collision.h"
+#include "combat/anchor_player_freeze.h"
 #include "core/anchor_dialog.h"
 
 /* Native byte fields in g_system (0x8008CCC0): +0x3AE20 and +0x3AE23.
@@ -23,5 +24,18 @@ int anchor_remote_collision_is_scripted(void)
      * synthetic stick input. The Eocs playback task func_80224324_5DF7F4 also
      * holds it at 1 until playback completes and then clears it. Remote
      * bodies must not obstruct either local or received scripted movement. */
+    return D_800C7AE3 != 0;
+}
+
+int anchor_remote_collision_is_scripted_for_epoch(void)
+{
+    if (anchor_dialog_busy())
+        return 1;
+    /* The freeze hook sets bit 2 only for the native late-movement call.
+     * Treat it as scripted for collision, but not as a lifecycle change.
+     * A native bit 1, a preexisting bit 2, or scripted-motion byte remains
+     * authoritative. */
+    if (D_800C7AE0 & (anchor_player_freeze_control_scoped() ? 1u : 3u))
+        return 1;
     return D_800C7AE3 != 0;
 }

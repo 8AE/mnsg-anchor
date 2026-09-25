@@ -7,6 +7,8 @@ unsigned char D_800C7AE0;
 unsigned char D_800C7AE3;
 static int dialog_active;
 int anchor_dialog_busy(void) { return dialog_active; }
+static int freeze_scoped;
+int anchor_player_freeze_control_scoped(void) { return freeze_scoped; }
 
 static int near(float a, float b)
 {
@@ -100,6 +102,20 @@ static void native_script_gate(void)
     assert(anchor_remote_collision_is_scripted());
     D_800C7AE0 = 2;
     assert(anchor_remote_collision_is_scripted());
+    assert(anchor_remote_collision_is_scripted_for_epoch());
+    freeze_scoped = 1;
+    assert(anchor_remote_collision_is_scripted());
+    assert(!anchor_remote_collision_is_scripted_for_epoch());
+    D_800C7AE0 = 3;
+    assert(anchor_remote_collision_is_scripted_for_epoch());
+    D_800C7AE0 = 2;
+    D_800C7AE3 = 1;
+    assert(anchor_remote_collision_is_scripted_for_epoch());
+    D_800C7AE3 = 0;
+    dialog_active = 1;
+    assert(anchor_remote_collision_is_scripted_for_epoch());
+    dialog_active = 0;
+    freeze_scoped = 0;
     D_800C7AE0 = 4;
     assert(!anchor_remote_collision_is_scripted());
     D_800C7AE3 = 1;

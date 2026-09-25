@@ -138,10 +138,21 @@ void anchor_remote_animation_step(AnchorRemoteAnimationState *state,
     float previous_playback_step;
     float advance_step;
     int snapped = 0;
+    int was_frozen;
+    int clip_changed;
 
     if (!state || !input || !output)
         return;
 
+    was_frozen = state->frozen;
+    clip_changed = state->initialized &&
+                   input->target_frame_count != state->frame_count;
+    if (was_frozen && !input->frozen)
+    {
+        /* The first thaw sample must replace the held clock and stale rate. */
+        state->initialized = 0;
+        state->correction_debt = 0.0f;
+    }
     action_changed = state->initialized && input->action != state->action;
     consumed_sample = !state->initialized || action_changed ||
                       input->new_sample || input->seq != state->seq;
@@ -150,6 +161,31 @@ void anchor_remote_animation_step(AnchorRemoteAnimationState *state,
     rate_scale = source_to_target_scale(input);
     mapped_target = input->target_frame * rate_scale;
     previous_playback_step = state->playback_step;
+
+    if (input->frozen)
+    {
+        /* Accept the sender's first frozen pose (or a changed clip), then
+         * leave it fixed between packets. No playback or correction accrues. */
+        if (!was_frozen || !state->initialized || action_changed ||
+            clip_changed)
+        {
+            state->frame = wrap_frame(mapped_target, state->frame_count);
+            state->action = input->action;
+        }
+        if (consumed_sample)
+            state->seq = input->seq;
+        state->initialized = state->frozen = 1;
+        state->endpoint_step_valid = 1;
+        state->endpoint_step = state->playback_step = 0.0f;
+        state->correction_debt = 0.0f;
+        output->frame = state->frame;
+        output->playback_step = output->correction_step =
+            output->correction_debt = 0.0f;
+        output->consumed_sample = consumed_sample;
+        output->snapped = !was_frozen || action_changed || clip_changed;
+        return;
+    }
+    state->frozen = 0;
 
     if (consumed_sample)
     {

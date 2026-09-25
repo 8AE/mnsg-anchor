@@ -9,6 +9,7 @@
 #define ANCHOR_APPEARANCE_HURT_RECOVERY (1 << 2)
 /* Alternative/fundoshi Ebisumaru opening-cutscene skin. */
 #define ANCHOR_APPEARANCE_ALTERNATIVE_EBISUMARU (1 << 3)
+#define ANCHOR_APPEARANCE_FROZEN (1 << 4)
 
 /* An alternative appearance change replaces both segment bases. */
 static inline int anchor_player_model_remote_rebind_required(

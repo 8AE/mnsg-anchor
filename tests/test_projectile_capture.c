@@ -110,6 +110,7 @@ static void test_initialized_native_kinds(void)
                         (i >= 0x17 && i <= 0x1b);
         task.bytes[0x64] = (unsigned char)i;
         task.bytes[0x60] = i >= 0xc && i <= 0x10;
+        assert(anchor_projectile_capture_kind(i) == supported);
         assert(anchor_projectile_capture_fields(task.bytes, object.bytes, &spawn) == supported);
     }
 }

@@ -80,6 +80,72 @@ class ProjectileTransportTests(unittest.TestCase):
         result.update(changes)
         return result
 
+    def stop_packet(self, **changes):
+        result = {'type': 'MNSG_PROJECTILE_STOP', 'clientId': 2,
+                  'currentRoomId': 10, 'interactionSession': 202,
+                  'ownerEpoch': 7, 'projectileId': 1}
+        result.update(changes)
+        return result
+
+    def test_projectile_stop_removes_pending_spawn_and_blocks_late_spawn(self):
+        self.assertTrue(anchor_mnsg._receive_projectile_spawn(self.packet()))
+        self.assertTrue(anchor_mnsg._receive_projectile_stop(self.stop_packet()))
+        self.assertEqual(anchor_mnsg.get_projectile_spawns_json(), '[]')
+        self.assertEqual(anchor_mnsg.poll_projectile_stop(), (2, 202, 7, 1))
+        self.assertFalse(anchor_mnsg._receive_projectile_stop(self.stop_packet()))
+        self.assertFalse(anchor_mnsg._receive_projectile_spawn(self.packet()))
+
+    def test_stop_before_spawn_and_invalid_identity(self):
+        for changes in ({'clientId': 1}, {'clientId': 99},
+                        {'currentRoomId': 11}, {'interactionSession': 0},
+                        {'ownerEpoch': 6}, {'projectileId': 0},
+                        {'projectileId': True}, {'projectileId': '1'}):
+            with self.subTest(changes=changes):
+                self.assertFalse(anchor_mnsg._receive_projectile_stop(
+                    self.stop_packet(**changes)))
+        self.assertTrue(anchor_mnsg._receive_projectile_stop(self.stop_packet()))
+        self.clock.return_value = 102.0
+        self.assertFalse(anchor_mnsg._receive_projectile_spawn(self.packet()))
+
+    def test_evicted_stop_still_blocks_late_spawn_in_replay_window(self):
+        for event_id in range(1, anchor_mnsg.PROJECTILE_QUEUE_COUNT + 2):
+            self.assertTrue(anchor_mnsg._receive_projectile_stop(
+                self.stop_packet(projectileId=event_id)))
+        self.assertEqual(len(anchor_mnsg._projectile_stops),
+                         anchor_mnsg.PROJECTILE_QUEUE_COUNT)
+        self.assertFalse(anchor_mnsg._receive_projectile_spawn(
+            self.packet(self.entry(id=1))))
+
+    def test_far_future_stop_does_not_reject_earlier_valid_spawn(self):
+        self.assertTrue(anchor_mnsg._receive_projectile_spawn(
+            self.packet(self.entry(id=1))))
+        self.assertTrue(anchor_mnsg._receive_projectile_stop(
+            self.stop_packet(projectileId=1000)))
+        self.assertTrue(anchor_mnsg._receive_projectile_spawn(
+            self.packet(self.entry(id=2))))
+
+    def test_stop_tombstone_is_scoped_to_room(self):
+        self.assertTrue(anchor_mnsg._receive_projectile_stop(self.stop_packet()))
+        anchor_mnsg._local_room_id = 11
+        anchor_mnsg._last_position_room_id = 11
+        anchor_mnsg._player_states[1]["roomId"] = 11
+        anchor_mnsg._player_states[2]["roomId"] = 11
+        self.assertTrue(anchor_mnsg._receive_projectile_spawn(
+            self.packet(currentRoomId=11)))
+
+    def test_local_stop_requires_sent_throw_and_is_room_broadcast(self):
+        self.assertFalse(anchor_mnsg.send_projectile_stop(101, 3, 1))
+        self.assertTrue(anchor_mnsg.send_projectile_spawn_json(
+            101, 3, json.dumps(self.entry())))
+        self.assertTrue(anchor_mnsg.send_projectile_stop(101, 3, 1))
+        packet = self.sock.sent[-1]
+        self.assertEqual(packet['type'], 'MNSG_PROJECTILE_STOP')
+        self.assertEqual(packet['clientId'], 1)
+        self.assertEqual(packet['projectileId'], 1)
+        self.assertNotIn('targetClientId', packet)
+        self.assertNotIn('targetTeamId', packet)
+        self.assertNotIn('addToQueue', packet)
+
     def send(self, entry=None, session=101, epoch=3):
         return anchor_mnsg.send_projectile_spawn_json(
             session, epoch, json.dumps(self.entry() if entry is None else entry))

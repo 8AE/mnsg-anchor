@@ -348,13 +348,15 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
    int anchor_send_projectile_spawn_json(int session, int owner_epoch, const char *event_json);
    char *anchor_get_projectile_spawns_json(void);
    int anchor_ack_projectile_spawn(int cid, int session, int epoch, int event_id);
+   int anchor_send_projectile_stop(int session, int owner_epoch, int event_id);
+   int anchor_poll_projectile_stop(int *cid, int *session, int *epoch, int *event_id);
 
    /* Targeted, transient native player hits. Python validates live room,
     * connection sessions, player lifetimes, ordering and queue age. */
    int anchor_send_player_hit(int target_cid, int target_epoch,
-                               float hit_x, float hit_y, float hit_z);
+                               float hit_x, float hit_y, float hit_z, int hit_kind);
    int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
-                               float *x, float *y, float *z);
+                               float *x, float *y, float *z, int *hit_kind);
 
    /* One-frame batches of local-player one-shot sound cues. The sender stamps
     * the current player lifecycle and movement sample. Received cues are

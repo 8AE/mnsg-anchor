@@ -14,6 +14,7 @@ typedef struct AnchorProjectilePendingSpawn
 typedef struct AnchorProjectileSourceState
 {
     const void *tasks[ANCHOR_PROJECTILE_SOURCE_MAX];
+    int task_ids[ANCHOR_PROJECTILE_SOURCE_MAX];
     AnchorProjectilePendingSpawn pending[ANCHOR_PROJECTILE_SOURCE_MAX];
     int next_id;
     unsigned int head, count;
@@ -28,6 +29,8 @@ int anchor_projectile_source_capture(AnchorProjectileSourceState *state,
                                      unsigned int tick, int publish);
 void anchor_projectile_source_forget_task(AnchorProjectileSourceState *state,
                                          const void *task);
+int anchor_projectile_source_task_id(const AnchorProjectileSourceState *state,
+                                     const void *task);
 const AnchorProjectileSpawn *anchor_projectile_source_peek(
     AnchorProjectileSourceState *state, unsigned int tick);
 void anchor_projectile_source_ack(AnchorProjectileSourceState *state);

@@ -47,7 +47,7 @@ except Exception:
     DEFAULT_PORT = 43383
     ROOM_ID_PREFIX = "mnsg-"
     ROOM_ID_TRIM_CHARS = " \t\n\r\v\f"
-    APPEARANCE_MASK = 15
+    APPEARANCE_MASK = 31
     HOT_PACKET_MAX_BYTES = {
         "MNSG_PLAYER_POS": 640,
         "MNSG_PROJECTILE_SPAWN": 512,

@@ -27,5 +27,8 @@ int anchor_projectile_spawn_encode(const AnchorProjectileSpawn *spawn,
                                     char *out, unsigned int capacity);
 int anchor_projectile_spawns_decode(const char *json, AnchorProjectileRemote *out,
                                      int capacity);
+void anchor_projectiles_on_player_hit(const void *task);
+int anchor_projectiles_is_native_throw(const void *task);
+int anchor_projectiles_hit_kind(const void *task);
 
 #endif

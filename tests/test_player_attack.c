@@ -39,8 +39,9 @@ int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacit
     return s_target_count;
 }
 
-int anchor_send_player_hit(int cid, int epoch, float x, float y, float z)
+int anchor_send_player_hit(int cid, int epoch, float x, float y, float z, int kind)
 {
+    assert(kind == 0);
     if (!s_send_ok)
         return 0;
     ++s_sent;
@@ -129,18 +130,54 @@ static void projectile_lifetime_and_rearm(void)
     setup();
     a.descriptor = 0xffffffffu;
     a.is_player = 0;
-    anchor_player_attack_observe(&a);
+    a.is_projectile = 1;
+    assert(anchor_player_attack_observe(&a) == 1);
     anchor_player_attack_begin_frame(1, 9);
     a.frame = 10;
-    anchor_player_attack_observe(&a);
+    assert(anchor_player_attack_observe(&a) == 1);
     anchor_player_attack_begin_frame(1, 9);
     a.frame = 0;
     a.animation += 4;
-    anchor_player_attack_observe(&a);
+    assert(anchor_player_attack_observe(&a) == 1);
     assert(s_sent == 1); /* Looping projectile visuals cannot do repeated damage. */
     anchor_player_attack_begin_frame(1, 9);
-    anchor_player_attack_begin_frame(1, 9); /* Absent from one complete scan. */
+    anchor_player_attack_begin_frame(1, 9); /* A paused shot stays consumed. */
+    assert(anchor_player_attack_observe(&a) == 1);
+    assert(s_sent == 1);
+    anchor_player_attack_forget_task(a.task); /* Native task was recycled. */
     anchor_player_attack_observe(&a);
+    assert(s_sent == 2);
+}
+
+static void projectile_stops_at_first_remote_player(void)
+{
+    AnchorPlayerAttackSample a = sample(1);
+    setup();
+    a.is_player = 0;
+    a.is_projectile = 1;
+    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{0, 0, 0}, 5, 20}};
+    s_target_count = 2;
+    assert(anchor_player_attack_observe(&a) == 1);
+    assert(s_sent == 1);
+    assert(anchor_player_attack_observe(&a) == 1);
+    assert(s_sent == 1);
+    anchor_player_attack_begin_frame(1, 9);
+    a.frame = 10;
+    assert(anchor_player_attack_observe(&a) == 1);
+    assert(s_sent == 1);
+}
+
+static void nonprojectile_helper_remains_multitarget(void)
+{
+    AnchorPlayerAttackSample a = sample(1);
+    setup();
+    a.is_player = 0;
+    a.is_projectile = 0;
+    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{0, 0, 0}, 5, 20}};
+    s_target_count = 2;
+    assert(anchor_player_attack_observe(&a) == 0);
+    assert(s_sent == 2);
+    assert(anchor_player_attack_observe(&a) == 0);
     assert(s_sent == 2);
 }
 
@@ -230,6 +267,8 @@ int main(void)
     actual_geometry_and_disabled_attack();
     one_hit_per_swing_and_target();
     projectile_lifetime_and_rearm();
+    projectile_stops_at_first_remote_player();
+    nonprojectile_helper_remains_multitarget();
     transport_failure_and_epoch_changes();
     growing_cache_and_invalid_spheres();
     growing_roster_and_failed_dedup_reserve();

@@ -154,6 +154,8 @@ _player_sound_seen: "dict[tuple[int, int, int, int], tuple[int, int]]" = {}
 _retired_interaction_sessions: "dict[int, set[int]]" = {}
 _player_movement_order: "dict[int, dict]" = {}
 _projectile_spawns: "dict[tuple[int, int, int, int], tuple[int, dict]]" = {}
+_projectile_stops: "dict[tuple[int, int, int, int, int], tuple[int, dict]]" = {}
+_projectile_stop_events = deque(maxlen=64)
 _projectile_seen: "dict[tuple[int, int, int, int], tuple[int, int]]" = {}
 _projectile_sent: "dict[tuple[int, int, int, int], tuple[int, ...]]" = {}
 _projectile_stats = {key: 0 for key in
@@ -213,6 +215,7 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     "MNSG_PLAYER_HIT": 512,
     "MNSG_PLAYER_SOUND": 320,
     "MNSG_PROJECTILE_SPAWN": 512,
+    "MNSG_PROJECTILE_STOP": 256,
     "MNSG_ENEMY_LIVE": 3072,
     "MNSG_ENEMY_HIT": 256,
     anchor_congo.PACKET_TYPE: 8 * 1024,
@@ -289,8 +292,10 @@ APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
 APPEARANCE_MINI_EBISUMARU: int = 1 << 1
 APPEARANCE_HURT_RECOVERY: int = 1 << 2
 APPEARANCE_ALTERNATIVE_EBISUMARU: int = 1 << 3
+APPEARANCE_FROZEN: int = 1 << 4
 APPEARANCE_MASK: int = (APPEARANCE_SUDDEN_IMPACT | APPEARANCE_MINI_EBISUMARU |
-                       APPEARANCE_HURT_RECOVERY | APPEARANCE_ALTERNATIVE_EBISUMARU)
+                       APPEARANCE_HURT_RECOVERY | APPEARANCE_ALTERNATIVE_EBISUMARU |
+                       APPEARANCE_FROZEN)
 _PROJECTILE_SPAWN_LIMITS = {
     "id": (1, 0x7fffffff), "kind": (1, 255),
     "x100": (-1000000000, 1000000000),
@@ -1069,6 +1074,10 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_projectile_spawn(packet)
                     continue
 
+                if ptype == "MNSG_PROJECTILE_STOP":
+                    _receive_projectile_stop(packet)
+                    continue
+
                 if ptype == "MNSG_BOSS_ARENA":
                     _receive_boss_arena(packet)
                     continue
@@ -1453,7 +1462,17 @@ def poll_packet() -> str:
 def _player_hit_matches_live_state(packet: dict) -> bool:
     """Validate a hit against current movement identities; caller holds lock."""
     try:
+        if type(packet) is not dict:
+            return False
+        for field in ("clientId", "targetClientId", "roomId", "sourceSession",
+                      "targetSession", "sourceEpoch", "targetEpoch", "hitSeq",
+                      "sourcePosSeq", "hitT"):
+            if type(packet.get(field)) is not int:
+                return False
         sender = int(packet.get("clientId", 0))
+        hit_kind = packet.get("hitKind", 0)
+        if type(hit_kind) is not int or hit_kind not in (0, 1):
+            return False
         target = int(packet.get("targetClientId", 0))
         source = _player_states.get(sender, {})
         local = _player_states.get(_client_id, {})
@@ -1495,6 +1514,8 @@ def _player_hit_matches_live_state(packet: dict) -> bool:
                 hit_time - source_time > 5000):
             return False
         for coordinate in ("hitX", "hitY", "hitZ"):
+            if type(packet.get(coordinate)) not in (int, float):
+                return False
             value = float(packet[coordinate])
             if not math.isfinite(value) or abs(value) > 10000000.0:
                 return False
@@ -1525,9 +1546,12 @@ def _receive_player_hit(packet: dict) -> bool:
 
 def send_player_hit(target_cid: int, target_epoch: int,
                     hit_x: float, hit_y: float, hit_z: float,
-                    source_epoch: "int | None" = None) -> bool:
+                    source_epoch: "int | None" = None,
+                    hit_kind: int = 0) -> bool:
     """Request one native hit on the target owner using current identities."""
     global _player_hit_seq
+    if type(hit_kind) is not int or hit_kind not in (0, 1):
+        return False
     try:
         target_cid = int(target_cid)
         target_epoch = int(target_epoch)
@@ -1566,6 +1590,7 @@ def send_player_hit(target_cid: int, target_epoch: int,
             "sourcePosSeq": int(local.get("posSeq", 0)),
             "hitT": int(time.monotonic() * 1000),
             "hitX": coordinates[0], "hitY": coordinates[1], "hitZ": coordinates[2],
+            "hitKind": hit_kind,
             "quiet": True,
         }
     if not _send_raw(packet):
@@ -1584,7 +1609,8 @@ def poll_player_hit():
                     not _player_hit_matches_live_state(packet)):
                 continue
             return (int(packet["clientId"]), int(packet["targetEpoch"]),
-                    float(packet["hitX"]), float(packet["hitY"]), float(packet["hitZ"]))
+                    float(packet["hitX"]), float(packet["hitY"]), float(packet["hitZ"]),
+                    packet.get("hitKind", 0))
     return None
 
 
@@ -1820,6 +1846,8 @@ def poll_player_sound():
 def _reset_projectile_spawns() -> None:
     """Reset connection-scoped transient state; caller holds the player lock."""
     _projectile_spawns.clear()
+    _projectile_stops.clear()
+    _projectile_stop_events.clear()
     _projectile_seen.clear()
     _projectile_sent.clear()
     for key in _projectile_stats:
@@ -1833,6 +1861,13 @@ def _drop_projectile_spawns(cid: int) -> None:
         for key in list(_projectile_spawns):
             if key[0] == cid:
                 del _projectile_spawns[key]
+    for key in list(_projectile_stops):
+        if cid == _client_id or key[0] == cid:
+            del _projectile_stops[key]
+    retained = [key for key in _projectile_stop_events
+                if cid != _client_id and key[0] != cid]
+    _projectile_stop_events.clear()
+    _projectile_stop_events.extend(retained)
 
 
 def _validate_projectile_spawn(entry):
@@ -1856,7 +1891,7 @@ def _projectile_local_room() -> int:
 
 def _projectile_owner_status(packet: dict) -> int:
     """Return 0 rejected, 1 awaiting owner movement, or 2 ready; lock held."""
-    if packet.get("type") != "MNSG_PROJECTILE_SPAWN" or not _connected or _client_id <= 0:
+    if packet.get("type") not in ("MNSG_PROJECTILE_SPAWN", "MNSG_PROJECTILE_STOP") or not _connected or _client_id <= 0:
         return 0
     for key in ("clientId", "interactionSession", "ownerEpoch"):
         value = packet.get(key)
@@ -1896,6 +1931,12 @@ def _projectile_owner_status(packet: dict) -> int:
 
 
 def _prune_projectile_spawns(now_ms: int) -> None:
+    # A room relay can deliver the stop before its spawn well after the
+    # ordinary 750 ms spawn retry window. Retain the exact tombstone while
+    # that owner generation is live; the fixed-size map bounds memory.
+    for key, (_received_ms, packet) in list(_projectile_stops.items()):
+        if _projectile_owner_status(packet) == 0:
+            del _projectile_stops[key]
     for key, (received_ms, packet) in list(_projectile_spawns.items()):
         expired = now_ms - received_ms > PROJECTILE_MAX_AGE_MS
         if expired or _projectile_owner_status(packet) == 0:
@@ -1921,6 +1962,9 @@ def _receive_projectile_spawn(packet: dict) -> bool:
         sender, session, epoch = packet["clientId"], packet["interactionSession"], packet["ownerEpoch"]
         identity = (sender, session, epoch, packet["currentRoomId"])
         event_id = entry["id"]
+        _prune_projectile_spawns(now_ms)
+        if (sender, session, epoch, packet["currentRoomId"], event_id) in _projectile_stops:
+            return False
         previous = _projectile_seen.get(identity)
         highest, bits = event_id, 1
         if previous:
@@ -1933,7 +1977,6 @@ def _receive_projectile_spawn(packet: dict) -> bool:
                     _projectile_stats["duplicate"] += 1
                     return False
                 highest, bits = previous[0], previous[1] | (1 << lag)
-        _prune_projectile_spawns(now_ms)
         if len(_projectile_spawns) >= PROJECTILE_QUEUE_COUNT:
             _projectile_stats["overflow"] += 1
             return False
@@ -1948,6 +1991,91 @@ def _receive_projectile_spawn(packet: dict) -> bool:
             _projectile_stats["deferred"] += 1
     logger.debug("anchor_mnsg: projectile accepted cid=%d epoch=%d id=%d", sender, epoch, event_id)
     return True
+
+
+def _receive_projectile_stop(packet: dict) -> bool:
+    """Retire one owner-scoped visual, including a spawn still awaiting C."""
+    if type(packet) is not dict or packet.get("type") != "MNSG_PROJECTILE_STOP":
+        return False
+    event_id = packet.get("projectileId")
+    if type(event_id) is not int or not 0 < event_id <= _POSITION_SEQUENCE_MASK:
+        return False
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        status = _projectile_owner_status(packet)
+        if status == 0:
+            return False
+        key = (packet["clientId"], packet["interactionSession"],
+               packet["ownerEpoch"], packet["currentRoomId"], event_id)
+        _prune_projectile_spawns(now_ms)
+        if key in _projectile_stops:
+            return False
+        if len(_projectile_stops) >= PROJECTILE_QUEUE_COUNT:
+            del _projectile_stops[next(iter(_projectile_stops))]
+        _projectile_stops[key] = (now_ms, dict(packet))
+        identity = key[:4]
+        previous = _projectile_seen.get(identity)
+        if previous is None:
+            _projectile_seen[identity] = (event_id, 1)
+        else:
+            delta = (event_id - previous[0]) & _POSITION_SEQUENCE_MASK
+            if 0 < delta < 64:
+                _projectile_seen[identity] = (
+                    event_id, ((previous[1] << delta) | 1) & ((1 << 64) - 1))
+            elif delta == 0:
+                _projectile_seen[identity] = (previous[0], previous[1] | 1)
+            else:
+                lag = (previous[0] - event_id) & _POSITION_SEQUENCE_MASK
+                if lag < 64:
+                    _projectile_seen[identity] = (
+                        previous[0], previous[1] | (1 << lag))
+            # A large future stop must not discard earlier valid spawns that
+            # may still arrive out of order. Its exact tombstone remains.
+        _projectile_spawns.pop((key[0], key[1], key[2], key[4]), None)
+        _projectile_stop_events.append(key)
+    return True
+
+
+def send_projectile_stop(session: int, owner_epoch: int, event_id: int) -> bool:
+    """Broadcast a single projectile retirement after its throw was sent."""
+    if any(type(value) is not int or not 0 < value <= _POSITION_SEQUENCE_MASK
+           for value in (session, owner_epoch, event_id)):
+        return False
+    with _player_states_lock:
+        local = _player_states.get(_client_id, {})
+        key = (session, owner_epoch, _local_room_id, event_id)
+        if (not _connected or _client_id <= 0 or
+                not 0 <= _local_room_id <= 0xffff or
+                session != _interaction_session or
+                local.get("roomId") != _local_room_id or
+                local.get("interactionSession") != session or
+                local.get("playerEpoch") != owner_epoch or
+                key not in _projectile_sent):
+            return False
+        packet = {"type": "MNSG_PROJECTILE_STOP", "clientId": _client_id,
+                  "currentRoomId": _local_room_id,
+                  "interactionSession": session, "ownerEpoch": owner_epoch,
+                  "projectileId": event_id, "quiet": True}
+    return _send_raw(packet)
+
+
+def poll_projectile_stop():
+    """Return the next fresh visual retirement for the native mirror pool."""
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        _prune_projectile_spawns(now_ms)
+        for _ in range(len(_projectile_stop_events)):
+            key = _projectile_stop_events.popleft()
+            stopped = _projectile_stops.get(key)
+            if stopped is None:
+                continue
+            status = _projectile_owner_status(stopped[1])
+            if status == 1:
+                _projectile_stop_events.append(key)
+                continue
+            if status == 2:
+                return key[0], key[1], key[2], key[4]
+    return None
 
 
 def get_projectile_session() -> int:
@@ -2893,7 +3021,7 @@ def set_position_anim(
         rot_z: Current model Z rotation.
         appearance_flags: Bitmap containing Sudden Impact (bit 0), Mini
             Ebisumaru (bit 1), native hurt recovery (bit 2), and the alternative
-            Ebisumaru skin (bit 3).
+            Ebisumaru skin (bit 3), and player ice freeze (bit 4).
         velocity_x: Optional final-frame X velocity in world units per second.
         velocity_y: Optional final-frame Y velocity in world units per second.
         velocity_z: Optional final-frame Z velocity in world units per second.

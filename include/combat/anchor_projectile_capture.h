@@ -3,6 +3,9 @@
 
 #include "combat/anchor_projectiles.h"
 
+/* Native thrown-weapon kinds created by the player projectile manager. */
+int anchor_projectile_capture_kind(int kind);
+
 /* Entry-side activation check, before native initialization advances state. */
 int anchor_projectile_capture_first_update(const void *task);
 

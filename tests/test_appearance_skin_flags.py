@@ -1,4 +1,4 @@
-"""Appearance bitmap bit 3 (alternative Ebisumaru skin) transport tests."""
+"""Appearance bitmap skin and player-freeze transport tests."""
 
 import json
 import sys
@@ -57,8 +57,10 @@ class AppearanceSkinFlagTests(unittest.TestCase):
 
     def test_bit_three_is_defined_and_part_of_the_mask(self) -> None:
         self.assertEqual(anchor_mnsg.APPEARANCE_ALTERNATIVE_EBISUMARU, 1 << 3)
-        self.assertEqual(anchor_mnsg.APPEARANCE_MASK, 0b1111)
+        self.assertEqual(anchor_mnsg.APPEARANCE_FROZEN, 1 << 4)
+        self.assertEqual(anchor_mnsg.APPEARANCE_MASK, 0b11111)
         self.assertTrue(anchor_mnsg.APPEARANCE_MASK & (1 << 3))
+        self.assertTrue(anchor_mnsg.APPEARANCE_MASK & (1 << 4))
 
     def test_set_position_anim_sends_the_alternative_bit(self) -> None:
         with mock.patch.object(anchor_mnsg.time, "monotonic", return_value=100.0):
@@ -71,19 +73,20 @@ class AppearanceSkinFlagTests(unittest.TestCase):
         self.assertEqual(packet["appearanceFlags"], 1 << 3)
         self.assertTrue(packet["appearanceFlags"] & (1 << 3))
 
-    def test_set_position_anim_carries_all_four_bits(self) -> None:
+    def test_set_position_anim_carries_all_five_bits(self) -> None:
         with mock.patch.object(anchor_mnsg.time, "monotonic", return_value=100.0):
             self.assertTrue(anchor_mnsg.set_position_anim(
-                0, 0, 0, 1, 0, 100, 0, 0, 0, appearance_flags=15,
+                0, 0, 0, 1, 0, 100, 0, 0, 0, appearance_flags=31,
             ))
-        self.assertEqual(self.packets()[-1]["appearanceFlags"], 15)
+        self.assertEqual(self.packets()[-1]["appearanceFlags"], 31)
 
     def test_merge_stores_and_lobby_exposes_bit_three(self) -> None:
-        self.assertTrue(anchor_mnsg._merge_client_state(2, {"appearanceFlags": 15}))
-        self.assertEqual(anchor_mnsg._player_states[2]["appearanceFlags"], 15)
+        self.assertTrue(anchor_mnsg._merge_client_state(2, {"appearanceFlags": 31}))
+        self.assertEqual(anchor_mnsg._player_states[2]["appearanceFlags"], 31)
         lobby = json.loads(anchor_mnsg.get_lobby_positions_json())
-        self.assertEqual(lobby[0]["ap"], 15)
+        self.assertEqual(lobby[0]["ap"], 31)
         self.assertTrue(lobby[0]["ap"] & (1 << 3))
+        self.assertTrue(lobby[0]["ap"] & (1 << 4))
 
     def test_old_peer_mask_drops_bit_three_without_raising(self) -> None:
         with mock.patch.object(anchor_mnsg, "APPEARANCE_MASK", 7):
@@ -136,7 +139,7 @@ class AppearanceSkinFlagTests(unittest.TestCase):
             self.assertTrue(anchor_mnsg.set_position_anim(
                 2147483647, -2147483648, 2147483647,
                 255, 65535, 65535, -32768, 32767, -32768,
-                appearance_flags=15,
+                appearance_flags=31,
                 velocity_x=1000000, velocity_y=-1000000, velocity_z=1000000,
                 angular_velocity_x=32767, angular_velocity_y=-32768,
                 angular_velocity_z=32767, force_motion_edge=1,
@@ -149,7 +152,7 @@ class AppearanceSkinFlagTests(unittest.TestCase):
             len(wire), anchor_mnsg.HOT_PACKET_MAX_BYTES["MNSG_PLAYER_POS"]
         )
         self.assertTrue(wire.endswith(b"\x00"))
-        self.assertEqual(self.packets()[-1]["appearanceFlags"], 15)
+        self.assertEqual(self.packets()[-1]["appearanceFlags"], 31)
 
 
 class StressAppearanceCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -191,7 +194,7 @@ class StressAppearanceCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stress_tool_mask_carries_bit_three(self) -> None:
         # The imported mask must be the widened one, not the old 7-bit fallback.
-        self.assertEqual(anchor_stress.APPEARANCE_MASK, 15)
+        self.assertEqual(anchor_stress.APPEARANCE_MASK, 31)
 
 
 if __name__ == "__main__":

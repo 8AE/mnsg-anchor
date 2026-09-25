@@ -50,6 +50,9 @@
 #include "combat/anchor_remote_collision.h"
 #include "combat/anchor_collision_actors.h"
 #include "combat/anchor_player_damage.h"
+#include "combat/anchor_player_freeze.h"
+#include "combat/anchor_player_freeze_visual.h"
+#include "combat/anchor_collision_cube.h"
 #include "progression/item_sync.h"
 #include "core/anchor.h"
 #include "platform/modding.h"
@@ -1546,6 +1549,14 @@ static AnchorCollisionBody collision_body_at(AnchorCollisionVec3 position,
     return body;
 }
 
+static int slot_has_visible_cube(const RemoteModelSlot *slot)
+{
+    return slot->pending_valid &&
+           anchor_player_freeze_visual_has_cube(
+               slot->cid, slot->pending_remote.interaction_session,
+               slot->pending_remote.player_epoch);
+}
+
 static int collect_collision_peers(const RemoteModelSlot *self,
                                    AnchorCollisionBody *bodies)
 {
@@ -1560,6 +1571,7 @@ static int collect_collision_peers(const RemoteModelSlot *self,
         if (peer == self || !peer->active || !peer->pending_valid ||
             peer->pending_room != D_800C7AB2 ||
             !peer->collision_ready || peer->pending_remote.collision_disabled ||
+            slot_has_visible_cube(peer) ||
             !is_linked_remote_task(peer->task))
             continue;
         bodies[count++] = peer->collision_body;
@@ -1593,7 +1605,7 @@ int anchor_player_models_get_epoch(void)
     void *task = 0;
     void *object = 0;
     int alive = 0;
-    int scripted = anchor_remote_collision_is_scripted();
+    int scripted = anchor_remote_collision_is_scripted_for_epoch();
     if (anchor_is_connected() && local_collision_body(&body, &scale))
     {
         unsigned char *work;
@@ -1783,15 +1795,58 @@ static void receive_player_hits(void)
 {
     int sender;
     int epoch;
+    int hit_kind;
     int i;
     float x, y, z;
     int current_epoch = anchor_player_models_get_epoch();
     /* Drain even rejected hits instead of retaining them until control
      * resumes. The transport also bounds the queue by age and peer session. */
-    for (i = 0; i < 16 && anchor_poll_player_hit(&sender, &epoch, &x, &y, &z); ++i)
+    for (i = 0; i < 16 && anchor_poll_player_hit(&sender, &epoch, &x, &y, &z,
+                                                 &hit_kind); ++i)
         if (epoch == current_epoch && s_interaction_alive &&
             !s_interaction_scripted)
-            (void)anchor_player_damage_apply(x, y, z);
+            (void)anchor_player_freeze_apply_hit(x, y, z, hit_kind);
+}
+
+int anchor_player_models_get_freeze_visual_targets(
+    AnchorFreezeVisualTarget *out, int capacity)
+{
+    int i, count = 0;
+    unsigned char *local = D_801FC60C_5B851C;
+    if (!out || capacity <= 0)
+        return 0;
+    if (anchor_player_freeze_active() && is_rdram_pointer(local) &&
+        *(unsigned char *)((unsigned char *)local + 4) == 2)
+    {
+        out[count].cid = 0;
+        out[count].session = 0;
+        out[count].epoch = anchor_player_models_get_epoch();
+        out[count].x = *(float *)(local + 8);
+        out[count].y = *(float *)(local + 0xc);
+        out[count].z = *(float *)(local + 0x10);
+        out[count].scale = *(float *)(local + 0x1c);
+        ++count;
+    }
+    for (i = 0; i < s_slot_capacity && count < capacity; ++i)
+    {
+        const RemoteModelSlot *slot = &s_slots[i];
+        const unsigned char *object = slot->object;
+        if (!slot->active || !slot->pending_valid ||
+            !(slot->pending_remote.appearance_flags & ANCHOR_APPEARANCE_FROZEN) ||
+            slot->pending_room != D_800C7AB2 ||
+            slot->bound_ch < 0 || !is_linked_remote_task(slot->task) ||
+            !is_rdram_pointer(object))
+            continue;
+        out[count].cid = slot->cid;
+        out[count].session = slot->pending_remote.interaction_session;
+        out[count].epoch = slot->pending_remote.player_epoch;
+        out[count].x = *(const float *)(object + 8);
+        out[count].y = *(const float *)(object + 0xc);
+        out[count].z = *(const float *)(object + 0x10);
+        out[count].scale = *(const float *)(object + 0x1c);
+        ++count;
+    }
+    return count;
 }
 
 /* Apply an accepted network hit at the real player's normal pre-update
@@ -1816,6 +1871,7 @@ static AnchorCollisionVec3 incoming_player_push(const AnchorCollisionBody *body)
         if (!slot->active || !slot->pending_valid || !slot->collision_ready ||
             slot->pending_room != D_800C7AB2 ||
             slot->pending_remote.collision_disabled ||
+            slot_has_visible_cube(slot) ||
             slot->pending_remote.player_epoch <= 0 ||
             slot->pending_remote.interaction_session <= 0 ||
             s_interaction_tick - slot->drive_sample_tick > 12u ||
@@ -1862,6 +1918,16 @@ static int resolve_slot_collision(RemoteModelSlot *slot,
         return 1;
     }
 
+    /* The frozen display is the center of a separate owned cube collider.
+     * Keep its hit body at the sender's pose without round-peer separation. */
+    if (slot_has_visible_cube(slot))
+    {
+        slot->collision_body = collision_body_at(target, remote->ch, scale);
+        slot->collision_ready = 1;
+        set_object_position(slot->object, target);
+        return 1;
+    }
+
     if (!mnsg_array_reserve((void **)&s_collision_peers,
                             &s_collision_peer_capacity, s_slot_capacity + 1,
                             sizeof(*s_collision_peers)))
@@ -1873,7 +1939,8 @@ static int resolve_slot_collision(RemoteModelSlot *slot,
     }
     peers = s_collision_peers;
     count = collect_collision_peers(slot, peers);
-    if (local_collision_body(&local, &local_scale))
+    if (local_collision_body(&local, &local_scale) &&
+        !anchor_player_freeze_visual_has_cube(0, 0, s_player_epoch))
         peers[count++] = local;
     count = anchor_collision_append_enemies(&s_collision_peers,
                                              &s_collision_peer_capacity, count);
@@ -1904,6 +1971,49 @@ static AnchorCollisionBody s_collision_local_body;
 static float s_collision_local_scale;
 static unsigned short s_collision_local_room;
 
+static int cube_side_blocked(const AnchorCollisionBody *moving,
+                             const AnchorCollisionVec3 *position,
+                             const AnchorCollisionCube *cubes, int count)
+{
+    int i;
+    for (i = 0; i < count; ++i)
+    {
+        float top;
+        if (anchor_collision_cube_side_overlaps(moving, position, &cubes[i]) &&
+            !anchor_collision_cube_top_contact(moving, position, &cubes[i], &top))
+            return 1;
+    }
+    return 0;
+}
+
+static int resolve_cube_side_contact(const AnchorCollisionBody *moving,
+                                     const AnchorCollisionVec3 *target,
+                                     float scale,
+                                     const AnchorCollisionBody *peers,
+                                     int peer_count,
+                                     const AnchorCollisionCube *cubes,
+                                     int cube_count,
+                                     AnchorCollisionVec3 *out)
+{
+    AnchorCollisionVec3 candidate = *target, side, world;
+    int pass;
+    for (pass = 0; pass < 3; ++pass)
+    {
+        if (!anchor_collision_cube_move_sides(moving, &candidate, cubes,
+                                              cube_count, &side) ||
+            !anchor_collision_move_body(moving, &side, scale, peers,
+                                        peer_count, &world))
+            return 0;
+        if (!cube_side_blocked(moving, &world, cubes, cube_count))
+        {
+            *out = world;
+            return 1;
+        }
+        candidate = world; /* World/peer resolution may push back into ice. */
+    }
+    return 0;
+}
+
 RECOMP_HOOK("func_801CBAF8_587A08")
 void anchor_collision_before_local_movement(void *task)
 {
@@ -1913,6 +2023,7 @@ void anchor_collision_before_local_movement(void *task)
     s_drive_x = s_drive_z = 0;
     (void)anchor_player_models_get_epoch();
     if (!anchor_is_connected() || !s_interaction_alive ||
+        anchor_player_freeze_active() ||
         anchor_remote_collision_is_scripted() ||
         !local_collision_body(&s_collision_local_body, &s_collision_local_scale))
         return;
@@ -1924,13 +2035,15 @@ void anchor_collision_before_local_movement(void *task)
 RECOMP_HOOK_RETURN("func_801CBAF8_587A08")
 void anchor_collision_after_local_movement(void)
 {
+    AnchorFreezeCubeCollision visible_cubes[ANCHOR_FREEZE_VISUAL_MAX];
+    AnchorCollisionCube cubes[ANCHOR_FREEZE_VISUAL_MAX];
     AnchorCollisionBody *peers;
     AnchorCollisionVec3 target;
     AnchorCollisionVec3 native_target;
     AnchorCollisionVec3 push;
     AnchorCollisionVec3 contact;
     AnchorCollisionVec3 resolved;
-    int count;
+    int count, visual_count, cube_count = 0, peers_available, i;
     /* Runs after the native late player update and shadow mirroring. Rebinding
      * the primary display object here is intentionally before every early
      * return so the alternative override is re-asserted on each firing frame. */
@@ -1941,6 +2054,7 @@ void anchor_collision_after_local_movement(void)
         s_collision_local_object != D_801FC60C_5B851C ||
         s_collision_local_room != D_800C7AB2 ||
         !is_linked_task(s_collision_local_task) ||
+        anchor_player_freeze_active() ||
         anchor_remote_collision_is_scripted())
     {
         s_collision_local_task = 0;
@@ -1961,27 +2075,60 @@ void anchor_collision_after_local_movement(void)
             s_drive_z = (int)(dz * 3000.0f);
         }
     }
-    if (!mnsg_array_reserve((void **)&s_collision_peers,
-                            &s_collision_peer_capacity, s_slot_capacity + 1,
-                            sizeof(*s_collision_peers)))
+    visual_count = anchor_player_freeze_visual_get_cubes(
+        visible_cubes, ANCHOR_FREEZE_VISUAL_MAX);
+    for (i = 0; i < visual_count; ++i)
+        if (visible_cubes[i].cid > 0) /* Never collide with one's own ice. */
+            cubes[cube_count++] = visible_cubes[i].cube;
+    peers_available = mnsg_array_reserve((void **)&s_collision_peers,
+                                          &s_collision_peer_capacity,
+                                          s_slot_capacity + 1,
+                                          sizeof(*s_collision_peers));
+    if (!peers_available && !cube_count)
         return;
-    peers = s_collision_peers;
-    count = collect_collision_peers(0, peers);
-    if (!count)
+    peers = peers_available ? s_collision_peers : 0;
+    count = peers_available ? collect_collision_peers(0, peers) : 0;
+    if (!count && !cube_count)
         return;
     target = native_target;
-    push = incoming_player_push(&s_collision_local_body);
+    push = peers_available ? incoming_player_push(&s_collision_local_body) :
+                             (AnchorCollisionVec3){0.0f, 0.0f, 0.0f};
     target.x += push.x;
     target.z += push.z;
     anchor_collision_move_peers(&s_collision_local_body, &target,
                                 peers, count, &contact);
-    if (push.x == 0.0f && push.z == 0.0f &&
-        contact.x == target.x && contact.y == target.y && contact.z == target.z)
-        return;
-    if (!anchor_collision_move_body(&s_collision_local_body, &target,
-                                    s_collision_local_scale, peers, count,
-                                    &resolved))
-        return;
+    if (cube_count)
+    {
+        if (push.x == 0.0f && push.z == 0.0f &&
+            contact.x == native_target.x && contact.y == native_target.y &&
+            contact.z == native_target.z &&
+            !cube_side_blocked(&s_collision_local_body, &contact,
+                               cubes, cube_count))
+        {
+            AnchorCollisionVec3 side;
+            if (anchor_collision_cube_move_sides(&s_collision_local_body,
+                                                 &contact, cubes, cube_count,
+                                                 &side) &&
+                side.x == contact.x && side.y == contact.y &&
+                side.z == contact.z)
+                return;
+        }
+        if (!resolve_cube_side_contact(&s_collision_local_body, &contact,
+                                       s_collision_local_scale, peers, count,
+                                       cubes, cube_count, &resolved))
+            resolved = s_collision_local_body.position;
+    }
+    else
+    {
+        if (push.x == 0.0f && push.z == 0.0f &&
+            contact.x == target.x && contact.y == target.y &&
+            contact.z == target.z)
+            return;
+        if (!anchor_collision_move_body(&s_collision_local_body, &target,
+                                        s_collision_local_scale, peers, count,
+                                        &resolved))
+            return;
+    }
     {
         /* Native func_801CD084 moves the primary and its following display
          * object; func_801CF3A0 maintains the shadow in the same three-record
@@ -2043,6 +2190,8 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
         animation_input.native_step = slot->native_frame_step;
         animation_input.root_phase_lead_frames =
             remote->motion_phase_frames;
+        animation_input.frozen =
+            (remote->appearance_flags & ANCHOR_APPEARANCE_FROZEN) != 0;
         anchor_remote_animation_step(&slot->animation, &animation_input,
                                      &animation_output);
         slot->frame = animation_output.frame;
@@ -2050,8 +2199,13 @@ static void update_slot_pose(RemoteModelSlot *slot, const AnchorPlayerModelRemot
     }
     else
     {
-        slot->frame += slot->native_frame_step;
-        slot->frame_step = slot->native_frame_step;
+        if (remote->appearance_flags & ANCHOR_APPEARANCE_FROZEN)
+            slot->frame_step = 0.0f;
+        else
+        {
+            slot->frame += slot->native_frame_step;
+            slot->frame_step = slot->native_frame_step;
+        }
     }
 
     if (frame_count > 1.0f)

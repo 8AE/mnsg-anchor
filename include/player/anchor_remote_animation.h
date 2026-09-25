@@ -20,6 +20,7 @@ typedef struct AnchorRemoteAnimationInput
     float endpoint_step;
     float native_step;
     int root_phase_lead_frames;
+    int frozen;
 } AnchorRemoteAnimationInput;
 
 /* Pure visual clock state. endpoint_step and native_step are retained in
@@ -37,6 +38,7 @@ typedef struct AnchorRemoteAnimationState
     float native_step;
     float playback_step;
     float correction_debt;
+    int frozen;
 } AnchorRemoteAnimationState;
 
 typedef struct AnchorRemoteAnimationOutput

@@ -17,6 +17,8 @@
 #include "player/anchor_player_models.h"
 #include "player/alternative_ebisumaru/anchor_player_skin.h"
 #include "combat/anchor_projectile_models.h"
+#include "combat/anchor_player_freeze.h"
+#include "combat/anchor_player_freeze_visual.h"
 #include "player/anchor_player_sounds.h"
 #include "player/anchor_remote_animation.h"
 #include "combat/anchor_remote_collision.h"
@@ -247,6 +249,7 @@ void anchor_load_remote_cutscene_resources(void)
     anchor_player_skin_load_resources();
     /* Projectile recipes share the already staged character broad files. */
     anchor_projectile_models_load_resources();
+    anchor_player_freeze_visual_load_resources();
     anchor_dungeon_maps_load_resources();
     anchor_render_scratch_load_resources();
 }
@@ -499,6 +502,7 @@ static void publish_local_state(PlayerObject *local_obj)
     int has_animation_step = 0;
     int anim_delta;
     int frame_restarted;
+    int frozen_visual_pose;
     int should_send_position = 0;
     int should_send_animation;
     int force_motion_edge = 0;
@@ -588,6 +592,12 @@ static void publish_local_state(PlayerObject *local_obj)
      * receive the action boundary, animation phase, and final rotations. */
     action = (int)read_u8_at(D_801FC604_5B8514, 0xcc);
     frame_100 = (int)(read_float_at(local_obj, 0x28) * 100.0f);
+    {
+        float frozen_frame;
+        frozen_visual_pose = anchor_player_freeze_visual_pose(0, &frozen_frame);
+        if (frozen_visual_pose)
+            frame_100 = (int)(frozen_frame * 100.0f);
+    }
     /* Use the engine's model resolver because flagged model references cannot
      * be safely dereferenced as ordinary pointers by the mod. */
     frame_count = func_8001B5AC_1C1AC(local_obj);
@@ -598,7 +608,7 @@ static void publish_local_state(PlayerObject *local_obj)
         frame_count == s_previous_frame_anim_count)
     {
         float animation_delta =
-            read_float_at(local_obj, 0x28) - s_previous_frame_anim_frame;
+            (float)frame_100 / 100.0f - s_previous_frame_anim_frame;
         float half_frame_count = frame_count * 0.5f;
 
         while (animation_delta > half_frame_count)
@@ -609,9 +619,14 @@ static void publish_local_state(PlayerObject *local_obj)
         has_animation_step = 1;
     }
     s_previous_frame_action = action;
-    s_previous_frame_anim_frame = read_float_at(local_obj, 0x28);
+    s_previous_frame_anim_frame = (float)frame_100 / 100.0f;
     s_previous_frame_anim_count = frame_count;
     s_have_previous_frame_animation = 1;
+    if (frozen_visual_pose)
+    {
+        animation_step_100 = 0;
+        has_animation_step = 1;
+    }
     rot_x = (int)read_s16_at(local_obj, 0x14);
     rot_y = (int)read_s16_at(local_obj, 0x16);
     rot_z = (int)read_s16_at(local_obj, 0x18);
@@ -666,6 +681,8 @@ static void publish_local_state(PlayerObject *local_obj)
     appearance_flags = 0;
     if (read_u8_at(D_801FC604_5B8514, 0xd4) != 0)
         appearance_flags |= ANCHOR_APPEARANCE_HURT_RECOVERY;
+    if (anchor_player_freeze_active())
+        appearance_flags |= ANCHOR_APPEARANCE_FROZEN;
     {
         void *player_work =
             *(void **)((unsigned char *)D_801FC604_5B8514 + 0x5c);

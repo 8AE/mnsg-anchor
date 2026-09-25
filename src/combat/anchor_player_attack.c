@@ -3,7 +3,8 @@
 #include "utils/array_utils.h"
 
 extern int anchor_send_player_hit(int target_cid, int target_epoch,
-                                  float hit_x, float hit_y, float hit_z);
+                                  float hit_x, float hit_y, float hit_z,
+                                  int hit_kind);
 
 typedef struct AttackHit
 {
@@ -18,8 +19,10 @@ typedef struct AttackEpisode
     unsigned int descriptor;
     unsigned int animation;
     unsigned int seen_frame;
+    int is_projectile;
     float animation_frame;
     int hit_count;
+    int consumed;
     int hit_capacity;
     AttackHit *hits;
 } AttackEpisode;
@@ -52,10 +55,18 @@ void anchor_player_attack_begin_frame(int enabled, int player_epoch)
     ++s_frame;
     for (i = 0; i < s_episode_capacity; ++i)
     {
-        if (s_episodes[i].task &&
+        if (s_episodes[i].task && !s_episodes[i].is_projectile &&
             s_frame - s_episodes[i].seen_frame > 1u)
             s_episodes[i].task = 0;
     }
+}
+
+void anchor_player_attack_forget_task(const void *task)
+{
+    int i;
+    for (i = 0; i < s_episode_capacity; ++i)
+        if (s_episodes[i].task == task)
+            s_episodes[i].task = 0;
 }
 
 static int valid_float(float value)
@@ -108,22 +119,26 @@ static AttackEpisode *find_episode(const AnchorPlayerAttackSample *sample)
     }
     restart = !episode->task || episode->object != sample->object ||
               episode->descriptor != sample->descriptor;
-    if (sample->is_player &&
+    if (!sample->is_projectile &&
         (episode->animation != sample->animation ||
          sample->frame < episode->animation_frame))
         restart = 1;
     if (restart)
+    {
         episode->hit_count = 0;
+        episode->consumed = 0;
+    }
     episode->task = sample->task;
     episode->object = sample->object;
     episode->descriptor = sample->descriptor;
     episode->animation = sample->animation;
+    episode->is_projectile = sample->is_projectile;
     episode->animation_frame = sample->frame;
     episode->seen_frame = s_frame;
     return episode;
 }
 
-void anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
+int anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
 {
     AttackEpisode *episode;
     int count;
@@ -131,19 +146,21 @@ void anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
 
     if (!s_enabled || !sample || !sample->task || !sample->object ||
         !sample->descriptor || !valid_float(sample->frame))
-        return;
+        return 0;
     episode = find_episode(sample);
+    if (episode && sample->is_projectile && episode->consumed)
+        return 1;
     if (!episode || !(sample->radius > 0.0f && sample->radius <= 10000.0f) ||
         !valid_float(sample->center.x) || !valid_float(sample->center.y) ||
         !valid_float(sample->center.z))
-        return;
+        return 0;
     count = anchor_player_models_capacity();
     if (!mnsg_array_reserve((void **)&s_targets, &s_target_capacity, count,
                             sizeof(*s_targets)))
-        return;
+        return 0;
     count = anchor_player_models_get_hit_targets(s_targets, s_target_capacity);
     if (count < 0 || count > s_target_capacity)
-        return;
+        return 0;
     for (i = 0; i < count; ++i)
     {
         int j;
@@ -165,17 +182,24 @@ void anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
             continue;
         if (anchor_send_player_hit(s_targets[i].cid, s_targets[i].epoch,
                                     sample->center.x, sample->center.y,
-                                    sample->center.z))
+                                    sample->center.z, sample->hit_kind))
         {
             episode->hits[j].cid = s_targets[i].cid;
             episode->hits[j].epoch = s_targets[i].epoch;
             ++episode->hit_count;
+            if (sample->is_projectile)
+            {
+                episode->consumed = 1;
+                return 1;
+            }
         }
     }
+    return 0;
 }
 
 #ifndef ANCHOR_PLAYER_ATTACK_HOST_TEST
 #include "core/anchor.h"
+#include "combat/anchor_projectiles.h"
 #include "platform/modding.h"
 
 extern void *D_801FC600_5B8510; /* Native player-manager task. */
@@ -188,6 +212,7 @@ extern void func_80033898_34498(unsigned short rx, unsigned short ry,
                                unsigned short rz, float *x, float *y, float *z);
 
 static int s_player_attack_scan;
+static unsigned char *s_suppressed_projectile;
 
 RECOMP_HOOK("func_801F77F4_5B3704")
 void anchor_player_attack_scene_frame(void)
@@ -210,6 +235,18 @@ RECOMP_HOOK_RETURN("func_80033024_33C24")
 void anchor_player_attack_scan_end(void)
 {
     s_player_attack_scan = 0;
+}
+
+RECOMP_HOOK_RETURN("func_80033404_34004")
+void anchor_player_attack_native_sphere_return(void)
+{
+    if (s_suppressed_projectile)
+    {
+        /* +0x34 is only a loop guard inside this native sphere scanner.
+         * Never leave the sentinel where later native code expects a task. */
+        *(void **)(s_suppressed_projectile + 0x34) = 0;
+        s_suppressed_projectile = 0;
+    }
 }
 
 RECOMP_HOOK("func_80033404_34004")
@@ -240,10 +277,21 @@ void anchor_player_attack_native_sphere(void *object, void *task, void *victims)
     sample.animation = *(unsigned int *)(model + 0x2c);
     sample.frame = *(float *)(model + 0x28);
     sample.is_player = task == D_801FC604_5B8514;
+    sample.is_projectile = !sample.is_player &&
+                           anchor_projectiles_is_native_throw(task);
+    if (sample.is_projectile && actor[0x65])
+    {
+        /* Already queued for native teardown: this scanner can still run
+         * before the projectile manager's next pass. */
+        *(void **)(actor + 0x34) = actor;
+        s_suppressed_projectile = actor;
+        return;
+    }
     sample.center.x = D_80168F80_169B80 * *(float *)(model + 0x1c);
     sample.center.y = D_80168F84_169B84 * *(float *)(model + 0x20);
     sample.center.z = D_80168F88_169B88 * *(float *)(model + 0x24);
     sample.radius = D_80168F8C_169B8C * *(float *)(model + 0x1c);
+    sample.hit_kind = sample.is_projectile ? anchor_projectiles_hit_kind(task) : 0;
     func_80033898_34498(*(unsigned short *)(model + 0x14) & 0x3ff,
                        *(unsigned short *)(model + 0x16) & 0x3ff,
                        *(unsigned short *)(model + 0x18) & 0x3ff,
@@ -251,6 +299,11 @@ void anchor_player_attack_native_sphere(void *object, void *task, void *victims)
     sample.center.x += *(float *)(model + 8);
     sample.center.y += *(float *)(model + 0xc);
     sample.center.z += *(float *)(model + 0x10);
-    anchor_player_attack_observe(&sample);
+    if (anchor_player_attack_observe(&sample))
+    {
+        anchor_projectiles_on_player_hit(task);
+        *(void **)(actor + 0x34) = actor;
+        s_suppressed_projectile = actor;
+    }
 }
 #endif

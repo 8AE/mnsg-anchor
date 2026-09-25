@@ -15,10 +15,14 @@ typedef struct AnchorPlayerAttackSample
     int is_player;
     AnchorCollisionVec3 center;
     float radius;
+    int hit_kind; /* 0 ordinary, 1 Sasuke ice kunai. */
+    int is_projectile; /* Verified native thrown-weapon task. */
 } AnchorPlayerAttackSample;
 
 void anchor_player_attack_reset(void);
 void anchor_player_attack_begin_frame(int enabled, int player_epoch);
-void anchor_player_attack_observe(const AnchorPlayerAttackSample *sample);
+void anchor_player_attack_forget_task(const void *task);
+/* Returns 1 once a projectile has struck a remote player in this lifetime. */
+int anchor_player_attack_observe(const AnchorPlayerAttackSample *sample);
 
 #endif

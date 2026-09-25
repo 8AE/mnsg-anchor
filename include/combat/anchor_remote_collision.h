@@ -16,6 +16,9 @@ typedef struct AnchorCollisionBody
 } AnchorCollisionBody;
 
 int anchor_remote_collision_is_scripted(void);
+/* Epoch tracking ignores the freeze hook's temporary control bit while
+ * collision and damage gates continue to see it as scripted movement. */
+int anchor_remote_collision_is_scripted_for_epoch(void);
 
 /* A peer's native movement before solid player contact, in world units per
  * tick. Only approaching horizontal contact contributes pressure. The

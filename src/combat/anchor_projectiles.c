@@ -5,6 +5,8 @@
 #include "combat/anchor_projectile_models.h"
 #include "combat/anchor_projectile_source.h"
 #include "combat/anchor_projectile_capture.h"
+#include "combat/anchor_player_attack.h"
+#include "combat/anchor_player_freeze_visual.h"
 #include "progression/item_sync.h"
 #include "platform/modding.h"
 #include "platform/recomputils.h"
@@ -12,6 +14,16 @@
 extern void *D_801FC604_5B8514;
 extern void *D_801FC60C_5B851C;
 extern unsigned short D_800C7AB2;
+extern int anchor_send_projectile_stop(int session, int owner_epoch, int event_id);
+extern int anchor_poll_projectile_stop(int *cid, int *session, int *epoch, int *event_id);
+
+typedef struct ProjectileStop
+{
+    const void *task;
+    int id, session, epoch;
+    unsigned short room;
+    unsigned int tick;
+} ProjectileStop;
 
 static AnchorProjectileSourceState s_source;
 static void *s_owner;
@@ -19,6 +31,9 @@ static int s_session, s_epoch;
 static unsigned short s_room;
 static unsigned int s_tick;
 static int s_world_was_paused;
+static ProjectileStop s_stops[ANCHOR_PROJECTILE_SOURCE_MAX];
+static int s_stop_count;
+static int rdram(const void *pointer);
 
 static int rdram(const void *pointer)
 {
@@ -36,10 +51,76 @@ static int linked(const void *task)
     return rdram(backlink) && *(void *const *)backlink == task;
 }
 
+int anchor_projectiles_is_native_throw(const void *task)
+{
+    const unsigned char *child = task;
+    if (!linked(task) ||
+        *(void *const *)(child + 0x5c) != D_801FC604_5B8514)
+        return 0;
+    /* All locally captured thrown-weapon families use these native kinds.
+     * A local-owned melee helper may have an attack descriptor, but must
+     * remain a multi-target attack and must not receive removal marks. */
+    return anchor_projectile_capture_kind(child[0x64]);
+}
+
+int anchor_projectiles_hit_kind(const void *task)
+{
+    const unsigned char *child = task;
+    const unsigned char *owner;
+    if (!anchor_projectiles_is_native_throw(task) ||
+        !rdram(D_801FC604_5B8514))
+        return 0;
+    owner = *(const unsigned char *const *)(child + 0x5c);
+    return owner[0x60] == 2 &&
+           (child[0x64] == 0x1a || child[0x64] == 0x1b) &&
+           child[0x4c] == 0x1a;
+}
+
 RECOMP_HOOK("func_80034A10_35610")
 void anchor_projectile_task_reinitialized(void *task)
 {
+    int i;
+    for (i = 0; i < s_stop_count; )
+    {
+        if (s_stops[i].task == task)
+            s_stops[i].task = 0;
+        ++i;
+    }
     anchor_projectile_source_forget_task(&s_source, task);
+    anchor_player_attack_forget_task(task);
+}
+
+void anchor_projectiles_on_player_hit(const void *task)
+{
+    int i, id;
+    if (!anchor_projectiles_is_native_throw(task))
+        return;
+    /* Retire the native projectile on every accepted contact, including a
+     * first scene frame before the transport snapshot has been initialized. */
+    ((unsigned char *)task)[0x65] = 1;
+    ((unsigned char *)task)[0x66] = 0;
+    if (!s_session || s_owner != D_801FC604_5B8514 ||
+        s_room != D_800C7AB2)
+        return;
+    id = anchor_projectile_source_task_id(&s_source, task);
+    /* An uncaptured first-frame shot has no mirrored visual to retire. */
+    if (!id)
+        return;
+    for (i = 0; i < s_stop_count; ++i)
+        if (s_stops[i].task == task)
+            return;
+    if (s_stop_count >= ANCHOR_PROJECTILE_SOURCE_MAX)
+        return;
+    /* The native projectile manager removes every marked child, including
+     * kunai kinds omitted by the player's ordinary cleanup table. Its next
+     * pass owns both task and display-object teardown. */
+    s_stops[s_stop_count].task = task;
+    s_stops[s_stop_count].id = id;
+    s_stops[s_stop_count].session = s_session;
+    s_stops[s_stop_count].epoch = s_epoch;
+    s_stops[s_stop_count].room = s_room;
+    s_stops[s_stop_count].tick = s_tick;
+    ++s_stop_count;
 }
 
 static void capture_throw(void *pointer)
@@ -166,9 +247,12 @@ void anchor_projectiles_frame(void)
     {
         anchor_projectile_source_reset(&s_source);
         anchor_projectile_models_reset();
+        anchor_player_freeze_visual_reset();
+        s_stop_count = 0;
     }
     else if (session != s_session || epoch != s_epoch)
     {
+        anchor_player_freeze_visual_reset();
         /* The local interaction epoch also changes at modal entry/exit to
          * reject stale hits. Those boundaries freeze existing/pending throws;
          * they do not end their lifetimes. Pending local throws publish with
@@ -190,13 +274,18 @@ void anchor_projectiles_frame(void)
     {
         anchor_projectile_source_clear_pending(&s_source);
         anchor_projectile_models_reset();
+        anchor_player_freeze_visual_reset();
+        s_stop_count = 0;
         return;
     }
     /* These callbacks run after the scheduler, so its native task mask does
      * not stop remote motion or spawn catch-up. Leave incoming events queued
      * and the simulation clock fixed while lifecycle cleanup stays live. */
     if (world_paused)
+    {
+        anchor_player_freeze_visual_reset();
         return;
+    }
     ++s_tick;
     for (i = 0; i < ANCHOR_PROJECTILE_BATCH_MAX &&
          (spawn = anchor_projectile_source_peek(&s_source, s_tick)) != 0; ++i)
@@ -209,7 +298,32 @@ void anchor_projectiles_frame(void)
 #endif
         anchor_projectile_source_ack(&s_source);
     }
+    for (i = 0; i < s_stop_count; )
+    {
+        ProjectileStop *stop = &s_stops[i];
+        if (stop->session != session || stop->epoch != epoch ||
+            s_tick - stop->tick > ANCHOR_PROJECTILE_SOURCE_TTL ||
+            stop->room != s_room)
+        {
+            s_stops[i] = s_stops[--s_stop_count];
+            continue;
+        }
+        if (!anchor_send_projectile_stop(session, epoch, stop->id))
+        {
+            ++i;
+            continue;
+        }
+        s_stops[i] = s_stops[--s_stop_count];
+    }
+    for (i = 0; i < ANCHOR_PROJECTILE_BATCH_MAX; ++i)
+    {
+        int cid, stop_session, stop_epoch, stop_id;
+        if (!anchor_poll_projectile_stop(&cid, &stop_session, &stop_epoch, &stop_id))
+            break;
+        anchor_projectile_models_stop(cid, stop_session, stop_epoch, stop_id);
+    }
     anchor_projectile_models_tick(owner);
+    anchor_player_freeze_visual_tick(owner);
     json = anchor_get_projectile_spawns_json();
     count = anchor_projectile_spawns_decode(json, remotes, ANCHOR_PROJECTILE_BATCH_MAX);
     for (i = 0; i < count; ++i)

@@ -1,5 +1,12 @@
 #include "combat/anchor_projectile_capture.h"
 
+int anchor_projectile_capture_kind(int kind)
+{
+    return kind == 1 || kind == 2 ||
+           (kind >= 0xc && kind <= 0x10) ||
+           (kind >= 0x17 && kind <= 0x1b);
+}
+
 int anchor_projectile_capture_first_update(const void *pointer)
 {
     const unsigned char *task = pointer;

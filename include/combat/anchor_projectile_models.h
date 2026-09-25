@@ -18,6 +18,7 @@ int anchor_projectile_material_build(int material, unsigned int prim_rgb,
 int anchor_projectile_models_spawn(const AnchorProjectileRemote *remote, void *owner);
 void anchor_projectile_models_tick(void *owner);
 void anchor_projectile_models_reset(void);
+void anchor_projectile_models_stop(int cid, int session, int epoch, int event_id);
 void anchor_projectile_models_load_resources(void);
 
 #endif

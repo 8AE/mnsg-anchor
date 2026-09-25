@@ -288,6 +288,19 @@ void anchor_projectile_models_reset(void)
         s_owner = 0;
 }
 
+void anchor_projectile_models_stop(int cid, int session, int epoch, int event_id)
+{
+    int i;
+    for (i = 0; i < PROJECTILE_SLOTS; ++i)
+    {
+        ProjectileSlot *slot = &s_slots[i];
+        if (slot->active && slot->remote.cid == cid &&
+            slot->remote.session == session && slot->remote.epoch == epoch &&
+            slot->remote.spawn.id == event_id)
+            clear_slot(slot, 1);
+    }
+}
+
 void anchor_projectile_models_load_resources(void)
 {
     int i;

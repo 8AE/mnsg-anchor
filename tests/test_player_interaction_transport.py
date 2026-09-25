@@ -98,6 +98,7 @@ class PlayerInteractionTransportTests(unittest.TestCase):
         self.assertEqual(packet["sourcePosSeq"], 1)
         self.assertEqual(packet["hitSeq"], 1)
         self.assertEqual(packet["hitX"], 50000.25)
+        self.assertEqual(packet["hitKind"], 0)
         self.assertNotIn("addToQueue", packet)
         self.assertNotIn("targetTeamId", packet)
 
@@ -108,6 +109,18 @@ class PlayerInteractionTransportTests(unittest.TestCase):
         anchor_mnsg._player_states[2]["roomId"] = 11
         self.assertFalse(anchor_mnsg.send_player_hit(2, 7, 1, 2, 3))
         self.assertEqual(self.sock.sent, [])
+
+    def test_ice_hit_kind_is_bounded_and_reaches_target_intake(self):
+        self.assertFalse(anchor_mnsg.send_player_hit(2, 7, 1, 2, 3,
+                                                    hit_kind=True))
+        self.assertFalse(anchor_mnsg.send_player_hit(2, 7, 1, 2, 3,
+                                                    hit_kind=2))
+        self.assertTrue(anchor_mnsg.send_player_hit(2, 7, 1, 2, 3,
+                                                   hit_kind=1))
+        self.assertEqual(self.sock.sent[-1]["hitKind"], 1)
+        self.assertTrue(anchor_mnsg._receive_player_hit(self.hit(hitKind=1)))
+        self.assertEqual(anchor_mnsg.poll_player_hit(),
+                         (2, 3, 50000.25, 20.5, -30.75, 1))
 
     def test_sender_and_receiver_reject_scripted_players_and_source_epoch_lag(self):
         self.assertFalse(anchor_mnsg.send_player_hit(2, 7, 1, 2, 3, source_epoch=4))
@@ -124,12 +137,16 @@ class PlayerInteractionTransportTests(unittest.TestCase):
 
     def test_receiver_rejects_spoofed_self_target_room_session_lifecycle_and_bad_point(self):
         invalid = (
-            {"clientId": 1}, {"clientId": 99}, {"targetClientId": 3},
+            {"clientId": 1}, {"clientId": 99}, {"clientId": True},
+            {"targetClientId": 3}, {"targetClientId": True},
             {"roomId": 11}, {"sourceSession": 303}, {"targetSession": 303},
             {"sourceEpoch": 6}, {"targetEpoch": 2}, {"hitSeq": 0},
+            {"hitSeq": True},
             {"sourcePosSeq": 5}, {"hitT": 99000},
             {"hitX": float("nan")}, {"hitY": float("inf")},
             {"hitZ": -10000001}, {"hitX": "invalid"},
+            {"hitX": "1"}, {"hitY": True},
+            {"hitKind": True}, {"hitKind": 2}, {"hitKind": "1"},
         )
         for changes in invalid:
             with self.subTest(changes=changes):
@@ -141,7 +158,7 @@ class PlayerInteractionTransportTests(unittest.TestCase):
         packet = self.hit()
         self.assertTrue(anchor_mnsg._receive_player_hit(packet))
         self.assertFalse(anchor_mnsg._receive_player_hit(packet))
-        self.assertEqual(anchor_mnsg.poll_player_hit(), (2, 3, 50000.25, 20.5, -30.75))
+        self.assertEqual(anchor_mnsg.poll_player_hit(), (2, 3, 50000.25, 20.5, -30.75, 0))
         self.assertFalse(anchor_mnsg._receive_player_hit(packet))
         self.assertTrue(anchor_mnsg._receive_player_hit(self.hit(hitSeq=2)))
         self.assertFalse(anchor_mnsg._receive_player_hit(self.hit(hitSeq=1)))
@@ -156,7 +173,7 @@ class PlayerInteractionTransportTests(unittest.TestCase):
         with mock.patch.object(anchor_mnsg, "_do_disconnect"):
             anchor_mnsg._recv_loop(receiver)
         self.assertFalse(anchor_mnsg.has_packet())
-        self.assertEqual(anchor_mnsg.poll_player_hit(), (2, 3, 50000.25, 20.5, -30.75))
+        self.assertEqual(anchor_mnsg.poll_player_hit(), (2, 3, 50000.25, 20.5, -30.75, 0))
         self.assertEqual(receiver.sent, [])
 
     def test_hit_queue_is_bounded_and_expires_on_local_receive_time(self):
@@ -251,6 +268,20 @@ class PlayerInteractionTransportTests(unittest.TestCase):
         ))
         self.assertEqual((anchor_mnsg._player_states[2]["driveX"],
                           anchor_mnsg._player_states[2]["driveZ"]), (30000, -30000))
+
+    def test_frozen_appearance_edges_bypass_movement_throttle(self):
+        self.clock.return_value = 100.01
+        self.assertTrue(anchor_mnsg.set_position_anim(
+            10, 20, 30, 5, 100, 1200, 10, 20, 30,
+            2 | anchor_mnsg.APPEARANCE_FROZEN,
+            0, 0, 0, 0, 0, 0, 0, 75, 1, 0, 900, 0, 3,
+        ))
+        self.assertEqual(self.sock.sent[-1]["appearanceFlags"], 18)
+        self.assertTrue(anchor_mnsg.set_position_anim(
+            10, 20, 30, 5, 100, 1200, 10, 20, 30,
+            2, 0, 0, 0, 0, 0, 0, 0, 75, 1, 0, 900, 0, 3,
+        ))
+        self.assertEqual(self.sock.sent[-1]["appearanceFlags"], 2)
 
     def test_disconnect_clears_hits_and_new_connection_gets_a_new_token(self):
         self.assertTrue(anchor_mnsg._receive_player_hit(self.hit()))

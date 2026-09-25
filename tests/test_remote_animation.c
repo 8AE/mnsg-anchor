@@ -46,6 +46,7 @@ static AnchorRemoteAnimationInput sample_at(
     input.endpoint_step = endpoint_step;
     input.native_step = native_step;
     input.root_phase_lead_frames = root_phase_lead_frames;
+    input.frozen = 0;
     return input;
 }
 
@@ -462,6 +463,56 @@ static int test_restart_classification_preserves_natural_loop_rate(void)
     return 0;
 }
 
+static int test_frozen_pose_holds_between_samples_and_thaws(void)
+{
+    AnchorRemoteAnimationState state;
+    AnchorRemoteAnimationOutput output;
+    AnchorRemoteAnimationInput input = sample_at(
+        1, 1, 1, 4.0f, 20.0f, 1, 1.0f, 1.0f, 0);
+    int tick;
+
+    anchor_remote_animation_reset(&state);
+    anchor_remote_animation_step(&state, &input, &output);
+    CHECK(near_float(output.frame, 4.0f));
+    input.frozen = 1;
+    input.seq = 2;
+    input.target_frame = 5.0f;
+    anchor_remote_animation_step(&state, &input, &output);
+    CHECK(output.snapped && near_float(output.frame, 5.0f));
+    CHECK(near_float(output.playback_step, 0.0f));
+    input.new_sample = 0;
+    for (tick = 0; tick < 8; ++tick)
+    {
+        anchor_remote_animation_step(&state, &input, &output);
+        CHECK(near_float(output.frame, 5.0f));
+        CHECK(near_float(output.correction_debt, 0.0f));
+    }
+    input.seq = 3;
+    input.target_frame = 6.0f;
+    anchor_remote_animation_step(&state, &input, &output);
+    CHECK(near_float(output.frame, 5.0f));
+    input.action = 2;
+    input.seq = 4;
+    input.target_frame = 0.0f;
+    anchor_remote_animation_step(&state, &input, &output);
+    CHECK(near_float(output.frame, 0.0f));
+    input.target_frame_count = 10.0f;
+    input.seq = 5;
+    input.target_frame = 4.0f;
+    anchor_remote_animation_step(&state, &input, &output);
+    CHECK(output.snapped && near_float(output.frame, 2.0f));
+    input.frozen = 0;
+    input.seq = 6;
+    input.target_frame = 1.0f;
+    anchor_remote_animation_step(&state, &input, &output);
+    CHECK(output.snapped && near_float(output.frame, 0.5f));
+    CHECK(near_float(output.playback_step, 0.5f));
+    input.new_sample = 0;
+    anchor_remote_animation_step(&state, &input, &output);
+    CHECK(near_float(output.frame, 1.0f));
+    return 0;
+}
+
 int main(void)
 {
     int result;
@@ -509,6 +560,9 @@ int main(void)
     if (result)
         return result;
     result = test_restart_classification_preserves_natural_loop_rate();
+    if (result)
+        return result;
+    result = test_frozen_pose_holds_between_samples_and_thaws();
     if (result)
         return result;
     return 0;

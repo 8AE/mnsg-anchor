@@ -65,10 +65,12 @@ static void test_throw_queue(void)
     pending = anchor_projectile_source_peek(&state, 11);
     assert(pending && pending->kind == spawn.kind);
     id = pending->id;
+    assert(anchor_projectile_source_task_id(&state, &tasks[0]) == id);
     /* Many native updates and a failed send do not create additional events. */
     assert(!anchor_projectile_source_capture(&state, &tasks[0], &spawn, 12, 1));
     assert(anchor_projectile_source_peek(&state, 12)->id == id);
     anchor_projectile_source_forget_task(&state, &tasks[0]);
+    assert(anchor_projectile_source_task_id(&state, &tasks[0]) == 0);
     assert(anchor_projectile_source_peek(&state, 13)->id == id);
     assert(anchor_projectile_source_capture(&state, &tasks[0], &spawn, 13, 1));
     anchor_projectile_source_ack(&state);
@@ -78,6 +80,7 @@ static void test_throw_queue(void)
     /* A shot observed offline cannot be emitted halfway through its flight. */
     assert(!anchor_projectile_source_capture(&state, &tasks[1], &spawn, 14, 0));
     assert(!anchor_projectile_source_capture(&state, &tasks[1], &spawn, 15, 1));
+    assert(anchor_projectile_source_task_id(&state, &tasks[1]) == 0);
     /* Connection/life gates can clear pending events while preserving which
      * native lifetimes have already been observed. */
     assert(anchor_projectile_source_capture(&state, &tasks[2], &spawn, 16, 1));

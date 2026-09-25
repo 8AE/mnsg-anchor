@@ -662,7 +662,7 @@ int anchor_ack_projectile_spawn(int cid, int session, int epoch, int event_id)
 }
 
 int anchor_send_player_hit(int target_cid, int target_epoch,
-                           float hit_x, float hit_y, float hit_z)
+                           float hit_x, float hit_y, float hit_z, int hit_kind)
 {
     REPY_FN_SETUP;
     REPY_FN_SET_S32("target_cid", target_cid);
@@ -671,19 +671,57 @@ int anchor_send_player_hit(int target_cid, int target_epoch,
     REPY_FN_SET_F32("hit_x", hit_x);
     REPY_FN_SET_F32("hit_y", hit_y);
     REPY_FN_SET_F32("hit_z", hit_z);
+    REPY_FN_SET_S32("hit_kind", hit_kind);
     REPY_FN_EXEC_CACHE(anchor_send_player_hit_code,
                        "import anchor_mnsg\n"
                        "result = anchor_mnsg.send_player_hit(\n"
-                       "    target_cid, target_epoch, hit_x, hit_y, hit_z, source_epoch)\n");
+                       "    target_cid, target_epoch, hit_x, hit_y, hit_z, source_epoch, hit_kind)\n");
     int result = (int)REPY_FN_GET_BOOL("result");
     REPY_FN_CLEANUP;
     return result;
 }
 
-int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
-                           float *x, float *y, float *z)
+int anchor_send_projectile_stop(int session, int owner_epoch, int event_id)
 {
-    if (!sender_cid || !target_epoch || !x || !y || !z)
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("session", session);
+    REPY_FN_SET_S32("owner_epoch", owner_epoch);
+    REPY_FN_SET_S32("event_id", event_id);
+    REPY_FN_EXEC_CACHE(anchor_send_projectile_stop_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.send_projectile_stop(session, owner_epoch, event_id)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_poll_projectile_stop(int *cid, int *session, int *epoch, int *event_id)
+{
+    if (!cid || !session || !epoch || !event_id)
+        return 0;
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_poll_projectile_stop_code,
+                       "import anchor_mnsg\n"
+                       "stop = anchor_mnsg.poll_projectile_stop()\n"
+                       "has_stop = stop is not None\n"
+                       "if has_stop:\n"
+                       "    stop_cid, stop_session, stop_epoch, stop_id = stop\n");
+    int result = (int)REPY_FN_GET_BOOL("has_stop");
+    if (result)
+    {
+        *cid = (int)REPY_FN_GET_S32("stop_cid");
+        *session = (int)REPY_FN_GET_S32("stop_session");
+        *epoch = (int)REPY_FN_GET_S32("stop_epoch");
+        *event_id = (int)REPY_FN_GET_S32("stop_id");
+    }
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
+                           float *x, float *y, float *z, int *hit_kind)
+{
+    if (!sender_cid || !target_epoch || !x || !y || !z || !hit_kind)
         return 0;
     REPY_FN_SETUP;
     REPY_FN_EXEC_CACHE(anchor_poll_player_hit_code,
@@ -691,7 +729,7 @@ int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
                        "hit = anchor_mnsg.poll_player_hit()\n"
                        "has_hit = hit is not None\n"
                        "if has_hit:\n"
-                       "    sender_cid, target_epoch, hit_x, hit_y, hit_z = hit\n");
+                       "    sender_cid, target_epoch, hit_x, hit_y, hit_z, hit_kind_value = hit\n");
     int result = (int)REPY_FN_GET_BOOL("has_hit");
     if (result)
     {
@@ -700,6 +738,7 @@ int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
         *x = REPY_FN_GET_F32("hit_x");
         *y = REPY_FN_GET_F32("hit_y");
         *z = REPY_FN_GET_F32("hit_z");
+        *hit_kind = (int)REPY_FN_GET_S32("hit_kind_value");
     }
     REPY_FN_CLEANUP;
     return result;
