@@ -4,11 +4,36 @@ The receiving client applies a PvP hit only to its current real local player.
 Remote render tasks remain visual actors with the separate collision wrapper;
 they are never passed to the native playable-player damage routines.
 
-`anchor_player_damage_apply(x, y, z)` runs at the real local player's
+`anchor_player_damage_apply(x, y, z, damage)` runs at the real local player's
 `func_801CB824_587734` pre-update entry, after transport validation. The helper
 temporarily supplies a type-1 generic attacker descriptor to the local task's
 incoming-hit slot, calls native intake, and restores that slot before returning.
 The descriptor is not inserted into any task, actor, or renderer list.
+
+The sender reads the outgoing attack's native kind byte at task `+0x4c` when
+the native sphere scanner visits it. The ordinary actor intake in
+`func_80218350_5D3820` subtracts 2 units for kinds `0x16`/`0x23` (silver),
+3 for `0x1b` (Fire Ryo), 4 for `0x17`/`0x24` (gold), 8 for `0x22`, and 1 for
+other kinds such as base `0x15`/`0x19` and ordinary Ryo `0x1f`. Goemon and
+Ebisumaru use `0x15`/`0x16`/`0x17` for weapon tiers zero through two;
+Sasuke and Yae use `0x19`/`0x23`/`0x24`. These are native half-heart units.
+The sender includes that bounded amount in the same
+transient `MNSG_PLAYER_HIT` packet as the hit kind and position. The receiver
+accepts only the mapped values 1, 2, 3, 4 and 8 and rejects noninteger values;
+an older
+packet with no amount retains the former one-unit baseline. Both clients need
+this update for source-specific damage.
+
+The thrown frozen cube arms a fixed native impact sphere with kind `0x17`,
+the gold tier's four-unit native damage in the common actor intake. Its PvP
+splash sends four units per intersecting remote player other than its frozen
+occupant, once per target per impact, independent of the thrower's equipment.
+The carrier's target client ID and player epoch identify that occupant;
+another life of the same client remains eligible. The existing
+cube throw, impact control and thaw messages retain their timing. Individual
+actors with custom hit handlers may react differently to the native attack
+kind; those handlers need an in-game check. The four-unit value is established
+for the common actor intake.
 
 ## Verified native interfaces
 
@@ -29,7 +54,7 @@ the descriptor reads are:
 | --- | --- | --- |
 | attacker `+0x18` | object pointer | Attacker object used for hit direction |
 | attacker `+0x4c` | byte | Hit type; 1 selects ordinary damage |
-| attacker `+0x6d` | byte | Damage amount; 1 is the ordinary half-heart baseline |
+| attacker `+0x6d` | byte | Validated source damage, 1/2/3/4/8 half-heart units |
 | object `+0x08/+0x0c/+0x10` | three floats | Hit-origin world coordinates |
 
 The type-1 branches do not retain this descriptor. The native function's

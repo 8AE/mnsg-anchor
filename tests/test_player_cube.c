@@ -493,6 +493,7 @@ static void test_raised_carry_and_throw(void)
 
 static void test_impact_send_failure_releases_carrier(void)
 {
+    int carry_id = 0, target_cid = 0, target_epoch = 0;
     setup();
     visual_active = 1;
     anchor_player_cube_interact_begin(player.bytes, 0);
@@ -516,6 +517,12 @@ static void test_impact_send_failure_releases_carrier(void)
     mock_hit = 1;
     anchor_player_cube_tick();
     assert(s_carrier.phase == 4);
+    assert(anchor_player_cube_impact_info(visual_task.bytes, &carry_id,
+                                          &target_cid, &target_epoch));
+    assert(carry_id == s_carrier.carry_id && target_cid == 2 &&
+           target_epoch == 5);
+    assert(!anchor_player_cube_impact_info(player.bytes, &carry_id,
+                                           &target_cid, &target_epoch));
     mock_hit = 0;
     fail_impact = 1;
     visual_active = 0; /* Target may already have thawed on its own client. */
@@ -625,6 +632,7 @@ static void test_interact_scoping(void)
 
 static void test_grant_native_throw(void)
 {
+    int carry_id = 0, target_cid = 0, target_epoch = 0;
     setup();
     visual_active = 1;
     anchor_player_cube_interact_begin(player.bytes, 0);
@@ -650,11 +658,16 @@ static void test_grant_native_throw(void)
     mock_hit = 1;
     anchor_player_cube_tick();
     assert(s_carrier.phase == 4);
+    assert(anchor_player_cube_impact_info(visual_task.bytes, &carry_id,
+                                          &target_cid, &target_epoch));
+    assert(carry_id == s_carrier.carry_id && target_cid == 2 &&
+           target_epoch == 5);
     assert(shatter_count == 1);
     assert(s_carrier.impact_attack_frames == CUBE_IMPACT_ATTACK_FRAMES);
     assert((visual_task.bytes[0x30] & 2u) != 0);
     assert(*(unsigned int *)(visual_task.bytes + 0x48) == 0xffffffffu);
-    assert(*(unsigned short *)(visual_task.bytes + 0x4c) == 0x1cu);
+    assert(visual_task.bytes[0x4c] == 0x17u);
+    assert(visual_task.bytes[0x4d] == 0);
     assert(*(unsigned short *)(visual_task.bytes + 0x4e) == 75u);
     assert(*(void **)(visual_task.bytes + 0x5c) == 0);
     anchor_player_cube_tick();
@@ -668,6 +681,9 @@ static void test_grant_native_throw(void)
         anchor_player_cube_tick();
     }
     assert(s_carrier.impact_attack_frames == 0);
+    assert(!anchor_player_cube_impact_info(visual_task.bytes, &carry_id,
+                                           &target_cid, &target_epoch));
+    assert(visual_task.bytes[0x4c] == 0 && visual_task.bytes[0x4d] == 0);
     assert((visual_task.bytes[0x30] & 2u) == 0);
     assert(*(unsigned int *)(visual_task.bytes + 0x48) == 0);
     assert(*(void **)(visual_task.bytes + 0x34) == 0);

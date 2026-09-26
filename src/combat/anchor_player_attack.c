@@ -4,7 +4,7 @@
 
 extern int anchor_send_player_hit(int target_cid, int target_epoch,
                                   float hit_x, float hit_y, float hit_z,
-                                  int hit_kind);
+                                  int hit_kind, int damage);
 
 typedef struct AttackHit
 {
@@ -20,6 +20,8 @@ typedef struct AttackEpisode
     unsigned int animation;
     unsigned int seen_frame;
     int is_projectile;
+    int is_impact_splash;
+    int episode_id;
     float animation_frame;
     int hit_count;
     int consumed;
@@ -34,6 +36,10 @@ static int s_target_capacity;
 static unsigned int s_frame;
 static int s_enabled;
 static int s_player_epoch;
+
+/* The armed cube impact lasts five native ticks. Retain its per-target hit
+ * history across brief scan gaps, then release the episode's task slot. */
+#define CUBE_IMPACT_EPISODE_STALE_FRAMES 16u
 
 void anchor_player_attack_reset(void)
 {
@@ -56,7 +62,9 @@ void anchor_player_attack_begin_frame(int enabled, int player_epoch)
     for (i = 0; i < s_episode_capacity; ++i)
     {
         if (s_episodes[i].task && !s_episodes[i].is_projectile &&
-            s_frame - s_episodes[i].seen_frame > 1u)
+            s_frame - s_episodes[i].seen_frame >
+                (s_episodes[i].is_impact_splash ?
+                 CUBE_IMPACT_EPISODE_STALE_FRAMES : 1u))
             s_episodes[i].task = 0;
     }
 }
@@ -72,6 +80,20 @@ void anchor_player_attack_forget_task(const void *task)
 static int valid_float(float value)
 {
     return value >= -10000000.0f && value <= 10000000.0f;
+}
+
+int anchor_player_attack_damage_for_kind(unsigned int kind)
+{
+    /* FUN_80218350_5D3820's ordinary actor intake uses these exact
+     * attacker-kind values. All other kinds use its one-unit default. */
+    switch (kind)
+    {
+        case 0x16: case 0x23: return 2;
+        case 0x1b: return 3;
+        case 0x17: case 0x24: return 4;
+        case 0x22: return 8;
+        default: return 1;
+    }
 }
 
 static int sphere_hits_body(const AnchorPlayerAttackSample *sample,
@@ -118,8 +140,9 @@ static AttackEpisode *find_episode(const AnchorPlayerAttackSample *sample)
         episode = &s_episodes[index];
     }
     restart = !episode->task || episode->object != sample->object ||
-              episode->descriptor != sample->descriptor;
-    if (!sample->is_projectile &&
+              episode->descriptor != sample->descriptor ||
+              episode->episode_id != sample->episode_id;
+    if (!sample->is_projectile && !sample->is_impact_splash &&
         (episode->animation != sample->animation ||
          sample->frame < episode->animation_frame))
         restart = 1;
@@ -133,6 +156,8 @@ static AttackEpisode *find_episode(const AnchorPlayerAttackSample *sample)
     episode->descriptor = sample->descriptor;
     episode->animation = sample->animation;
     episode->is_projectile = sample->is_projectile;
+    episode->is_impact_splash = sample->is_impact_splash;
+    episode->episode_id = sample->episode_id;
     episode->animation_frame = sample->frame;
     episode->seen_frame = s_frame;
     return episode;
@@ -145,7 +170,13 @@ int anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
     int i;
 
     if (!s_enabled || !sample || !sample->task || !sample->object ||
-        !sample->descriptor || !valid_float(sample->frame))
+        !sample->descriptor || !valid_float(sample->frame) ||
+        (sample->is_impact_splash &&
+         (sample->episode_id <= 0 || sample->splash_occupant_cid <= 0 ||
+          sample->splash_occupant_epoch <= 0)) ||
+        (sample->damage != 1 && sample->damage != 2 &&
+         sample->damage != 3 && sample->damage != 4 &&
+         sample->damage != 8))
         return 0;
     episode = find_episode(sample);
     if (episode && sample->is_projectile && episode->consumed)
@@ -164,6 +195,10 @@ int anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
     for (i = 0; i < count; ++i)
     {
         int j;
+        if (sample->is_impact_splash &&
+            s_targets[i].cid == sample->splash_occupant_cid &&
+            s_targets[i].epoch == sample->splash_occupant_epoch)
+            continue;
         if (!sphere_hits_body(sample, &s_targets[i].body))
             continue;
         for (j = 0; j < episode->hit_count; ++j)
@@ -182,7 +217,8 @@ int anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
             continue;
         if (anchor_send_player_hit(s_targets[i].cid, s_targets[i].epoch,
                                     sample->center.x, sample->center.y,
-                                    sample->center.z, sample->hit_kind))
+                                    sample->center.z, sample->hit_kind,
+                                    sample->damage))
         {
             episode->hits[j].cid = s_targets[i].cid;
             episode->hits[j].epoch = s_targets[i].epoch;
@@ -201,6 +237,10 @@ int anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
 #include "core/anchor.h"
 #include "combat/anchor_projectiles.h"
 #include "platform/modding.h"
+
+/* Scoped to this carrier's armed impact sphere and frozen occupant. */
+extern int anchor_player_cube_impact_info(const void *task, int *carry_id,
+                                          int *target_cid, int *target_epoch);
 
 extern void *D_801FC600_5B8510; /* Native player-manager task. */
 extern void *D_801FC604_5B8514; /* Native playable task. */
@@ -255,6 +295,10 @@ void anchor_player_attack_native_sphere(void *object, void *task, void *victims)
     unsigned char *actor = task;
     unsigned char *model = object;
     AnchorPlayerAttackSample sample;
+    int cube_impact_id = 0;
+    int cube_target_cid = 0;
+    int cube_target_epoch = 0;
+    int cube_impact;
     (void)victims;
 
     /* The generic collision scanner already decoded the active animation
@@ -262,9 +306,12 @@ void anchor_player_attack_native_sphere(void *object, void *task, void *victims)
      * Native constructors store the local owner in projectile task+0x5c.
      * Never register a remote task as a native victim: doing so consumes
      * attacker+0x34 and can redirect native enemy/projectile callbacks. */
+    cube_impact = anchor_player_cube_impact_info(task, &cube_impact_id,
+                                                &cube_target_cid,
+                                                &cube_target_epoch);
     if (!s_player_attack_scan || !actor || !model ||
         !D_801FC604_5B8514 || anchor_remote_collision_is_scripted() ||
-        (task != D_801FC604_5B8514 &&
+        (task != D_801FC604_5B8514 && !cube_impact &&
          *(void **)(actor + 0x5c) != D_801FC604_5B8514) ||
         !(actor[0x30] & 2u) || !*(unsigned int *)(actor + 0x48) ||
         *(unsigned int *)(actor + 0x34) ||
@@ -277,8 +324,12 @@ void anchor_player_attack_native_sphere(void *object, void *task, void *victims)
     sample.animation = *(unsigned int *)(model + 0x2c);
     sample.frame = *(float *)(model + 0x28);
     sample.is_player = task == D_801FC604_5B8514;
-    sample.is_projectile = !sample.is_player &&
+    sample.is_projectile = !sample.is_player && !cube_impact &&
                            anchor_projectiles_is_native_throw(task);
+    sample.is_impact_splash = cube_impact;
+    sample.episode_id = cube_impact_id;
+    sample.splash_occupant_cid = cube_target_cid;
+    sample.splash_occupant_epoch = cube_target_epoch;
     if (sample.is_projectile && actor[0x65])
     {
         /* Already queued for native teardown: this scanner can still run
@@ -292,6 +343,8 @@ void anchor_player_attack_native_sphere(void *object, void *task, void *victims)
     sample.center.z = D_80168F88_169B88 * *(float *)(model + 0x24);
     sample.radius = D_80168F8C_169B8C * *(float *)(model + 0x1c);
     sample.hit_kind = sample.is_projectile ? anchor_projectiles_hit_kind(task) : 0;
+    sample.damage = cube_impact ? 4 :
+                    anchor_player_attack_damage_for_kind(actor[0x4c]);
     func_80033898_34498(*(unsigned short *)(model + 0x14) & 0x3ff,
                        *(unsigned short *)(model + 0x16) & 0x3ff,
                        *(unsigned short *)(model + 0x18) & 0x3ff,

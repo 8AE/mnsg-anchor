@@ -244,6 +244,7 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     anchor_impact_sound.PACKET_TYPE: anchor_impact_sound.PACKET_BYTES,
 }
 PLAYER_HIT_MAX_AGE_MS: int = 500
+PLAYER_HIT_DAMAGE_VALUES = (1, 2, 3, 4, 8)
 PLAYER_CUBE_MAX_AGE_MS: int = 500
 PLAYER_CUBE_POSE_INTERVAL_MS: int = 100
 PLAYER_CUBE_EVENT_COUNT: int = 64
@@ -1563,6 +1564,11 @@ def _player_hit_matches_live_state(packet: dict) -> bool:
         hit_kind = packet.get("hitKind", 0)
         if type(hit_kind) is not int or hit_kind not in (0, 1):
             return False
+        # An older sender omitted damage and always dealt one unit. A new
+        # sender must provide a valid native damage byte, not a coercible value.
+        damage = packet.get("damage", 1)
+        if type(damage) is not int or damage not in PLAYER_HIT_DAMAGE_VALUES:
+            return False
         target = int(packet.get("targetClientId", 0))
         source = _player_states.get(sender, {})
         local = _player_states.get(_client_id, {})
@@ -1637,10 +1643,12 @@ def _receive_player_hit(packet: dict) -> bool:
 def send_player_hit(target_cid: int, target_epoch: int,
                     hit_x: float, hit_y: float, hit_z: float,
                     source_epoch: "int | None" = None,
-                    hit_kind: int = 0) -> bool:
+                    hit_kind: int = 0, damage: int = 1) -> bool:
     """Request one native hit on the target owner using current identities."""
     global _player_hit_seq
     if type(hit_kind) is not int or hit_kind not in (0, 1):
+        return False
+    if type(damage) is not int or damage not in PLAYER_HIT_DAMAGE_VALUES:
         return False
     try:
         target_cid = int(target_cid)
@@ -1681,6 +1689,7 @@ def send_player_hit(target_cid: int, target_epoch: int,
             "hitT": int(time.monotonic() * 1000),
             "hitX": coordinates[0], "hitY": coordinates[1], "hitZ": coordinates[2],
             "hitKind": hit_kind,
+            "damage": damage,
             "quiet": True,
         }
     if not _send_raw(packet):
@@ -1700,7 +1709,7 @@ def poll_player_hit():
                 continue
             return (int(packet["clientId"]), int(packet["targetEpoch"]),
                     float(packet["hitX"]), float(packet["hitY"]), float(packet["hitZ"]),
-                    packet.get("hitKind", 0))
+                    packet.get("hitKind", 0), packet.get("damage", 1))
     return None
 
 

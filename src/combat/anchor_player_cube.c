@@ -169,7 +169,8 @@ static void clear_impact_attack(void)
         return;
     task[0x30] &= (unsigned char)~2u;
     *(unsigned int *)(task + 0x48) = 0;
-    *(unsigned short *)(task + 0x4c) = 0;
+    task[0x4c] = 0;
+    task[0x4d] = 0;
     *(unsigned short *)(task + 0x4e) = 0;
     *(void **)(task + 0x34) = 0;
     *(void **)(task + 0x38) = 0;
@@ -185,11 +186,31 @@ static void arm_impact_attack(void)
      * native intake handles enemy and breakable-object contact. */
     task[0x30] |= 2u;
     *(unsigned int *)(task + 0x48) = 0xffffffffu;
-    *(unsigned short *)(task + 0x4c) = 0x1cu;
+    /* The native actor intake reads a single attack-kind byte at +0x4c.
+     * Gold tier three is kind 0x17 and deals four HP units. */
+    task[0x4c] = 0x17u;
+    task[0x4d] = 0;
     *(unsigned short *)(task + 0x4e) = 75u;
     *(void **)(task + 0x34) = 0;
     *(void **)(task + 0x38) = 0;
     *(void **)(task + 0x5c) = 0;
+}
+int anchor_player_cube_impact_info(const void *task, int *carry_id,
+                                   int *target_cid, int *target_epoch)
+{
+    if (!task || !carry_id || !target_cid || !target_epoch ||
+        task != s_carrier.task || s_carrier.phase != 4 ||
+        s_carrier.impact_attack_frames <= 0 ||
+        !anchor_player_freeze_visual_owns_task(task) ||
+        !(((const unsigned char *)task)[0x30] & 2u) ||
+        !*(const unsigned int *)((const unsigned char *)task + 0x48) ||
+        s_carrier.carry_id <= 0 || s_carrier.target_cid <= 0 ||
+        s_carrier.target_epoch <= 0)
+        return 0;
+    *carry_id = s_carrier.carry_id;
+    *target_cid = s_carrier.target_cid;
+    *target_epoch = s_carrier.target_epoch;
+    return 1;
 }
 static void detach_carrier(void)
 {

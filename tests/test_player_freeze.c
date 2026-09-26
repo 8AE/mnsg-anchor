@@ -17,6 +17,7 @@ static unsigned char s_system_storage[0x3b080];
 unsigned char *D_8015C5C8_15D1C8 = s_system_storage;
 static int s_mock_epoch, s_connected, s_loaded, s_dialog, s_damage_calls;
 static int s_last_scripted;
+static int s_last_damage;
 static int s_breakout_calls, s_shatter_calls, s_thaw_calls, s_mock_moving;
 static int s_mock_pushing;
 static int s_shatter_epoch;
@@ -69,9 +70,10 @@ static void set_frame(float frame)
     *(float *)((unsigned char *)s_object_storage + 0x28) = frame;
 }
 
-int anchor_player_damage_apply(float x, float y, float z)
+int anchor_player_damage_apply(float x, float y, float z, int damage)
 {
     assert(x == 1 && y == 2 && z == 3);
+    s_last_damage = damage;
     ++s_damage_calls;
     if (s_health)
         --s_health;
@@ -135,7 +137,7 @@ static void test_damage_then_scoped_freeze(void)
 {
     int i;
     setup();
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
     assert(s_damage_calls == 1 && s_health == 9);
     assert(!anchor_player_freeze_active());
     anchor_player_freeze_after_update();
@@ -169,7 +171,7 @@ static void test_fresh_a_or_b_edges_break_out(void)
     int i;
     setup();
     *(unsigned short *)(s_system_storage + ICE_RAW_HELD_OFFSET) = 0x8000u;
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
     mash_sample(0x8000u, 0x8000u);
     assert(s_mash_presses == 0); /* A was already held when ice arrived. */
     mash_sample(0, 0);
@@ -208,7 +210,7 @@ static void test_breakout_while_cube_is_moving(void)
 {
     int i;
     setup();
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
     anchor_player_freeze_after_update();
     s_mock_moving = 1;
     anchor_player_freeze_after_update();
@@ -231,7 +233,7 @@ static void test_pushed_cube_moves_frozen_body(void)
     int i;
 
     setup();
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
     anchor_player_freeze_after_update();
     s_mock_pushing = 1;
     set_frame(9.0f);
@@ -258,27 +260,28 @@ static void test_pushed_cube_moves_frozen_body(void)
 static void test_lifecycle_and_ordinary_hits(void)
 {
     setup();
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 0));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 0, 4));
+    assert(s_last_damage == 4);
     assert(!anchor_player_freeze_active());
-    assert(!anchor_player_freeze_apply_hit(1, 2, 3, 2));
+    assert(!anchor_player_freeze_apply_hit(1, 2, 3, 2, 1));
     assert(s_damage_calls == 1);
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
     anchor_player_freeze_after_update();
     ++s_mock_epoch;
     assert(!anchor_player_freeze_active());
     setup();
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
     anchor_player_freeze_after_update();
     D_800C7AB2 = 11;
     assert(!anchor_player_freeze_active());
     setup();
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
     anchor_player_freeze_after_update();
     s_connected = 0;
     assert(!anchor_player_freeze_active());
     setup();
     s_health = 1;
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
     assert(!anchor_player_freeze_active()); /* Lethal hits still enter death. */
 }
 
@@ -288,7 +291,7 @@ static void test_visual_pose_stays_fixed_without_rewinding_native_frame(void)
     float frame;
 
     setup();
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
     assert(!anchor_player_freeze_visual_pose(&action, &frame));
     anchor_player_freeze_after_update();
     assert(anchor_player_freeze_visual_pose(&action, &frame));
@@ -316,7 +319,7 @@ static void test_render_override_restores_each_native_frame(void)
     float *middle_frame = (float *)((unsigned char *)s_middle_storage + 0x28);
 
     setup();
-    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
     anchor_player_freeze_after_update();
     *primary_frame = 8.0f;
     *follower_frame = 9.0f;

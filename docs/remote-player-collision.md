@@ -85,7 +85,8 @@ restart, while looping projectile animation does not rearm a projectile.
 
 `MNSG_PLAYER_HIT` is a targeted, nonpersistent event. The victim applies it at
 the real player's `func_801CB824_587734` pre-update boundary through native
-damage intake. Ordinary hits start at one HP unit (half a heart); native armour
+damage intake. The single hit packet carries the source's native damage amount
+(1, 2, 3, 4 or 8 half-heart units, including silver, gold and Fire Ryo). Native armour
 and Sudden Impact vulnerability still apply. Native hurt actions, knockback,
 invulnerability, context-specific reactions and death handling remain in use.
 Existing native enemy hits and environmental hazards take priority. Collision
@@ -100,6 +101,8 @@ other areas, departed or mismatched sessions/lives, repeated events and events
 older than 500 ms in its local queue. Disconnect clears queued hits. Old clients
 without this context can still render and collide but cannot exchange combat
 or pushing. Update both clients.
+An old sender without the damage field still deals the former one-unit baseline;
+source-specific damage requires updated clients on both sides.
 
 PvP HP loss is removed from the race Team Damage Sync comparison baseline.
 Other damage or healing in the same frame still syncs, and the No Hit race

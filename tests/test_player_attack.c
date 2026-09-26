@@ -14,6 +14,7 @@ static int s_sent;
 static int s_send_ok;
 static int s_last_cid;
 static int s_last_epoch;
+static int s_last_damage;
 static AnchorCollisionVec3 s_last_center;
 static int s_actor_ids[140];
 
@@ -39,7 +40,8 @@ int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacit
     return s_target_count;
 }
 
-int anchor_send_player_hit(int cid, int epoch, float x, float y, float z, int kind)
+int anchor_send_player_hit(int cid, int epoch, float x, float y, float z,
+                           int kind, int damage)
 {
     assert(kind == 0);
     if (!s_send_ok)
@@ -47,6 +49,7 @@ int anchor_send_player_hit(int cid, int epoch, float x, float y, float z, int ki
     ++s_sent;
     s_last_cid = cid;
     s_last_epoch = epoch;
+    s_last_damage = damage;
     s_last_center = (AnchorCollisionVec3){x, y, z};
     return 1;
 }
@@ -56,6 +59,7 @@ static AnchorPlayerAttackSample sample(int actor)
     AnchorPlayerAttackSample result = {
         &s_actor_ids[actor], &s_actor_ids[actor], 0x900157c, 0x60010000,
         0, 1, {0, 10, 0}, 2};
+    result.damage = 1;
     return result;
 }
 
@@ -63,6 +67,7 @@ static void setup(void)
 {
     anchor_player_attack_reset();
     s_sent = 0;
+    s_last_damage = 0;
     s_send_ok = 1;
     s_target_count = 1;
     s_targets[0] = (AnchorPlayerHitTarget){17, 3, {{0, 0, 0}, 5, 20}};
@@ -205,6 +210,101 @@ static void transport_failure_and_epoch_changes(void)
     assert(s_sent == 4);
 }
 
+static void damage_is_forwarded_once_per_attack_episode(void)
+{
+    AnchorPlayerAttackSample a = sample(0);
+    setup();
+    a.damage = 4;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 1 && s_last_damage == 4);
+    a.damage = 2;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 1); /* Same episode cannot be repriced or resent. */
+    a.frame = -1;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 2 && s_last_damage == 2);
+    a.damage = 0;
+    anchor_player_attack_observe(&a);
+    a.damage = 5;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 2);
+}
+
+static void native_attack_kinds_match_damage_table(void)
+{
+    assert(anchor_player_attack_damage_for_kind(0x15) == 1);
+    assert(anchor_player_attack_damage_for_kind(0x16) == 2);
+    assert(anchor_player_attack_damage_for_kind(0x17) == 4);
+    assert(anchor_player_attack_damage_for_kind(0x19) == 1);
+    assert(anchor_player_attack_damage_for_kind(0x1f) == 1);
+    assert(anchor_player_attack_damage_for_kind(0x1b) == 3);
+    assert(anchor_player_attack_damage_for_kind(0x23) == 2);
+    assert(anchor_player_attack_damage_for_kind(0x24) == 4);
+    assert(anchor_player_attack_damage_for_kind(0x22) == 8);
+    assert(anchor_player_attack_damage_for_kind(0x1a) == 1);
+}
+
+static void cube_splash_hits_each_player_once_for_gold_damage(void)
+{
+    AnchorPlayerAttackSample a = sample(1);
+    setup();
+    a.is_player = 0;
+    a.is_impact_splash = 1;
+    a.episode_id = 40;
+    a.splash_occupant_cid = 17;
+    a.splash_occupant_epoch = 3;
+    a.damage = 4;
+    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{0, 0, 0}, 5, 20}};
+    s_target_count = 2;
+    assert(anchor_player_attack_observe(&a) == 0);
+    assert(s_sent == 1 && s_last_cid == 18 && s_last_damage == 4);
+    anchor_player_attack_begin_frame(1, 9);
+    anchor_player_attack_begin_frame(1, 9); /* A scan gap cannot rearm impact. */
+    a.frame = -1;
+    a.animation++; /* Native object clip can change during impact. */
+    assert(anchor_player_attack_observe(&a) == 0);
+    assert(s_sent == 1);
+    s_targets[0].epoch = 4; /* Same CID, different life is eligible. */
+    assert(anchor_player_attack_observe(&a) == 0);
+    assert(s_sent == 2 && s_last_cid == 17 && s_last_epoch == 4);
+    s_targets[0].epoch = 3;
+    a.episode_id = 41; /* A later throw reuses the visual task. */
+    assert(anchor_player_attack_observe(&a) == 0);
+    assert(s_sent == 3 && s_last_cid == 18 && s_last_damage == 4);
+}
+
+static void ordinary_attack_can_hit_cube_occupant(void)
+{
+    AnchorPlayerAttackSample a = sample(0);
+    setup();
+    a.splash_occupant_cid = 17;
+    a.splash_occupant_epoch = 3;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 1 && s_last_cid == 17 && s_last_epoch == 3);
+}
+
+static void stale_cube_splash_episode_releases_its_hit_history(void)
+{
+    AnchorPlayerAttackSample a = sample(1);
+    int frame;
+    setup();
+    a.is_impact_splash = 1;
+    a.episode_id = 51;
+    a.splash_occupant_cid = 18;
+    a.splash_occupant_epoch = 7;
+    a.damage = 4;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 1);
+    for (frame = 0; frame < 16; ++frame)
+        anchor_player_attack_begin_frame(1, 9);
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 1); /* A brief gap retains the per-target hit. */
+    for (frame = 0; frame < 17; ++frame)
+        anchor_player_attack_begin_frame(1, 9);
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 2 && s_last_damage == 4);
+}
+
 static void growing_cache_and_invalid_spheres(void)
 {
     AnchorPlayerAttackSample a;
@@ -270,6 +370,11 @@ int main(void)
     projectile_stops_at_first_remote_player();
     nonprojectile_helper_remains_multitarget();
     transport_failure_and_epoch_changes();
+    damage_is_forwarded_once_per_attack_episode();
+    native_attack_kinds_match_damage_table();
+    cube_splash_hits_each_player_once_for_gold_damage();
+    ordinary_attack_can_hit_cube_occupant();
+    stale_cube_splash_episode_releases_its_hit_history();
     growing_cache_and_invalid_spheres();
     growing_roster_and_failed_dedup_reserve();
     puts("player attack geometry and episode tests passed");

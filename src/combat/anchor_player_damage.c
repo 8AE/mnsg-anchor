@@ -60,7 +60,7 @@ static int valid_hit_coordinate(float value)
     return value >= -10000000.0f && value <= 10000000.0f;
 }
 
-int anchor_player_damage_apply(float hit_x, float hit_y, float hit_z)
+int anchor_player_damage_apply(float hit_x, float hit_y, float hit_z, int damage)
 {
     PlayerHitSource source;
     PlayerHitObject object;
@@ -73,7 +73,9 @@ int anchor_player_damage_apply(float hit_x, float hit_y, float hit_z)
     unsigned int previous_invulnerability;
     int accepted;
 
-    if (s_applying_hit || !anchor_is_connected() ||
+    if ((damage != 1 && damage != 2 && damage != 3 &&
+         damage != 4 && damage != 8) ||
+        s_applying_hit || !anchor_is_connected() ||
         !item_sync_save_is_loaded() || anchor_remote_collision_is_scripted() ||
         D_800C7AE2 != 0 || (D_800C7AE0 != 0 && D_800C7AE0 != 4) ||
         !valid_hit_coordinate(hit_x) || !valid_hit_coordinate(hit_y) ||
@@ -112,7 +114,7 @@ int anchor_player_damage_apply(float hit_x, float hit_y, float hit_z)
     clear_hit_storage(object.bytes, sizeof(object.bytes));
     *(void **)(source.bytes + 0x18) = object.bytes;
     source.bytes[0x4c] = 1;
-    source.bytes[0x6d] = 1;
+    source.bytes[0x6d] = (unsigned char)damage;
     *(float *)(object.bytes + 0x08) = hit_x;
     *(float *)(object.bytes + 0x0c) = hit_y;
     *(float *)(object.bytes + 0x10) = hit_z;
@@ -133,8 +135,8 @@ int anchor_player_damage_apply(float hit_x, float hit_y, float hit_z)
         func_801E8E24_5A4D34(player, 1);
     after_hp = item_sync_local_player_health();
 
-    /* A type-1 hit deals one half-heart through native armour handling.
-     * Sudden Impact doubles vulnerability in FUN_801DA758. Preserve the
+    /* Native type-1 intake applies the supplied half-heart damage through
+     * armour handling. Sudden Impact doubles vulnerability in FUN_801DA758. Preserve the
      * configured No Hit race challenge without broadcasting this PvP loss
      * as team damage and damaging the attacker a second time. */
     if (after_hp < before_hp && after_hp > 0 &&

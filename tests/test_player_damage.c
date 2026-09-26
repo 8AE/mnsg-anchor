@@ -32,6 +32,7 @@ static int s_descriptor_valid;
 static int s_reentrant_result;
 static int s_replace_player;
 static int s_cleanup_calls;
+static int s_expected_damage;
 
 int anchor_remote_model_pool_contains(const void *pointer) { (void)pointer; return 0; }
 int anchor_is_connected(void) { return s_connected; }
@@ -67,13 +68,15 @@ int func_801D9E9C_595DAC(void *player)
     unsigned char *task = player;
     unsigned char *source = *(unsigned char **)(task + 0x38);
     unsigned char *object = *(unsigned char **)(source + 0x18);
-    unsigned int damage = s_sudden_impact ? 2u : 1u;
+    unsigned int damage = (unsigned int)s_expected_damage *
+                          (s_sudden_impact ? 2u : 1u);
     s_native_calls++;
     s_descriptor_valid = source != task && source[0x4c] == 1 &&
-        source[0x6d] == 1 && *(float *)(object + 0x08) == 12.0f &&
+        source[0x6d] == s_expected_damage &&
+        *(float *)(object + 0x08) == 12.0f &&
         *(float *)(object + 0x0c) == 3.0f &&
         *(float *)(object + 0x10) == -4.0f;
-    s_reentrant_result = anchor_player_damage_apply(12.0f, 3.0f, -4.0f);
+    s_reentrant_result = anchor_player_damage_apply(12.0f, 3.0f, -4.0f, 1);
     task[0x30] &= (unsigned char)~1u;
     if (s_armour)
     {
@@ -108,18 +111,19 @@ static void reset(void)
     s_reentrant_result = -1;
     s_hp = s_baseline = 10;
     s_excluded = 0;
+    s_expected_damage = 1;
 }
 
 static int test_native_hit_is_scoped_and_cannot_reenter_or_replay(void)
 {
     reset();
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 1);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 1);
     CHECK(s_descriptor_valid && s_native_calls == 1);
     CHECK(s_cleanup_calls == 1);
     CHECK(s_hp == 9 && s_excluded == 1 && s_baseline == 9);
     CHECK(*(void **)(s_player + 0x38) == 0);
     CHECK(s_reentrant_result == 0);
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     CHECK(s_native_calls == 1);
     return 0;
 }
@@ -128,52 +132,74 @@ static int test_armour_and_sudden_impact_remain_native(void)
 {
     reset();
     s_armour = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 1);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 1);
     CHECK(s_armour == 0 && s_hp == 10 && s_excluded == 0);
     CHECK(s_cleanup_calls == 0);
     CHECK(s_player[0xd4] == 60);
     reset();
     s_sudden_impact = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 1);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 1);
     CHECK(s_hp == 8 && s_excluded == 2);
+    return 0;
+}
+
+static int test_variable_damage_uses_native_intake(void)
+{
+    reset();
+    s_expected_damage = 4;
+    CHECK(anchor_player_damage_apply(12, 3, -4, 4) == 1);
+    CHECK(s_descriptor_valid && s_hp == 6 && s_excluded == 4);
+    reset();
+    s_expected_damage = 3;
+    s_sudden_impact = 1;
+    CHECK(anchor_player_damage_apply(12, 3, -4, 3) == 1);
+    CHECK(s_descriptor_valid && s_hp == 4 && s_excluded == 6);
+    reset();
+    CHECK(anchor_player_damage_apply(12, 3, -4, 0) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 5) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 6) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 7) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 9) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 256) == 0);
+    CHECK(s_native_calls == 0);
     return 0;
 }
 
 static int test_guards_preserve_native_state(void)
 {
     reset(); s_scripted = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); s_player[0xd4] = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); s_work[0x69] = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); D_800C7AE2 = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); D_800C7AE0 = 8;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); s_player[0x63] = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); *(unsigned short *)(s_player + 0x96) = 0x92;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); *(unsigned short *)(s_player + 0x98) = 0x93;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); s_hp = 0;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); s_connected = 0;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); s_loaded = 0;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); *(void **)(s_player + 0x38) = s_work;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     CHECK(*(void **)(s_player + 0x38) == s_work);
     reset(); D_801FC60C_5B851C = s_work;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); *(void **)(s_memory + 0x4000) = 0;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset(); D_801FC604_5B8514 = (void *)0x80000000u;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     reset();
-    CHECK(anchor_player_damage_apply(NAN, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(NAN, 3, -4, 1) == 0);
     CHECK(s_native_calls == 0);
     return 0;
 }
@@ -181,15 +207,15 @@ static int test_guards_preserve_native_state(void)
 static int test_exclusion_preserves_environmental_loss_and_healing(void)
 {
     reset(); s_hp = 9; /* one enemy hit before PvP */
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 1);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 1);
     CHECK(s_hp == 8 && s_baseline == 9);
     CHECK(s_baseline - s_hp == 1); /* still broadcast enemy damage only */
     reset(); s_hp = 12; /* two-point heal before PvP */
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 1);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 1);
     CHECK(s_hp == 11 && s_baseline == 9);
     CHECK(s_hp - s_baseline == 2); /* heal remains shareable */
     reset(); s_baseline = 1; s_hp = 6; s_sudden_impact = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 1);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 1);
     CHECK(s_hp == 4 && s_baseline == -1);
     CHECK((int)s_hp - s_baseline == 5); /* full low-HP heal is retained */
     return 0;
@@ -198,10 +224,10 @@ static int test_exclusion_preserves_environmental_loss_and_healing(void)
 static int test_no_hit_challenge_and_lethal_hits_do_not_echo(void)
 {
     reset(); s_no_hit = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 1);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 1);
     CHECK(s_hp == 0 && s_baseline == 0 && s_excluded == 10);
     reset(); s_hp = s_baseline = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 1);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 1);
     CHECK(s_hp == 0 && s_baseline == 0 && s_excluded == 1);
     return 0;
 }
@@ -209,7 +235,7 @@ static int test_no_hit_challenge_and_lethal_hits_do_not_echo(void)
 static int test_owner_change_restores_descriptor_and_stops_accounting(void)
 {
     reset(); s_replace_player = 1;
-    CHECK(anchor_player_damage_apply(12, 3, -4) == 0);
+    CHECK(anchor_player_damage_apply(12, 3, -4, 1) == 0);
     CHECK(*(void **)(s_player + 0x38) == 0);
     CHECK(s_excluded == 0);
     return 0;
@@ -238,6 +264,7 @@ int main(void)
     }
     failed = test_native_hit_is_scoped_and_cannot_reenter_or_replay() ||
         test_armour_and_sudden_impact_remain_native() ||
+        test_variable_damage_uses_native_intake() ||
         test_guards_preserve_native_state() ||
         test_exclusion_preserves_environmental_loss_and_healing() ||
         test_no_hit_challenge_and_lethal_hits_do_not_echo() ||

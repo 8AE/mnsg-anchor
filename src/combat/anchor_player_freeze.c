@@ -206,12 +206,13 @@ int anchor_player_freeze_visual_pose(int *action, float *frame)
     return 1;
 }
 
-int anchor_player_freeze_apply_hit(float x, float y, float z, int hit_kind)
+int anchor_player_freeze_apply_hit(float x, float y, float z,
+                                   int hit_kind, int damage)
 {
     int accepted;
     if (hit_kind != 0 && hit_kind != 1)
         return 0;
-    accepted = anchor_player_damage_apply(x, y, z);
+    accepted = anchor_player_damage_apply(x, y, z, damage);
 #if DEBUG_BUTTON_ENABLED
     if (hit_kind == 1)
         recomp_printf("[player_ice] hit accepted=%d hp=%u\n", accepted,

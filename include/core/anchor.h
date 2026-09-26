@@ -354,9 +354,11 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
    /* Targeted, transient native player hits. Python validates live room,
     * connection sessions, player lifetimes, ordering and queue age. */
    int anchor_send_player_hit(int target_cid, int target_epoch,
-                               float hit_x, float hit_y, float hit_z, int hit_kind);
+                               float hit_x, float hit_y, float hit_z,
+                               int hit_kind, int damage);
    int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
-                               float *x, float *y, float *z, int *hit_kind);
+                               float *x, float *y, float *z,
+                               int *hit_kind, int *damage);
 
    /* Direct, short-lived carry controls for a frozen player's ice cube. The
     * target remains authoritative for its playable body and freeze state. */
