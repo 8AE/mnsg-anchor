@@ -4,6 +4,7 @@
 #include "core/anchor_dialog.h"
 #include "player/anchor_player_models.h"
 #include "player/anchor_remote_model_pool.h"
+#include "ui/anchor_freeze_prompt.h"
 #include "platform/modding.h"
 #include "platform/recomputils.h"
 
@@ -322,7 +323,8 @@ void anchor_player_freeze_visual_before_draw(void *pointer)
     head = (unsigned int)(unsigned long)D_8015C5CC_15D1CC;
     matrix = (unsigned int)(unsigned long)D_80168504_169104;
     command_end = bank + NATIVE_COMMAND_BYTES - NATIVE_COMMAND_TAIL -
-                  (anchor_dialog_busy() ? NATIVE_DIALOG_TAIL : 0u);
+                  ((anchor_dialog_busy() || anchor_freeze_prompt_visible()) ?
+                       NATIVE_DIALOG_TAIL : 0u);
     matrix_start = bank + NATIVE_COMMAND_BYTES;
     matrix_end = bank + NATIVE_MATRIX_END - ICE_MATRIX_RESERVE;
     if (head >= bank && head <= command_end &&

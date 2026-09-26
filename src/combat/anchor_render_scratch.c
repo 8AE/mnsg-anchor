@@ -1,5 +1,6 @@
 #include "combat/anchor_render_scratch.h"
 #include "core/anchor_dialog.h"
+#include "ui/anchor_freeze_prompt.h"
 
 #ifndef ANCHOR_RENDER_SCRATCH_HOST_TEST
 #include "platform/modding.h"
@@ -148,7 +149,7 @@ void anchor_render_scratch_begin_object(void *pointer)
     }
     native_start = D_8015C5C8_15D1C8 + s_bank * NATIVE_GRAPHICS_BANK_BYTES;
     tail_bytes = NATIVE_GRAPHICS_TAIL_BYTES;
-    if (anchor_dialog_busy())
+    if (anchor_dialog_busy() || anchor_freeze_prompt_visible())
         tail_bytes += NATIVE_DIALOG_TAIL_BYTES;
     native_limit = native_start + NATIVE_GRAPHICS_COMMAND_BYTES - tail_bytes;
     if ((unsigned char *)D_8015C5CC_15D1CC < native_start ||

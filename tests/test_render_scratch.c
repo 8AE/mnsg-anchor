@@ -24,6 +24,7 @@ static AlignedBytes s_native, s_scratch, s_assets, s_objects;
 static unsigned int s_asset_bytes;
 static unsigned int s_reports;
 static int s_dialog_busy;
+static int s_freeze_prompt_visible;
 static int s_alternative;
 void anchor_render_scratch_begin_bank(void);
 void anchor_render_scratch_begin_object(void *object);
@@ -31,6 +32,7 @@ void anchor_render_scratch_end_object(void);
 void anchor_render_scratch_test_bind(void *arena, unsigned int bank_bytes);
 
 int anchor_dialog_busy(void) { return s_dialog_busy; }
+int anchor_freeze_prompt_visible(void) { return s_freeze_prompt_visible; }
 
 void recomp_printf(const char *format, ...)
 {
@@ -197,6 +199,7 @@ static void setup_native(void)
     D_801684FC_1690FC = 1;
     s_reports = 0;
     s_dialog_busy = 0;
+    s_freeze_prompt_visible = 0;
     anchor_render_scratch_test_bind(s_scratch.bytes, 32768u);
 }
 
@@ -305,6 +308,7 @@ static void exhaustion_skips_only_the_draw_and_preserves_colliders(void)
     assert(s_objects.bytes[0x64] & 1u);
     anchor_render_scratch_end_object();
     assert(D_8015C5CC_15D1CC == head && D_80168504_169104 == matrix);
+
     assert(s_objects.bytes[0x64] == 0x80);
     setup_native();
     word(s_objects.bytes, 0x2c, 0x67001001u);
@@ -340,6 +344,16 @@ static void invitation_reserves_native_window_commands(void)
     assert(s_objects.bytes[0x64] & 1u);
     anchor_render_scratch_end_object();
     assert(memcmp(old, s_objects.bytes, sizeof(old)) == 0);
+    assert(D_8015C5CC_15D1CC == head && D_80168504_169104 == matrix);
+
+    /* The nonmodal freeze window needs the same graphics tail. */
+    setup_native();
+    s_freeze_prompt_visible = 1;
+    D_8015C5CC_15D1CC = (unsigned int *)(s_native.bytes + dialog_limit);
+    head = D_8015C5CC_15D1CC;
+    matrix = D_80168504_169104;
+    anchor_render_scratch_begin_object(s_objects.bytes);
+    anchor_render_scratch_end_object();
     assert(D_8015C5CC_15D1CC == head && D_80168504_169104 == matrix);
 
     /* One final group call immediately below the boundary is safe. Even a

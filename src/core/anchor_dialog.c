@@ -1,4 +1,5 @@
 #include "core/anchor_dialog.h"
+#include "ui/anchor_freeze_prompt.h"
 
 #ifdef ANCHOR_DIALOG_HOST_TEST
 #include <stdint.h>
@@ -197,8 +198,13 @@ static int begin_dialog(AnchorDialogOwner owner, const char *name,
     /* Every completed result belongs to its original caller until consumed. */
     if (s_active || s_result != ANCHOR_DIALOG_IDLE ||
         D_80077858_78458 || !D_80077860_78460 || !D_801FC604_5B8514 ||
-        !D_80167C54_168854 || (D_800C7AE0 & 3u) || D_800C7AE2 ||
-        D_80167C48_168848[0] || D_80167C48_168848[1] || D_80167C48_168848[2])
+        !D_80167C54_168854 || (D_800C7AE0 & 3u) || D_800C7AE2)
+        return 0;
+    /* Let an informational freeze window give way only when this dialog can
+     * otherwise start. Keep the regular slot check for other native users. */
+    anchor_freeze_prompt_yield();
+    if (D_80167C48_168848[0] || D_80167C48_168848[1] ||
+        D_80167C48_168848[2])
         return 0;
 
     if (owner == ANCHOR_DIALOG_OWNER_CASTLE_RETURN)

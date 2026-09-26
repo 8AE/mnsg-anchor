@@ -67,6 +67,7 @@ int anchor_player_models_peer_frozen(int cid, int session, int epoch)
 }
 int anchor_player_freeze_active(void) { return local_frozen; }
 int anchor_dialog_busy(void) { return 0; }
+int anchor_freeze_prompt_visible(void) { return 0; }
 int anchor_player_models_get_freeze_visual_targets(AnchorFreezeVisualTarget *out,
                                                     int capacity)
 {

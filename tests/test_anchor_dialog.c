@@ -29,6 +29,8 @@ static unsigned int rendered_line, rendered_line_width;
 static int native_scenario_ticks, world_updates, interface_updates;
 static int frame_button, frame_selection;
 
+void anchor_freeze_prompt_yield(void) { }
+
 /* US resident width table at 8005BB10 (ROM 5C710), printable ASCII 20..7E.
  * Native D060 advances by width + 1. C6A8 sets the text inset to (10, 7)
  * and line spacing to 16 pixels; style 8 supplies a 256 by 72 window. */
