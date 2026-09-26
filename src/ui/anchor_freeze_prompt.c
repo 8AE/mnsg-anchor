@@ -28,7 +28,9 @@ enum {
     PROMPT_STYLE = 10,
     PROMPT_WIDTH = 256,
     TITLE_Y = 24,
-    BODY_Y = 50
+    BODY_Y = 50,
+    BUTTON_A_PALETTE = 6,
+    BUTTON_B_PALETTE = 8
 };
 
 static void *s_window;
@@ -67,7 +69,7 @@ static float line_width(const char *text, float scale)
  * center and scales after insertion to center our two lines. The renderer
  * adds the window's screen position when it draws these records. */
 static int append_line(const char *text, unsigned int *record_index,
-                       float scale, short center_y)
+                       float scale, short center_y, int tint_buttons)
 {
     float start = (PROMPT_WIDTH - line_width(text, scale)) * 0.5f;
     float advance = 0.0f;
@@ -85,6 +87,17 @@ static int append_line(const char *text, unsigned int *record_index,
         record = window + 0x198u + *record_index * 0x30u;
         if (*(unsigned short *)(record + 4) != 1u)
             return 0;
+        if (tint_buttons && (glyph == (unsigned int)('A' - 0x20) ||
+                             glyph == (unsigned int)('B' - 0x20)))
+        {
+            unsigned short *flags = (unsigned short *)(record + 6);
+            unsigned int palette = glyph == (unsigned int)('A' - 0x20) ?
+                                   BUTTON_A_PALETTE : BUTTON_B_PALETTE;
+            /* The low nibble selects the native CI palette. Keep all other
+             * glyph flags, including visibility/effect bits, intact. */
+            *flags = (unsigned short)((*flags & ~0x000Fu) |
+                                      (palette + (glyph & 1u)));
+        }
         *(short *)(record + 8) = (short)(start + advance + 4.0f * scale);
         *(short *)(record + 10) = center_y;
         *(float *)(record + 0x14) = scale;
@@ -103,11 +116,11 @@ static int fill_window(void)
     unsigned int record_index = 0;
     int title_ok, body_ok;
     func_8000C454_D054(PROMPT_SLOT);
-    title_ok = append_line("FROZEN!!!", &record_index, 1.5f, TITLE_Y);
+    title_ok = append_line("FROZEN!!!", &record_index, 1.5f, TITLE_Y, 0);
     func_8000C488_D088(PROMPT_SLOT);
     func_8000C3EC_CFEC(PROMPT_SLOT);
     body_ok = append_line("Mash A + B to escape!", &record_index,
-                          1.0f, BODY_Y);
+                          1.0f, BODY_Y, 1);
     return title_ok && body_ok;
 }
 

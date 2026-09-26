@@ -61,6 +61,8 @@ void func_8000D060_DC60(int slot, unsigned int glyph)
     assert(slot == PROMPT_SLOT && glyph < 95u && glyphs < 120);
     record = window.bytes + 0x198u + glyphs * 0x30u;
     *(unsigned short *)(record + 4) = 1;
+    *(unsigned short *)(record + 6) =
+        (unsigned short)(0xa5a0u | (glyph & 1u));
     *(unsigned short *)(record + 0x2c) = flash ? 2u : 0u;
     rendered[glyphs] = (char)(glyph + 0x20u);
     ++glyphs;
@@ -94,6 +96,14 @@ static void opens_nonmodal_centered_blinking_prompt(void)
     for (i = 0; i < glyphs; ++i) {
         unsigned char *record = window.bytes + 0x198u + i * 0x30u;
         int title = i < (int)strlen("FROZEN!!!");
+        unsigned int glyph = (unsigned char)rendered[i] - 0x20u;
+        unsigned short palette = (unsigned short)(glyph & 1u);
+        if (!title && rendered[i] == 'A')
+            palette = 7u;
+        if (!title && rendered[i] == 'B')
+            palette = 8u;
+        assert(*(unsigned short *)(record + 6) ==
+               (unsigned short)(0xa5a0u | palette));
         assert(*(unsigned short *)(record + 0x2c) == (title ? 2u : 0u));
         assert(*(float *)(record + 0x14) == (title ? 1.5f : 1.0f));
         assert(*(float *)(record + 0x18) == (title ? 1.5f : 1.0f));
@@ -112,6 +122,21 @@ static void opens_nonmodal_centered_blinking_prompt(void)
     frozen = 0;
     anchor_freeze_prompt_update();
     assert(!anchor_freeze_prompt_visible() && frees == 1);
+}
+
+static void keeps_other_ab_glyphs_white(void)
+{
+    unsigned int record_index;
+    unsigned char *a, *b;
+    reset();
+    frozen = 1;
+    anchor_freeze_prompt_update();
+    record_index = (unsigned int)glyphs;
+    assert(append_line("AB", &record_index, 1.0f, TITLE_Y, 0));
+    a = window.bytes + 0x198u + (record_index - 2u) * 0x30u;
+    b = a + 0x30u;
+    assert(*(unsigned short *)(a + 6) == 0xa5a1u);
+    assert(*(unsigned short *)(b + 6) == 0xa5a0u);
 }
 
 static void yields_to_other_windows_and_scenarios(void)
@@ -163,6 +188,7 @@ static void never_frees_replaced_slot(void)
 int main(void)
 {
     opens_nonmodal_centered_blinking_prompt();
+    keeps_other_ab_glyphs_white();
     yields_to_other_windows_and_scenarios();
     never_frees_replaced_slot();
     puts("freeze prompt tests passed");
