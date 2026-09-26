@@ -744,6 +744,78 @@ int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
     return result;
 }
 
+int anchor_send_player_cube_control(int op, int target_cid,
+    int target_epoch, int carry_id, int x100, int y100, int z100,
+    int vx100, int vy100, int vz100, int rx, int ry, int rz,
+    int source_epoch)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("op", op);
+    REPY_FN_SET_S32("target_cid", target_cid);
+    REPY_FN_SET_S32("target_epoch", target_epoch);
+    REPY_FN_SET_S32("carry_id", carry_id);
+    REPY_FN_SET_S32("x100", x100);
+    REPY_FN_SET_S32("y100", y100);
+    REPY_FN_SET_S32("z100", z100);
+    REPY_FN_SET_S32("vx100", vx100);
+    REPY_FN_SET_S32("vy100", vy100);
+    REPY_FN_SET_S32("vz100", vz100);
+    REPY_FN_SET_S32("rx", rx);
+    REPY_FN_SET_S32("ry", ry);
+    REPY_FN_SET_S32("rz", rz);
+    REPY_FN_SET_S32("source_epoch", source_epoch);
+    REPY_FN_EXEC_CACHE(anchor_send_player_cube_control_code,
+        "import anchor_mnsg\n"
+        "result = anchor_mnsg.send_player_cube_control(\n"
+        "    op, target_cid, target_epoch, carry_id, x100, y100, z100,\n"
+        "    vx100, vy100, vz100, rx, ry, rz, source_epoch)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_poll_player_cube_control(AnchorPlayerCubeControl *out)
+{
+    if (!out)
+        return 0;
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_poll_player_cube_control_code,
+        "import anchor_mnsg\n"
+        "cube = anchor_mnsg.poll_player_cube_control()\n"
+        "has_cube = cube is not None\n"
+        "if has_cube:\n"
+        "    (op, sender_cid, target_cid, room_id, source_session,\n"
+        "     target_session, source_epoch, target_epoch, carry_id,\n"
+        "     control_seq, source_pos_seq, x100, y100, z100, vx100,\n"
+        "     vy100, vz100, rx, ry, rz) = cube\n");
+    int result = (int)REPY_FN_GET_BOOL("has_cube");
+    if (result)
+    {
+        out->op = (int)REPY_FN_GET_S32("op");
+        out->sender_cid = (int)REPY_FN_GET_S32("sender_cid");
+        out->target_cid = (int)REPY_FN_GET_S32("target_cid");
+        out->room_id = (int)REPY_FN_GET_S32("room_id");
+        out->source_session = (int)REPY_FN_GET_S32("source_session");
+        out->target_session = (int)REPY_FN_GET_S32("target_session");
+        out->source_epoch = (int)REPY_FN_GET_S32("source_epoch");
+        out->target_epoch = (int)REPY_FN_GET_S32("target_epoch");
+        out->carry_id = (int)REPY_FN_GET_S32("carry_id");
+        out->control_seq = (int)REPY_FN_GET_S32("control_seq");
+        out->source_pos_seq = (int)REPY_FN_GET_S32("source_pos_seq");
+        out->x100 = (int)REPY_FN_GET_S32("x100");
+        out->y100 = (int)REPY_FN_GET_S32("y100");
+        out->z100 = (int)REPY_FN_GET_S32("z100");
+        out->vx100 = (int)REPY_FN_GET_S32("vx100");
+        out->vy100 = (int)REPY_FN_GET_S32("vy100");
+        out->vz100 = (int)REPY_FN_GET_S32("vz100");
+        out->rx = (int)REPY_FN_GET_S32("rx");
+        out->ry = (int)REPY_FN_GET_S32("ry");
+        out->rz = (int)REPY_FN_GET_S32("rz");
+    }
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_send_player_sounds(int interaction_session, int player_epoch,
                               const unsigned short *sound_ids,
                               int sound_count)

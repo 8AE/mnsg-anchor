@@ -19,6 +19,7 @@
 #include "combat/anchor_projectile_models.h"
 #include "combat/anchor_player_freeze.h"
 #include "combat/anchor_player_freeze_visual.h"
+#include "combat/anchor_player_cube.h"
 #include "player/anchor_player_sounds.h"
 #include "player/anchor_remote_animation.h"
 #include "combat/anchor_remote_collision.h"
@@ -41,6 +42,11 @@
 /* 32 signed-angle units/tick is about 0.18 degrees/tick. Ignore the common
  * one-unit quantization wobble while still publishing a visible turn edge. */
 #define MOTION_EDGE_ANGULAR_MIN_SPEED 960
+/* The frozen player cannot steer. Follow sparse owner endpoints locally while
+ * keeping the visible model and its ice display on the same per-frame pose. */
+#define FROZEN_POSITION_FOLLOW 0.35f
+#define FROZEN_TELEPORT_DISTANCE_SQ 250000.0f
+#define FROZEN_CUBE_HALF_HEIGHT 100.0f
 
 #define CHARACTER_GOEMON 0
 #define CHARACTER_EBISUMARU 1
@@ -107,6 +113,10 @@ typedef struct RemoteSmoothing
     int seen;
     int player_epoch;
     int interaction_session;
+    int room;
+    int frozen;
+    int frozen_owned_locally;
+    Vec3f frozen_position;
     AnchorRemoteMotionState motion;
 } RemoteSmoothing;
 
@@ -218,6 +228,15 @@ static int is_rdram_pointer(const void *ptr)
     return (phys >= 0x00001000u && phys < 0x00800000u) ||
            anchor_remote_model_pool_contains(ptr);
 }
+#else
+/* Host tests use ordinary process pointers for the native cube object. */
+static int is_rdram_pointer(const void *ptr)
+{
+    return ptr != 0;
+}
+#endif
+
+#ifndef ANCHOR_ACTORS_HOST_TEST
 
 static int round_float_to_int(float value)
 {
@@ -370,6 +389,9 @@ static RemoteSmoothing *find_remote_smoothing(int cid, int create)
     s_remote_smoothing[free_index].seen = 0;
     s_remote_smoothing[free_index].player_epoch = 0;
     s_remote_smoothing[free_index].interaction_session = 0;
+    s_remote_smoothing[free_index].room = -1;
+    s_remote_smoothing[free_index].frozen = 0;
+    s_remote_smoothing[free_index].frozen_owned_locally = 0;
     anchor_remote_motion_reset(&s_remote_smoothing[free_index].motion);
     return &s_remote_smoothing[free_index];
 }
@@ -409,22 +431,115 @@ static void drop_remote_smoothing(int cid)
         smooth->active = 0;
 }
 
+static int frozen_coordinate_valid(float value)
+{
+    /* Ordered comparisons also reject NaN from a damaged native display. */
+    return value >= -10000000.0f && value <= 10000000.0f;
+}
+
+static int local_frozen_cube_pose(const RemotePlayer *remote, Vec3f *pose)
+{
+    void *task, *object;
+    float scale;
+    float x, y, z;
+
+    if (remote->cid <= 0 || remote->interaction_session <= 0 ||
+        remote->player_epoch <= 0 ||
+        !anchor_player_cube_visual_owned(remote->cid,
+            remote->interaction_session, remote->player_epoch) ||
+        !anchor_player_freeze_visual_get_native(remote->cid,
+            remote->interaction_session, remote->player_epoch,
+            &task, &object, &scale) ||
+        !is_rdram_pointer(task) || !is_rdram_pointer(object) ||
+        !(scale > 0.0f && scale <= 20.0f))
+        return 0;
+
+    x = *(const float *)((const unsigned char *)object + 8);
+    y = *(const float *)((const unsigned char *)object + 0xc) -
+        FROZEN_CUBE_HALF_HEIGHT * scale;
+    z = *(const float *)((const unsigned char *)object + 0x10);
+    if (!frozen_coordinate_valid(x) || !frozen_coordinate_valid(y) ||
+        !frozen_coordinate_valid(z))
+        return 0;
+    pose->x = x;
+    pose->y = y;
+    pose->z = z;
+    return 1;
+}
+
 static void smooth_remote_player(const RemotePlayer *remote, RemotePlayer *out)
 {
     RemoteSmoothing *smooth = find_remote_smoothing(remote->cid, 1);
     AnchorRemoteMotionSample sample;
     AnchorRemoteMotionOutput motion;
+    int frozen = (remote->appearance_flags & ANCHOR_APPEARANCE_FROZEN) != 0;
 
     *out = *remote;
     if (!smooth)
         return;
     smooth->seen = 1;
     if (smooth->player_epoch != remote->player_epoch ||
-        smooth->interaction_session != remote->interaction_session)
+        smooth->interaction_session != remote->interaction_session ||
+        smooth->room != remote->room)
     {
         anchor_remote_motion_reset(&smooth->motion);
+        smooth->frozen = 0;
         smooth->player_epoch = remote->player_epoch;
         smooth->interaction_session = remote->interaction_session;
+        smooth->room = remote->room;
+    }
+    if (frozen)
+    {
+        Vec3f target = {remote->x, remote->y, remote->z};
+        int owned_locally = local_frozen_cube_pose(remote, &target);
+        float dx, dy, dz;
+
+        if (!frozen_coordinate_valid(target.x) ||
+            !frozen_coordinate_valid(target.y) ||
+            !frozen_coordinate_valid(target.z))
+            return;
+        if (!smooth->frozen ||
+            smooth->frozen_owned_locally != owned_locally)
+        {
+            /* Freeze and carry transitions have no prior motion baseline. */
+            anchor_remote_motion_reset(&smooth->motion);
+            smooth->frozen_position = target;
+        }
+        else if (owned_locally)
+        {
+            /* The native carried cube advances each frame. Its visible player
+             * must share that exact pose, even between network packets. */
+            smooth->frozen_position = target;
+        }
+        else
+        {
+            dx = target.x - smooth->frozen_position.x;
+            dy = target.y - smooth->frozen_position.y;
+            dz = target.z - smooth->frozen_position.z;
+            if (dx * dx + dy * dy + dz * dz >
+                FROZEN_TELEPORT_DISTANCE_SQ)
+                smooth->frozen_position = target;
+            else
+            {
+                smooth->frozen_position.x += dx * FROZEN_POSITION_FOLLOW;
+                smooth->frozen_position.y += dy * FROZEN_POSITION_FOLLOW;
+                smooth->frozen_position.z += dz * FROZEN_POSITION_FOLLOW;
+            }
+        }
+        smooth->frozen = 1;
+        smooth->frozen_owned_locally = owned_locally;
+        out->x = smooth->frozen_position.x;
+        out->y = smooth->frozen_position.y;
+        out->z = smooth->frozen_position.z;
+        out->motion_phase_frames = 0;
+        out->new_motion_sample = 0;
+        return;
+    }
+    if (smooth->frozen)
+    {
+        /* Thaw resumes ordinary prediction at the fresh sender endpoint. */
+        anchor_remote_motion_reset(&smooth->motion);
+        smooth->frozen = 0;
     }
     sample.room = remote->room;
     sample.seq = remote->seq;
@@ -683,6 +798,8 @@ static void publish_local_state(PlayerObject *local_obj)
         appearance_flags |= ANCHOR_APPEARANCE_HURT_RECOVERY;
     if (anchor_player_freeze_active())
         appearance_flags |= ANCHOR_APPEARANCE_FROZEN;
+    if (anchor_player_cube_victim_moving())
+        appearance_flags |= ANCHOR_APPEARANCE_CARRIED;
     {
         void *player_work =
             *(void **)((unsigned char *)D_801FC604_5B8514 + 0x5c);
@@ -941,7 +1058,8 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
 
         /* Contact can constrain the displayed model away from its predicted
          * network target. Keep the nameplate on the actual visible body. */
-        if (!smoothed_remote.collision_disabled &&
+        if (!(smoothed_remote.appearance_flags & ANCHOR_APPEARANCE_FROZEN) &&
+            !smoothed_remote.collision_disabled &&
             !anchor_remote_collision_is_scripted())
             anchor_player_models_get_position(smoothed_remote.cid,
                 &smoothed_remote.x, &smoothed_remote.y, &smoothed_remote.z);
@@ -976,6 +1094,7 @@ void anchor_actors_update_cutscene_models(void)
     publish_local_state(local_obj);
     refresh_lobby();
     update_remote_cutscene_models(local_obj);
+    anchor_player_cube_tick();
     anchor_player_sounds_update();
 }
 

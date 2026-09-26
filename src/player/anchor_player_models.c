@@ -51,6 +51,7 @@
 #include "combat/anchor_collision_actors.h"
 #include "combat/anchor_player_damage.h"
 #include "combat/anchor_player_freeze.h"
+#include "combat/anchor_player_cube.h"
 #include "combat/anchor_player_freeze_visual.h"
 #include "combat/anchor_collision_cube.h"
 #include "progression/item_sync.h"
@@ -1571,6 +1572,7 @@ static int collect_collision_peers(const RemoteModelSlot *self,
         if (peer == self || !peer->active || !peer->pending_valid ||
             peer->pending_room != D_800C7AB2 ||
             !peer->collision_ready || peer->pending_remote.collision_disabled ||
+            (peer->pending_remote.appearance_flags & ANCHOR_APPEARANCE_CARRIED) ||
             slot_has_visible_cube(peer) ||
             !is_linked_remote_task(peer->task))
             continue;
@@ -1666,6 +1668,24 @@ int anchor_player_models_peer_is_current(int cid, int session, int epoch)
     return 0;
 }
 
+int anchor_player_models_peer_frozen(int cid, int session, int epoch)
+{
+    int i;
+    if (!anchor_player_models_peer_is_current(cid, session, epoch))
+        return 0;
+    for (i = 0; i < s_slot_capacity; ++i)
+    {
+        const RemoteModelSlot *slot = &s_slots[i];
+        if (slot->active && slot->cid == cid && slot->pending_valid &&
+            slot->pending_room == D_800C7AB2 &&
+            slot->pending_remote.interaction_session == session &&
+            slot->pending_remote.player_epoch == epoch)
+            return (slot->pending_remote.appearance_flags &
+                    ANCHOR_APPEARANCE_FROZEN) != 0;
+    }
+    return 0;
+}
+
 int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacity)
 {
     int i;
@@ -1681,6 +1701,7 @@ int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacit
         if (!slot->active || !slot->pending_valid || !slot->collision_ready ||
             slot->pending_room != D_800C7AB2 ||
             slot->pending_remote.collision_disabled ||
+            (slot->pending_remote.appearance_flags & ANCHOR_APPEARANCE_CARRIED) ||
             slot->pending_remote.player_epoch <= 0 ||
             slot->pending_remote.interaction_session <= 0 ||
             !is_linked_remote_task(slot->task))
@@ -1825,6 +1846,7 @@ int anchor_player_models_get_freeze_visual_targets(
         out[count].y = *(float *)(local + 0xc);
         out[count].z = *(float *)(local + 0x10);
         out[count].scale = *(float *)(local + 0x1c);
+        out[count].moving = anchor_player_cube_victim_moving();
         ++count;
     }
     for (i = 0; i < s_slot_capacity && count < capacity; ++i)
@@ -1844,6 +1866,8 @@ int anchor_player_models_get_freeze_visual_targets(
         out[count].y = *(const float *)(object + 0xc);
         out[count].z = *(const float *)(object + 0x10);
         out[count].scale = *(const float *)(object + 0x1c);
+        out[count].moving = (slot->pending_remote.appearance_flags &
+                             ANCHOR_APPEARANCE_CARRIED) != 0;
         ++count;
     }
     return count;
@@ -1908,7 +1932,9 @@ static int resolve_slot_collision(RemoteModelSlot *slot,
     float local_scale;
     int count;
 
-    if (remote->collision_disabled || anchor_remote_collision_is_scripted() ||
+    if (remote->collision_disabled ||
+        (remote->appearance_flags & ANCHOR_APPEARANCE_CARRIED) ||
+        anchor_remote_collision_is_scripted() ||
         !anchor_is_connected())
     {
         /* Clear the old contact baseline. Resuming control must not sweep

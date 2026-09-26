@@ -1,4 +1,5 @@
 #include "combat/anchor_player_freeze.h"
+#include "combat/anchor_player_cube.h"
 #include "combat/anchor_player_damage.h"
 #include "core/anchor_dialog.h"
 #include "player/anchor_player_models.h"
@@ -20,6 +21,7 @@ extern unsigned char D_800C7AE0;
 extern unsigned char D_800C7AE2;
 extern unsigned char D_800C7AE3;
 extern unsigned char D_800C7DB0_C89B0[0x60];
+extern void func_801CF3A0_58B2B0(void *player);
 
 /* PvP ice holds for half of the enemy cube's 0xFA-update primary timer. */
 #define ICE_FRAMES 125
@@ -85,6 +87,32 @@ static void write_frame(void *pointer, float frame)
     *(volatile float *)((unsigned char *)pointer + 0x28) = frame;
 }
 
+static void place_frozen_body(float x, float y, float z)
+{
+    void *middle, *follower;
+    if (!rdram_pointer(s_player) || !rdram_pointer(s_object) ||
+        *(void **)((unsigned char *)s_player + 0x18) != s_object ||
+        !display_type_two(s_object))
+        return;
+    middle = *(void **)s_object;
+    if (!rdram_pointer(middle) || !display_type_two(middle))
+        return;
+    follower = *(void **)middle;
+    if (!rdram_pointer(follower) || !display_type_two(follower) ||
+        read_word(follower, 0x2c) != s_model + 1u)
+        return;
+    *(float *)((unsigned char *)s_object + 8) = x;
+    *(float *)((unsigned char *)s_object + 0xc) = y;
+    *(float *)((unsigned char *)s_object + 0x10) = z;
+    *(float *)((unsigned char *)middle + 8) = x;
+    *(float *)((unsigned char *)middle + 0xc) = y;
+    *(float *)((unsigned char *)middle + 0x10) = z;
+    /* Native 801CD084 normally projects the follower after moving primary
+     * and middle. Frozen late movement skips that path; invoke only its
+     * ground/display projection on this guarded real player chain. */
+    func_801CF3A0_58B2B0(s_player);
+}
+
 static void latch_pose(void)
 {
     s_action = read_byte(s_player, 0xcc);
@@ -100,6 +128,7 @@ int anchor_player_freeze_control_scoped(void)
 
 static void clear_ice(void)
 {
+    anchor_player_cube_victim_thaw();
     s_player = s_object = 0;
     s_ticks = s_pending = 0;
     s_pose_ready = 0;
@@ -135,6 +164,17 @@ static int ice_live(void)
 int anchor_player_freeze_active(void)
 {
     return ice_live() && !s_pending;
+}
+
+void anchor_player_freeze_thaw_on_cube_impact(void)
+{
+    if (ice_live() && !s_pending && anchor_player_cube_victim_moving())
+    {
+        float x, y, z;
+        if (anchor_player_cube_victim_pose(&x, &y, &z))
+            place_frozen_body(x, y, z);
+        clear_ice();
+    }
 }
 
 int anchor_player_freeze_visual_pose(int *action, float *frame)
@@ -200,6 +240,13 @@ void anchor_player_freeze_after_update(void)
     {
         s_pending = 0;
         latch_pose();
+    }
+    else if (anchor_player_cube_victim_moving())
+    {
+        float x, y, z;
+        if (anchor_player_cube_victim_pose(&x, &y, &z) &&
+            rdram_pointer(s_object))
+            place_frozen_body(x, y, z);
     }
     else if (--s_ticks <= 0)
         clear_ice();

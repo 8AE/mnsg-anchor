@@ -148,6 +148,12 @@ _interaction_session: int = 0
 _player_hit_seq: int = 0
 _player_hits = deque(maxlen=32)
 _player_hit_seen: "dict[int, tuple[int, int, int, int]]" = {}
+_player_cube_seq: int = 0
+_player_cube_events = deque(maxlen=64)
+_player_cube_poses: "dict[int, tuple[int, dict]]" = {}
+_player_cube_seen: "dict[int, tuple[int, int, int, int, int]]" = {}
+_player_cube_pose_sent: "dict[tuple[int, int, int, int, int], int]" = {}
+_player_cube_closed: "dict[tuple[int, int, int, int, int, int], int]" = {}
 _player_sound_seq: int = 0
 _player_sounds = deque(maxlen=64)
 _player_sound_seen: "dict[tuple[int, int, int, int], tuple[int, int]]" = {}
@@ -213,6 +219,7 @@ ANCHOR_MAX_PACKET_BYTES: int = 8 * 1024 * 1024
 HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     "MNSG_PLAYER_POS": 640,
     "MNSG_PLAYER_HIT": 512,
+    "MNSG_PLAYER_CUBE_CTRL": 512,
     "MNSG_PLAYER_SOUND": 320,
     "MNSG_PROJECTILE_SPAWN": 512,
     "MNSG_PROJECTILE_STOP": 256,
@@ -230,6 +237,16 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     anchor_impact_sound.PACKET_TYPE: anchor_impact_sound.PACKET_BYTES,
 }
 PLAYER_HIT_MAX_AGE_MS: int = 500
+PLAYER_CUBE_MAX_AGE_MS: int = 500
+PLAYER_CUBE_POSE_INTERVAL_MS: int = 100
+PLAYER_CUBE_EVENT_COUNT: int = 64
+PLAYER_CUBE_POSE_COUNT: int = 64
+PLAYER_CUBE_REQUEST: int = 1
+PLAYER_CUBE_GRANT: int = 2
+PLAYER_CUBE_POSE: int = 3
+PLAYER_CUBE_THROW: int = 4
+PLAYER_CUBE_IMPACT: int = 5
+PLAYER_CUBE_CANCEL: int = 6
 PLAYER_SOUND_MAX_AGE_MS: int = 500
 PLAYER_SOUND_BATCH_COUNT: int = 8
 PLAYER_SOUND_QUEUE_COUNT: int = 64
@@ -293,9 +310,10 @@ APPEARANCE_MINI_EBISUMARU: int = 1 << 1
 APPEARANCE_HURT_RECOVERY: int = 1 << 2
 APPEARANCE_ALTERNATIVE_EBISUMARU: int = 1 << 3
 APPEARANCE_FROZEN: int = 1 << 4
+APPEARANCE_CARRIED: int = 1 << 5
 APPEARANCE_MASK: int = (APPEARANCE_SUDDEN_IMPACT | APPEARANCE_MINI_EBISUMARU |
                        APPEARANCE_HURT_RECOVERY | APPEARANCE_ALTERNATIVE_EBISUMARU |
-                       APPEARANCE_FROZEN)
+                       APPEARANCE_FROZEN | APPEARANCE_CARRIED)
 _PROJECTILE_SPAWN_LIMITS = {
     "id": (1, 0x7fffffff), "kind": (1, 255),
     "x100": (-1000000000, 1000000000),
@@ -556,6 +574,7 @@ def _merge_client_state(
         state["online"] = bool(payload["online"])
         if not state["online"]:
             _drop_projectile_spawns(cid)
+            _drop_player_cube(cid)
             _drop_player_sounds(cid)
     if "isSaveLoaded" in payload:
         state["isSaveLoaded"] = bool(payload["isSaveLoaded"])
@@ -1066,6 +1085,10 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_player_hit(packet)
                     continue
 
+                if ptype == "MNSG_PLAYER_CUBE_CTRL":
+                    _receive_player_cube_control(packet)
+                    continue
+
                 if ptype == "MNSG_PLAYER_SOUND":
                     _receive_player_sound(packet)
                     continue
@@ -1183,7 +1206,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     global _last_position_drive, _last_position_epoch, _local_map_snapshot
     global _local_map_snapshot_explicit
     global _interaction_session
-    global _player_hit_seq, _player_sound_seq
+    global _player_hit_seq, _player_cube_seq, _player_sound_seq
 
     # A receiver from an older connection must never close a newer socket.
     if expected_sock is not None and _sock is not expected_sock:
@@ -1212,6 +1235,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _local_map_snapshot_explicit = False
     _interaction_session = 0
     _player_hit_seq = 0
+    _player_cube_seq = 0
     _player_sound_seq = 0
     _connected = False
     s = _sock
@@ -1225,6 +1249,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _player_states.clear()
         _player_hits.clear()
         _player_hit_seen.clear()
+        _reset_player_cube()
         _reset_player_sounds()
         _retired_interaction_sessions.clear()
         _player_movement_order.clear()
@@ -1274,7 +1299,7 @@ def connect(
     global _last_position_drive, _last_position_epoch, _local_map_snapshot
     global _local_map_snapshot_explicit
     global _interaction_session
-    global _player_hit_seq, _player_sound_seq
+    global _player_hit_seq, _player_cube_seq, _player_sound_seq
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
     global _local_enemy_room, _local_enemy_sig, _local_enemy_bits
 
@@ -1309,6 +1334,7 @@ def connect(
     _local_map_snapshot_explicit = False
     _interaction_session = secrets.randbelow(_POSITION_SEQUENCE_MASK) + 1
     _player_hit_seq = 0
+    _player_cube_seq = 0
     _player_sound_seq = 0
     _position_seq = 0
     _local_character = ""
@@ -1321,6 +1347,7 @@ def connect(
     with _player_states_lock:
         _player_hits.clear()
         _player_hit_seen.clear()
+        _reset_player_cube()
         _reset_player_sounds()
         _retired_interaction_sessions.clear()
         _player_movement_order.clear()
@@ -1611,6 +1638,286 @@ def poll_player_hit():
             return (int(packet["clientId"]), int(packet["targetEpoch"]),
                     float(packet["hitX"]), float(packet["hitY"]), float(packet["hitZ"]),
                     packet.get("hitKind", 0))
+    return None
+
+
+_PLAYER_CUBE_FIELDS = {
+    "clientId": (1, _POSITION_SEQUENCE_MASK),
+    "targetClientId": (1, _POSITION_SEQUENCE_MASK),
+    "roomId": (0, MAP_ROOM_MAX),
+    "cubeOp": (PLAYER_CUBE_REQUEST, PLAYER_CUBE_CANCEL),
+    "carryId": (1, _POSITION_SEQUENCE_MASK),
+    "controlSeq": (1, _POSITION_SEQUENCE_MASK),
+    "controlT": (1, PLAYER_SOUND_TIMESTAMP_MAX),
+    "sourcePosSeq": (1, _POSITION_SEQUENCE_MASK),
+    "sourceSession": (1, _POSITION_SEQUENCE_MASK),
+    "targetSession": (1, _POSITION_SEQUENCE_MASK),
+    "sourceEpoch": (1, _POSITION_SEQUENCE_MASK),
+    "targetEpoch": (1, _POSITION_SEQUENCE_MASK),
+    "x100": (-1000000000, 1000000000),
+    "y100": (-1000000000, 1000000000),
+    "z100": (-1000000000, 1000000000),
+    "vx100": (-1000000, 1000000),
+    "vy100": (-1000000, 1000000),
+    "vz100": (-1000000, 1000000),
+    "rx": (-32768, 32767),
+    "ry": (-32768, 32767),
+    "rz": (-32768, 32767),
+}
+
+
+def _reset_player_cube() -> None:
+    """Drop transient carry controls at a connection or room boundary."""
+    _player_cube_events.clear()
+    _player_cube_poses.clear()
+    _player_cube_seen.clear()
+    _player_cube_pose_sent.clear()
+    _player_cube_closed.clear()
+
+
+def _drop_player_cube(cid: int) -> None:
+    """Discard one departed sender's controls; caller holds the state lock."""
+    _player_cube_seen.pop(cid, None)
+    _player_cube_poses.pop(cid, None)
+    if _player_cube_events:
+        retained = [entry for entry in _player_cube_events
+                    if entry[1]["clientId"] != cid]
+        _player_cube_events.clear()
+        _player_cube_events.extend(retained)
+    for key in tuple(_player_cube_pose_sent):
+        if key[0] == cid:
+            del _player_cube_pose_sent[key]
+    for key in tuple(_player_cube_closed):
+        if key[0] == cid or key[1] == cid:
+            del _player_cube_closed[key]
+
+
+def _player_cube_close(key: tuple, now_ms: int) -> None:
+    if key in _player_cube_closed:
+        del _player_cube_closed[key]
+    if len(_player_cube_closed) >= PLAYER_CUBE_EVENT_COUNT:
+        del _player_cube_closed[next(iter(_player_cube_closed))]
+    _player_cube_closed[key] = now_ms
+
+
+def _player_cube_matches_live_state(packet: dict) -> bool:
+    """Check the direct envelope and current movement lifetimes under lock."""
+    if type(packet) is not dict or packet.get("type") != "MNSG_PLAYER_CUBE_CTRL" or \
+            packet.get("quiet") is not True or \
+            "targetTeamId" in packet or "addToQueue" in packet:
+        return False
+    for field, (low, high) in _PLAYER_CUBE_FIELDS.items():
+        value = packet.get(field)
+        if type(value) is not int or not low <= value <= high:
+            return False
+    try:
+        if len((json.dumps(packet, separators=(",", ":"), allow_nan=False) +
+                "\x00").encode("utf-8")) > HOT_PACKET_MAX_BYTES["MNSG_PLAYER_CUBE_CTRL"]:
+            return False
+        sender = packet["clientId"]
+        source = _player_states.get(sender, {})
+        local = _player_states.get(_client_id, {})
+        room = packet["roomId"]
+        if (not _connected or _client_id <= 0 or sender == _client_id or
+                packet["targetClientId"] != _client_id or
+                not source.get("online", False) or
+                not local.get("online", False) or
+                "posX" not in source or "posX" not in local or
+                room != _local_room_id or
+                room != int(source.get("roomId", -1)) or
+                room != int(local.get("roomId", -1)) or
+                packet["sourceSession"] != int(source.get("interactionSession", 0)) or
+                packet["targetSession"] != _interaction_session or
+                packet["targetSession"] != int(local.get("interactionSession", 0)) or
+                packet["sourceEpoch"] != int(source.get("playerEpoch", 0)) or
+                packet["targetEpoch"] != int(local.get("playerEpoch", 0))):
+            return False
+        op = packet["cubeOp"]
+        if op in (PLAYER_CUBE_REQUEST, PLAYER_CUBE_GRANT,
+                  PLAYER_CUBE_POSE, PLAYER_CUBE_THROW) and (
+                source.get("collisionDisabled", 0) or
+                local.get("collisionDisabled", 0)):
+            return False
+        if op == PLAYER_CUBE_REQUEST and not (
+                int(local.get("appearanceFlags", 0)) & APPEARANCE_FROZEN):
+            return False
+        if op in (PLAYER_CUBE_POSE, PLAYER_CUBE_THROW,
+                  PLAYER_CUBE_IMPACT) and not (
+                int(local.get("appearanceFlags", 0)) &
+                (APPEARANCE_FROZEN | APPEARANCE_CARRIED)):
+            return False
+        if op == PLAYER_CUBE_GRANT and not (
+                int(source.get("appearanceFlags", 0)) & APPEARANCE_FROZEN):
+            return False
+        source_seq = int(source.get("posSeq", 0))
+        seq_lag = (source_seq - packet["sourcePosSeq"]) & _POSITION_SEQUENCE_MASK
+        if source_seq <= 0 or seq_lag >= _POSITION_SEQUENCE_HALF_RANGE:
+            return False
+        # Both timestamps originate on the sender. Never compare either one
+        # with this receiver's monotonic epoch.
+        source_time = int(source.get("posT", 0))
+        control_time = packet["controlT"]
+        if (source_time <= 0 or
+                source_time - control_time > PLAYER_CUBE_MAX_AGE_MS or
+                control_time - source_time > 5000):
+            return False
+        received_ms = int(source.get("_positionReceivedMs", 0))
+        if received_ms > 0 and \
+                int(time.monotonic() * 1000) - received_ms > 2000:
+            return False
+        return True
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _receive_player_cube_control(packet: dict) -> bool:
+    """Queue bounded event edges, or replace one sender's latest carry pose."""
+    received_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        if not _player_cube_matches_live_state(packet):
+            return False
+        sender = packet["clientId"]
+        identity = (packet["sourceSession"], packet["sourceEpoch"],
+                    packet["targetSession"], packet["targetEpoch"])
+        sequence = packet["controlSeq"]
+        carry_key = (sender, packet["targetClientId"],
+                     packet["sourceSession"], packet["targetSession"],
+                     packet["sourceEpoch"], packet["carryId"])
+        if packet["cubeOp"] == PLAYER_CUBE_POSE and \
+                carry_key in _player_cube_closed:
+            return False
+        previous = _player_cube_seen.get(sender)
+        if previous and previous[:4] == identity:
+            delta = (sequence - previous[4]) & _POSITION_SEQUENCE_MASK
+            if delta == 0 or delta >= _POSITION_SEQUENCE_HALF_RANGE:
+                return False
+        _player_cube_seen[sender] = (*identity, sequence)
+        if packet["cubeOp"] == PLAYER_CUBE_POSE:
+            _player_cube_poses.pop(sender, None)
+            if len(_player_cube_poses) >= PLAYER_CUBE_POSE_COUNT:
+                _player_cube_poses.pop(next(iter(_player_cube_poses)))
+            _player_cube_poses[sender] = (received_ms, dict(packet))
+        else:
+            if packet["cubeOp"] in (PLAYER_CUBE_THROW, PLAYER_CUBE_CANCEL,
+                                    PLAYER_CUBE_IMPACT):
+                if packet["cubeOp"] != PLAYER_CUBE_THROW:
+                    _player_cube_close(carry_key, received_ms)
+                prior = _player_cube_poses.get(sender)
+                if prior and prior[1]["carryId"] == packet["carryId"]:
+                    del _player_cube_poses[sender]
+            _player_cube_events.append((received_ms, dict(packet)))
+    return True
+
+
+def send_player_cube_control(
+    op: int, target_cid: int, target_epoch: int, carry_id: int,
+    x100: int = 0, y100: int = 0, z100: int = 0,
+    vx100: int = 0, vy100: int = 0, vz100: int = 0,
+    rx: int = 0, ry: int = 0, rz: int = 0,
+    source_epoch: "int | None" = None,
+) -> bool:
+    """Send one direct transient carry control; ordinary poses cap at 10 Hz."""
+    global _player_cube_seq
+    values = (op, target_cid, target_epoch, carry_id, x100, y100, z100,
+              vx100, vy100, vz100, rx, ry, rz)
+    if any(type(value) is not int for value in values):
+        return False
+    if source_epoch is not None and type(source_epoch) is not int:
+        return False
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        local = _player_states.get(_client_id, {})
+        target = _player_states.get(target_cid, {})
+        packet = {
+            "type": "MNSG_PLAYER_CUBE_CTRL", "clientId": _client_id,
+            "targetClientId": target_cid, "roomId": _local_room_id,
+            "sourceSession": _interaction_session,
+            "targetSession": target.get("interactionSession", 0),
+            "sourceEpoch": local.get("playerEpoch", 0),
+            "targetEpoch": target_epoch,
+            "sourcePosSeq": local.get("posSeq", 0),
+            "cubeOp": op, "carryId": carry_id,
+            "controlSeq": (_player_cube_seq % _POSITION_SEQUENCE_MASK) + 1,
+            "controlT": now_ms,
+            "x100": x100, "y100": y100, "z100": z100,
+            "vx100": vx100, "vy100": vy100, "vz100": vz100,
+            "rx": rx, "ry": ry, "rz": rz, "quiet": True,
+        }
+        if (not _connected or _client_id <= 0 or target_cid == _client_id or
+                not local.get("online", False) or
+                not target.get("online", False) or
+                "posX" not in local or "posX" not in target or
+                _local_room_id != int(local.get("roomId", -1)) or
+                _local_room_id != int(target.get("roomId", -1)) or
+                (source_epoch is not None and source_epoch != packet["sourceEpoch"]) or
+                target_epoch != int(target.get("playerEpoch", 0)) or
+                int(local.get("posT", 0)) - now_ms > PLAYER_CUBE_MAX_AGE_MS or
+                now_ms - int(local.get("posT", 0)) > 5000 or
+                any(type(packet.get(field)) is not int or
+                    not low <= packet[field] <= high
+                    for field, (low, high) in _PLAYER_CUBE_FIELDS.items())):
+            return False
+        if op in (PLAYER_CUBE_REQUEST, PLAYER_CUBE_GRANT,
+                  PLAYER_CUBE_POSE, PLAYER_CUBE_THROW) and (
+                local.get("collisionDisabled", 0) or
+                target.get("collisionDisabled", 0)):
+            return False
+        if op == PLAYER_CUBE_REQUEST and not (
+                int(target.get("appearanceFlags", 0)) & APPEARANCE_FROZEN):
+            return False
+        if op in (PLAYER_CUBE_POSE, PLAYER_CUBE_THROW,
+                  PLAYER_CUBE_IMPACT) and not (
+                int(target.get("appearanceFlags", 0)) &
+                (APPEARANCE_FROZEN | APPEARANCE_CARRIED)):
+            return False
+        if op == PLAYER_CUBE_GRANT and not (
+                int(local.get("appearanceFlags", 0)) & APPEARANCE_FROZEN):
+            return False
+        pose_key = (target_cid, carry_id, _local_room_id,
+                    packet["sourceSession"], packet["targetSession"])
+        carry_key = (_client_id, target_cid, packet["sourceSession"],
+                     packet["targetSession"], packet["sourceEpoch"], carry_id)
+        if op == PLAYER_CUBE_POSE and carry_key in _player_cube_closed:
+            return False
+        if op == PLAYER_CUBE_POSE and (
+                last := _player_cube_pose_sent.get(pose_key)) is not None and \
+                now_ms - last < PLAYER_CUBE_POSE_INTERVAL_MS:
+            return False
+    if not _send_raw(packet):
+        return False
+    with _player_states_lock:
+        _player_cube_seq = packet["controlSeq"]
+        if op == PLAYER_CUBE_POSE:
+            _player_cube_pose_sent.pop(pose_key, None)
+            if len(_player_cube_pose_sent) >= PLAYER_CUBE_POSE_COUNT:
+                _player_cube_pose_sent.pop(next(iter(_player_cube_pose_sent)))
+            _player_cube_pose_sent[pose_key] = now_ms
+        elif op in (PLAYER_CUBE_THROW, PLAYER_CUBE_CANCEL, PLAYER_CUBE_IMPACT):
+            _player_cube_pose_sent.pop(pose_key, None)
+            if op != PLAYER_CUBE_THROW:
+                _player_cube_close(carry_key, now_ms)
+    return True
+
+
+def poll_player_cube_control():
+    """Return an event before the latest coalesced poses as a numeric tuple."""
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        while _player_cube_events or _player_cube_poses:
+            if _player_cube_events:
+                received_ms, packet = _player_cube_events.popleft()
+            else:
+                sender = next(iter(_player_cube_poses))
+                received_ms, packet = _player_cube_poses.pop(sender)
+            if (now_ms - received_ms > PLAYER_CUBE_MAX_AGE_MS or
+                    not _player_cube_matches_live_state(packet)):
+                continue
+            return tuple(packet[field] for field in (
+                "cubeOp", "clientId", "targetClientId", "roomId",
+                "sourceSession", "targetSession", "sourceEpoch", "targetEpoch",
+                "carryId", "controlSeq", "sourcePosSeq",
+                "x100", "y100", "z100", "vx100", "vy100", "vz100",
+                "rx", "ry", "rz"))
     return None
 
 
@@ -3283,7 +3590,9 @@ def set_local_room(room_id: int) -> bool:
     with _player_states_lock:
         # ALL_CLIENT_STATE temporarily resets the broadcast baseline to -1;
         # a same-room metadata refresh must preserve active remote visuals.
-        if _player_states.get(_client_id, {}).get("roomId") != room_id:
+        if (previous_room >= 0 and previous_room != room_id) or \
+                _player_states.get(_client_id, {}).get("roomId") != room_id:
+            _reset_player_cube()
             _projectile_spawns.clear()
             _reset_player_sounds()
         if _client_id in _player_states:

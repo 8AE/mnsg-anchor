@@ -11,6 +11,7 @@ typedef struct AnchorFreezeVisualTarget
 {
     int cid, session, epoch;
     float x, y, z, scale;
+    int moving;
 } AnchorFreezeVisualTarget;
 
 typedef struct AnchorFreezeCubeCollision
@@ -29,5 +30,12 @@ void anchor_player_freeze_visual_reset(void);
 int anchor_player_freeze_visual_get_cubes(AnchorFreezeCubeCollision *out,
                                           int capacity);
 int anchor_player_freeze_visual_has_cube(int cid, int session, int epoch);
+int anchor_player_freeze_visual_get_native(int cid, int session, int epoch,
+                                          void **task, void **object,
+                                          float *scale);
+/* Hide an impacted cube immediately while retaining its owned native object
+ * briefly for the native attack scan. Returns 1 only on the first shatter. */
+int anchor_player_freeze_visual_shatter(int cid, int session, int epoch);
+int anchor_player_freeze_visual_owns_task(const void *task);
 
 #endif

@@ -7,6 +7,33 @@
 #include <string.h>
 
 static int fail_alloc;
+static int cube_owned;
+static int cube_native_available;
+static int cube_cid;
+static int cube_session;
+static int cube_epoch;
+static float cube_scale;
+static unsigned char cube_task[16];
+static unsigned char cube_object[0x30];
+
+int anchor_player_cube_visual_owned(int cid, int session, int epoch)
+{
+    return cube_owned && cid == cube_cid && session == cube_session &&
+           epoch == cube_epoch;
+}
+
+int anchor_player_freeze_visual_get_native(int cid, int session, int epoch,
+                                          void **task, void **object,
+                                          float *scale)
+{
+    if (!cube_native_available || cid != cube_cid ||
+        session != cube_session || epoch != cube_epoch)
+        return 0;
+    *task = cube_task;
+    *object = cube_object;
+    *scale = cube_scale;
+    return 1;
+}
 
 void *recomp_alloc(unsigned long size)
 {
@@ -118,10 +145,129 @@ static void escaped_names_and_legacy_defaults(void)
     assert(parse_lobby_positions(malformed) == 0);
 }
 
+static RemotePlayer frozen_remote(int cid)
+{
+    RemotePlayer remote = {0};
+    remote.cid = cid;
+    remote.room = 1;
+    remote.has_pos = 1;
+    remote.player_epoch = 9;
+    remote.interaction_session = 17;
+    remote.appearance_flags = ANCHOR_APPEARANCE_FROZEN;
+    remote.seq = 1;
+    remote.action = 11;
+    return remote;
+}
+
+static void frozen_endpoint_follows_between_packets(void)
+{
+    RemotePlayer remote = frozen_remote(501);
+    RemotePlayer displayed;
+    int i;
+
+    clear_remote_smoothing();
+    cube_owned = 0;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == 0.0f);
+    remote.x = 60.0f;
+    remote.seq = 2;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x > 20.0f && displayed.x < 22.0f);
+    for (i = 0; i < 5; ++i)
+        smooth_remote_player(&remote, &displayed);
+    assert(displayed.x > 54.0f && displayed.x < 60.0f);
+    /* A large sequence gap alone cannot snap a frozen display. */
+    remote.seq = 1000;
+    remote.x = 90.0f;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x > 60.0f && displayed.x < 90.0f);
+    remote.x = 700.0f;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == 700.0f); /* Implausible relocation snaps. */
+}
+
+static void locally_owned_cube_tracks_every_frame(void)
+{
+    RemotePlayer remote = frozen_remote(502);
+    RemotePlayer displayed;
+    float *center = (float *)(cube_object + 8);
+
+    clear_remote_smoothing();
+    cube_cid = remote.cid;
+    cube_session = remote.interaction_session;
+    cube_epoch = remote.player_epoch;
+    cube_owned = cube_native_available = 1;
+    cube_scale = 0.5f;
+    center[0] = 100.0f;
+    center[1] = 200.0f;
+    center[2] = 300.0f;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == 100.0f && displayed.y == 150.0f &&
+           displayed.z == 300.0f);
+    center[0] = 115.0f;
+    center[1] = 215.0f;
+    center[2] = 285.0f;
+    /* No packet changed, yet the displayed victim moves with the cube. */
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == 115.0f && displayed.y == 165.0f &&
+           displayed.z == 285.0f);
+    cube_scale = 0.0f;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == remote.x && displayed.y == remote.y);
+    cube_scale = 0.5f;
+    remote.player_epoch++;
+    remote.x = 42.0f;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == 42.0f); /* Old-life cube cannot drive a new body. */
+    cube_owned = cube_native_available = 0;
+}
+
+static void frozen_lifecycle_resets_pose(void)
+{
+    RemotePlayer remote = frozen_remote(503);
+    RemotePlayer displayed;
+
+    clear_remote_smoothing();
+    cube_owned = 0;
+    smooth_remote_player(&remote, &displayed);
+    remote.x = 60.0f;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x < 60.0f);
+    remote.interaction_session++;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == 60.0f);
+    remote.x = 100.0f;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x < 100.0f);
+    remote.player_epoch++;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == 100.0f);
+    remote.x = 130.0f;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x < 130.0f);
+    remote.room++;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == 130.0f);
+    remote.appearance_flags = 0;
+    remote.x = 180.0f;
+    remote.seq++;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == 180.0f); /* Thaw starts at the sender endpoint. */
+    remote.appearance_flags = ANCHOR_APPEARANCE_FROZEN;
+    remote.x = 220.0f;
+    smooth_remote_player(&remote, &displayed);
+    assert(displayed.x == 220.0f);
+    drop_remote_smoothing(remote.cid);
+    assert(!find_remote_smoothing(remote.cid, 0));
+}
+
 int main(void)
 {
     large_roster_and_reuse();
     escaped_names_and_legacy_defaults();
+    frozen_endpoint_follows_between_packets();
+    locally_owned_cube_tracks_every_frame();
+    frozen_lifecycle_resets_pose();
     puts("dynamic remote roster, smoothing, bounded object and name tests passed");
     return 0;
 }

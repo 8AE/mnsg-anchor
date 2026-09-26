@@ -10,6 +10,7 @@
 /* Alternative/fundoshi Ebisumaru opening-cutscene skin. */
 #define ANCHOR_APPEARANCE_ALTERNATIVE_EBISUMARU (1 << 3)
 #define ANCHOR_APPEARANCE_FROZEN (1 << 4)
+#define ANCHOR_APPEARANCE_CARRIED (1 << 5)
 
 /* An alternative appearance change replaces both segment bases. */
 static inline int anchor_player_model_remote_rebind_required(
@@ -140,6 +141,8 @@ int anchor_player_models_peek_epoch(void);
  * collision/cutscene detection and is therefore safe inside native hooks. */
 int anchor_player_models_peek_scripted(void);
 int anchor_player_models_peer_is_current(int cid, int session, int epoch);
+/* Current peer's frozen appearance, independent of render task/model readiness. */
+int anchor_player_models_peer_frozen(int cid, int session, int epoch);
 /* Retain an eligible target, or rotate through every current same-team player
  * in client-ID order. This scans the dynamic roster without a player limit. */
 int anchor_player_models_get_boss_target(int current_cid, int rotate,

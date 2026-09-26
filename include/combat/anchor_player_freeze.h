@@ -9,5 +9,6 @@ int anchor_player_freeze_active(void);
 int anchor_player_freeze_visual_pose(int *action, float *frame);
 /* True only while this mod owns the temporary native movement-control bit. */
 int anchor_player_freeze_control_scoped(void);
+void anchor_player_freeze_thaw_on_cube_impact(void);
 
 #endif

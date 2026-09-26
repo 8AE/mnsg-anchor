@@ -1,4 +1,6 @@
 #include "combat/anchor_player_freeze_visual.h"
+#include "combat/anchor_player_cube.h"
+#include "combat/anchor_player_freeze.h"
 #include "core/anchor_dialog.h"
 #include "player/anchor_player_models.h"
 #include "player/anchor_remote_model_pool.h"
@@ -34,7 +36,8 @@ typedef struct FreezeVisualSlot
     void *object;
     AnchorFreezeVisualTarget target;
     unsigned short room;
-    unsigned char active, seen, shard_frames;
+    unsigned char active, seen, shard_frames, shattered, tombstoned;
+    unsigned char impact_frames;
 } FreezeVisualSlot;
 
 /* The enemy ice child uses this immutable .file_12 material template. Copy
@@ -51,6 +54,7 @@ static const unsigned int s_cube_template[22] = {
 #define CUBE_WRAPPER_WORDS 8u
 #define CUBE_ARENA_BYTES (CUBE_TEMPLATE_BYTES + ANCHOR_FREEZE_VISUAL_MAX * CUBE_WRAPPER_WORDS * 4u)
 #define SHARD_FRAMES 40u
+#define IMPACT_FRAMES 32u
 #define NATIVE_BANK_BYTES 0x1d6d8u
 #define NATIVE_COMMAND_BYTES 0x14c80u
 #define NATIVE_MATRIX_END 0x1d380u
@@ -127,12 +131,30 @@ static int cube_visible(const FreezeVisualSlot *slot)
                                                 slot->target.epoch);
 }
 
+/* The native hit scan only needs the owned kind-2 object and its task attack
+ * fields. Its display can stay hidden during this short landing window. */
+static int impact_native(const FreezeVisualSlot *slot)
+{
+    if (!slot->shattered || !slot->tombstoned || !slot->impact_frames ||
+        slot->room != D_800C7AB2 ||
+        s_owner != D_801FC604_5B8514 || !linked(s_owner) ||
+        !owned(slot) || ((const unsigned char *)slot->object)[4] != 2)
+        return 0;
+    if (slot->target.cid == 0)
+        return slot->target.epoch == anchor_player_models_get_epoch();
+    return anchor_player_models_peer_is_current(slot->target.cid,
+                                                slot->target.session,
+                                                slot->target.epoch);
+}
+
 static int cube_collision(const FreezeVisualSlot *slot,
                           AnchorFreezeCubeCollision *out)
 {
     const unsigned char *object = slot->object;
     float x, y, z, sx, sy, sz;
-    if (!cube_visible(slot))
+    if (!cube_visible(slot) || slot->target.moving ||
+        anchor_player_cube_visual_owned(slot->target.cid,
+            slot->target.session, slot->target.epoch))
         return 0;
     x = *(const float *)(object + 8);
     y = *(const float *)(object + 0xc);
@@ -178,7 +200,64 @@ int anchor_player_freeze_visual_has_cube(int cid, int session, int epoch)
     for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
         if (s_slots[i].target.cid == cid &&
             s_slots[i].target.session == session &&
-            s_slots[i].target.epoch == epoch && cube_visible(&s_slots[i]))
+            s_slots[i].target.epoch == epoch &&
+            cube_visible(&s_slots[i]))
+            return 1;
+    return 0;
+}
+
+int anchor_player_freeze_visual_shatter(int cid, int session, int epoch)
+{
+    int i;
+    if (cid < 0 || epoch <= 0 || (cid > 0 && session <= 0))
+        return 0;
+    for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
+    {
+        FreezeVisualSlot *slot = &s_slots[i];
+        unsigned char *object;
+        if (slot->target.cid != cid || slot->target.session != session ||
+            slot->target.epoch != epoch || !cube_visible(slot))
+            continue;
+        object = slot->object;
+        slot->active = slot->shard_frames = 0;
+        slot->shattered = 1;
+        slot->tombstoned = 1;
+        slot->impact_frames = IMPACT_FRAMES;
+        *(unsigned int *)(object + 0x2c) = 0;
+        object[0x64] |= 1u;
+        return 1;
+    }
+    return 0;
+}
+
+int anchor_player_freeze_visual_get_native(int cid, int session, int epoch,
+                                          void **task, void **object,
+                                          float *scale)
+{
+    int i;
+    if (!task || !object || !scale || epoch <= 0)
+        return 0;
+    for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
+        if (s_slots[i].target.cid == cid &&
+            s_slots[i].target.session == session &&
+            s_slots[i].target.epoch == epoch &&
+            (cube_visible(&s_slots[i]) || impact_native(&s_slots[i])))
+        {
+            *task = s_slots[i].task;
+            *object = s_slots[i].object;
+            *scale = s_slots[i].target.scale;
+            return 1;
+        }
+    return 0;
+}
+
+int anchor_player_freeze_visual_owns_task(const void *task)
+{
+    int i;
+    if (!task)
+        return 0;
+    for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
+        if (s_slots[i].task == task && owned(&s_slots[i]))
             return 1;
     return 0;
 }
@@ -191,14 +270,19 @@ static void hide(FreezeVisualSlot *slot)
         *(unsigned int *)(object + 0x2c) = 0;
         object[0x64] |= 1u;
     }
-    slot->active = slot->shard_frames = 0;
+    slot->active = slot->shard_frames = slot->impact_frames = 0;
 }
 
 void anchor_player_freeze_visual_reset(void)
 {
     int i;
+    anchor_player_cube_reset();
     for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
+    {
         hide(&s_slots[i]);
+        s_slots[i].shattered = 0;
+        s_slots[i].tombstoned = 0;
+    }
     s_owner = 0;
 }
 
@@ -214,12 +298,18 @@ void anchor_player_freeze_visual_before_draw(void *pointer)
     s_guard_object = 0;
     for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
         if (s_slots[i].object == object && owned(&s_slots[i]) &&
-            (s_slots[i].active || s_slots[i].shard_frames))
+            (s_slots[i].active || s_slots[i].shard_frames ||
+             s_slots[i].shattered))
             break;
     if (i == ANCHOR_FREEZE_VISUAL_MAX)
         return;
     s_guard_object = object;
     s_guard_hidden = object[0x64] & 1u;
+    if (s_slots[i].shattered)
+    {
+        object[0x64] |= 1u;
+        return;
+    }
     bank = (unsigned int)D_800C7A72_C8672;
     if (bank > 1u || !rdram(D_8015C5C8_15D1C8))
         goto skip;
@@ -373,10 +463,16 @@ static void draw(FreezeVisualSlot *slot, int index)
     *(void **)(object + 0x40) = s_resources[1];
     *(unsigned short *)(object + 0x44) = 0x152;
     *(void **)(object + 0x48) = s_resources[2];
-    *(float *)(object + 8) = slot->target.x + (slot->active ? 0.0f : age * 0.4f);
-    *(float *)(object + 0xc) = slot->target.y + scale * 100.0f +
-                               (slot->active ? 0.0f : age * 0.8f);
-    *(float *)(object + 0x10) = slot->target.z + (slot->active ? 0.0f : age * 0.3f);
+    if (!slot->active || !anchor_player_cube_visual_native_pose(
+            slot->target.cid, slot->target.session, slot->target.epoch))
+    {
+        *(float *)(object + 8) = slot->target.x +
+                                 (slot->active ? 0.0f : age * 0.4f);
+        *(float *)(object + 0xc) = slot->target.y + scale * 100.0f +
+                                   (slot->active ? 0.0f : age * 0.8f);
+        *(float *)(object + 0x10) = slot->target.z +
+                                    (slot->active ? 0.0f : age * 0.3f);
+    }
     *(unsigned short *)(object + 0x14) = 0;
     *(unsigned short *)(object + 0x16) = 0;
     *(unsigned short *)(object + 0x18) = 0;
@@ -396,7 +492,21 @@ static void freeze_visual_task_update(void *task, void *object)
         FreezeVisualSlot *slot = &s_slots[i];
         if (slot->task != task || slot->object != object)
             continue;
-        if ((!slot->active && !slot->shard_frames) || slot->room != D_800C7AB2 ||
+        if (slot->shattered)
+        {
+            if (!slot->impact_frames || slot->room != D_800C7AB2 ||
+                s_owner != D_801FC604_5B8514 || !linked(s_owner) ||
+                !owned(slot))
+                hide(slot);
+            else
+            {
+                unsigned char *ice = slot->object;
+                *(unsigned int *)(ice + 0x2c) = 0;
+                ice[0x64] |= 1u;
+            }
+        }
+        else if ((!slot->active && !slot->shard_frames) ||
+            slot->room != D_800C7AB2 ||
             s_owner != D_801FC604_5B8514 || !linked(s_owner))
             hide(slot);
         else
@@ -419,18 +529,48 @@ void anchor_player_freeze_visual_tick(void *owner)
         anchor_player_freeze_visual_reset();
         s_owner = owner;
     }
-    for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
-    {
-        s_slots[i].seen = 0;
-        if (s_slots[i].shard_frames && !--s_slots[i].shard_frames)
-            hide(&s_slots[i]);
-    }
     count = anchor_player_models_get_freeze_visual_targets(targets,
                                                           ANCHOR_FREEZE_VISUAL_MAX);
+    for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
+    {
+        FreezeVisualSlot *slot = &s_slots[i];
+        int still_frozen;
+        slot->seen = 0;
+        if (slot->shard_frames && !--slot->shard_frames)
+            hide(slot);
+        if (!slot->shattered)
+            continue;
+        still_frozen = slot->target.cid == 0 ?
+            anchor_player_freeze_active() &&
+                slot->target.epoch == anchor_player_models_get_epoch() :
+            anchor_player_models_peer_frozen(slot->target.cid,
+                slot->target.session, slot->target.epoch);
+        if (slot->room != D_800C7AB2 || !still_frozen)
+            slot->tombstoned = 0;
+        if (slot->impact_frames && !--slot->impact_frames)
+            hide(slot);
+        if (!slot->impact_frames && !slot->tombstoned)
+        {
+            hide(slot);
+            slot->shattered = 0;
+        }
+    }
     for (i = 0; i < count; ++i)
     {
         FreezeVisualSlot *slot = 0;
         int index = -1;
+        int shattered = 0;
+        for (j = 0; j < ANCHOR_FREEZE_VISUAL_MAX; ++j)
+            if (s_slots[j].tombstoned &&
+                s_slots[j].target.cid == targets[i].cid &&
+                s_slots[j].target.session == targets[i].session &&
+                s_slots[j].target.epoch == targets[i].epoch)
+            {
+                shattered = 1;
+                break;
+            }
+        if (shattered)
+            continue;
         for (j = 0; j < ANCHOR_FREEZE_VISUAL_MAX; ++j)
             if (s_slots[j].active && s_slots[j].target.cid == targets[i].cid &&
                 s_slots[j].target.session == targets[i].session &&
@@ -442,7 +582,8 @@ void anchor_player_freeze_visual_tick(void *owner)
             }
         if (!slot)
             for (j = 0; j < ANCHOR_FREEZE_VISUAL_MAX; ++j)
-                if (!s_slots[j].active && !s_slots[j].shard_frames)
+                if (!s_slots[j].active && !s_slots[j].shard_frames &&
+                    !s_slots[j].shattered)
                 {
                     slot = &s_slots[j];
                     index = j;

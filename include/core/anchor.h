@@ -358,6 +358,26 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
    int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
                                float *x, float *y, float *z, int *hit_kind);
 
+   /* Direct, short-lived carry controls for a frozen player's ice cube. The
+    * target remains authoritative for its playable body and freeze state. */
+   typedef struct AnchorPlayerCubeControl
+   {
+       int op, sender_cid, target_cid, room_id;
+       int source_session, target_session, source_epoch, target_epoch;
+       int carry_id, control_seq, source_pos_seq;
+       int x100, y100, z100, vx100, vy100, vz100, rx, ry, rz;
+   } AnchorPlayerCubeControl;
+   enum {
+       ANCHOR_CUBE_REQUEST = 1, ANCHOR_CUBE_GRANT = 2,
+       ANCHOR_CUBE_POSE = 3, ANCHOR_CUBE_THROW = 4,
+       ANCHOR_CUBE_IMPACT = 5, ANCHOR_CUBE_CANCEL = 6
+   };
+   int anchor_send_player_cube_control(int op, int target_cid,
+       int target_epoch, int carry_id, int x100, int y100, int z100,
+       int vx100, int vy100, int vz100, int rx, int ry, int rz,
+       int source_epoch);
+   int anchor_poll_player_cube_control(AnchorPlayerCubeControl *out);
+
    /* One-frame batches of local-player one-shot sound cues. The sender stamps
     * the current player lifecycle and movement sample. Received cues are
     * identity-checked, bounded, short-lived, and never enter durable state. */

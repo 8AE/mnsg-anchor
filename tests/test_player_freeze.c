@@ -20,6 +20,14 @@ static unsigned long long s_player_storage[0x100 / 8];
 static unsigned long long s_object_storage[0x80 / 8];
 static unsigned long long s_middle_storage[0x80 / 8];
 static unsigned long long s_follower_storage[0x80 / 8];
+void anchor_player_cube_victim_thaw(void) {}
+int anchor_player_cube_victim_moving(void) { return 0; }
+int anchor_player_cube_victim_pose(float *x, float *y, float *z)
+{
+    (void)x; (void)y; (void)z;
+    return 0;
+}
+void func_801CF3A0_58B2B0(void *player) { (void)player; }
 
 static void set_frame(float frame)
 {
