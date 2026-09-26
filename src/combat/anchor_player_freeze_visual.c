@@ -113,6 +113,15 @@ static int owned(const FreezeVisualSlot *slot)
            *(void **)((unsigned char *)slot->task + 0x18) == slot->object;
 }
 
+static int target_frozen(const AnchorFreezeVisualTarget *target)
+{
+    if (target->cid == 0)
+        return target->epoch == anchor_player_models_get_epoch() &&
+               anchor_player_freeze_active();
+    return anchor_player_models_peer_frozen(target->cid, target->session,
+                                            target->epoch);
+}
+
 static int cube_visible(const FreezeVisualSlot *slot)
 {
     const unsigned char *object = slot->object;
@@ -124,11 +133,7 @@ static int cube_visible(const FreezeVisualSlot *slot)
         (signed char)object[0x65] < 0 ||
         *(const unsigned int *)(object + 0x2c) != 0x48000500u)
         return 0;
-    if (slot->target.cid == 0)
-        return slot->target.epoch == anchor_player_models_get_epoch();
-    return anchor_player_models_peer_is_current(slot->target.cid,
-                                                slot->target.session,
-                                                slot->target.epoch);
+    return target_frozen(&slot->target);
 }
 
 /* The native hit scan only needs the owned kind-2 object and its task attack
@@ -507,7 +512,8 @@ static void freeze_visual_task_update(void *task, void *object)
         }
         else if ((!slot->active && !slot->shard_frames) ||
             slot->room != D_800C7AB2 ||
-            s_owner != D_801FC604_5B8514 || !linked(s_owner))
+            s_owner != D_801FC604_5B8514 || !linked(s_owner) ||
+            (slot->active && !target_frozen(&slot->target)))
             hide(slot);
         else
             draw(slot, i);
@@ -540,11 +546,7 @@ void anchor_player_freeze_visual_tick(void *owner)
             hide(slot);
         if (!slot->shattered)
             continue;
-        still_frozen = slot->target.cid == 0 ?
-            anchor_player_freeze_active() &&
-                slot->target.epoch == anchor_player_models_get_epoch() :
-            anchor_player_models_peer_frozen(slot->target.cid,
-                slot->target.session, slot->target.epoch);
+        still_frozen = target_frozen(&slot->target);
         if (slot->room != D_800C7AB2 || !still_frozen)
             slot->tombstoned = 0;
         if (slot->impact_frames && !--slot->impact_frames)
@@ -560,6 +562,9 @@ void anchor_player_freeze_visual_tick(void *owner)
         FreezeVisualSlot *slot = 0;
         int index = -1;
         int shattered = 0;
+        /* A target sampled before the thaw must not revive its cube. */
+        if (!target_frozen(&targets[i]))
+            continue;
         for (j = 0; j < ANCHOR_FREEZE_VISUAL_MAX; ++j)
             if (s_slots[j].tombstoned &&
                 s_slots[j].target.cid == targets[i].cid &&
@@ -610,16 +615,9 @@ void anchor_player_freeze_visual_tick(void *owner)
         if (s_slots[i].active && !s_slots[i].seen)
         {
             FreezeVisualSlot *slot = &s_slots[i];
-            if ((slot->target.cid == 0 &&
-                 slot->target.epoch == anchor_player_models_get_epoch()) ||
-                (slot->target.cid > 0 && anchor_player_models_peer_is_current(
-                    slot->target.cid, slot->target.session, slot->target.epoch)))
-            {
-                slot->active = 0;
-                slot->shard_frames = SHARD_FRAMES;
-                draw(slot, i);
-            }
-            else
+            /* The model can be briefly unbound while the peer remains frozen.
+             * Only a genuine thaw (or room/identity loss) removes the cube. */
+            if (slot->room != D_800C7AB2 || !target_frozen(&slot->target))
                 hide(slot);
         }
 }

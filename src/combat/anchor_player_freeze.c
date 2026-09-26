@@ -1,6 +1,7 @@
 #include "combat/anchor_player_freeze.h"
 #include "combat/anchor_player_cube.h"
 #include "combat/anchor_player_damage.h"
+#include "combat/anchor_player_freeze_visual.h"
 #include "core/anchor_dialog.h"
 #include "player/anchor_player_models.h"
 #include "progression/item_sync.h"
@@ -16,23 +17,29 @@ extern int anchor_is_connected(void);
 
 extern void *D_801FC604_5B8514;
 extern void *D_801FC60C_5B851C;
+extern unsigned char *D_8015C5C8_15D1C8;
 extern unsigned short D_800C7AB2;
 extern unsigned char D_800C7AE0;
 extern unsigned char D_800C7AE2;
 extern unsigned char D_800C7AE3;
 extern unsigned char D_800C7DB0_C89B0[0x60];
 extern void func_801CF3A0_58B2B0(void *player);
+extern void anchor_player_cube_victim_breakout(void);
+extern int anchor_player_cube_victim_push_pose(float *x, float *y, float *z);
 
-/* PvP ice holds for half of the enemy cube's 0xFA-update primary timer. */
-#define ICE_FRAMES 125
+#define ICE_BREAKOUT_PRESSES 12
+#define ICE_MASH_BUTTONS 0xc000u
+#define ICE_RAW_HELD_OFFSET 0x3b07au
+#define ICE_RAW_PRESSED_OFFSET 0x3b07cu
 #define ICE_CONTROL_BIT 2u
 
 static void *s_player;
 static void *s_object;
 static unsigned short s_room;
 static int s_epoch;
-static int s_ticks;
 static int s_pending;
+static int s_mash_presses;
+static unsigned short s_last_mash_held;
 static int s_move_bit;
 static int s_pose_ready;
 static unsigned char s_character;
@@ -75,6 +82,13 @@ static int display_type_two(const void *pointer)
 static unsigned int read_word(const void *pointer, unsigned int offset)
 {
     return *(const volatile unsigned int *)((const unsigned char *)pointer + offset);
+}
+
+static unsigned short raw_buttons(unsigned int offset)
+{
+    if (!rdram_pointer(D_8015C5C8_15D1C8))
+        return 0;
+    return *(const volatile unsigned short *)(D_8015C5C8_15D1C8 + offset);
 }
 
 static float read_frame(const void *pointer)
@@ -130,7 +144,8 @@ static void clear_ice(void)
 {
     anchor_player_cube_victim_thaw();
     s_player = s_object = 0;
-    s_ticks = s_pending = 0;
+    s_pending = s_mash_presses = 0;
+    s_last_mash_held = 0;
     s_pose_ready = 0;
 }
 
@@ -158,7 +173,7 @@ static int ice_live(void)
         clear_ice();
         return 0;
     }
-    return s_ticks > 0 || s_pending;
+    return 1;
 }
 
 int anchor_player_freeze_active(void)
@@ -208,8 +223,9 @@ int anchor_player_freeze_apply_hit(float x, float y, float z, int hit_kind)
         s_object = D_801FC60C_5B851C;
         s_room = D_800C7AB2;
         s_epoch = anchor_player_models_get_epoch();
-        s_ticks = ICE_FRAMES;
         s_pending = 1;
+        s_mash_presses = 0;
+        s_last_mash_held = raw_buttons(ICE_RAW_HELD_OFFSET) & ICE_MASH_BUTTONS;
         s_pose_ready = 0;
         s_character = read_byte(s_player, 0x60);
     }
@@ -222,10 +238,30 @@ RECOMP_HOOK_RETURN("func_80004AF8_56F8")
 void anchor_player_freeze_input(void)
 {
     int offset;
-    if (!ice_live() || s_pending)
+    unsigned short held, pressed, fresh;
+    if (!ice_live())
         return;
-    for (offset = 2; offset < 0x18; ++offset)
-        ((volatile unsigned char *)D_800C7DB0_C89B0)[offset] = 0;
+    if (!s_pending)
+        for (offset = 2; offset < 0x18; ++offset)
+            ((volatile unsigned char *)D_800C7DB0_C89B0)[offset] = 0;
+    held = raw_buttons(ICE_RAW_HELD_OFFSET) & ICE_MASH_BUTTONS;
+    pressed = raw_buttons(ICE_RAW_PRESSED_OFFSET) & ICE_MASH_BUTTONS;
+    fresh = pressed & held & (unsigned short)~s_last_mash_held;
+    s_last_mash_held = held;
+    if (fresh & 0x8000u)
+        ++s_mash_presses;
+    if (fresh & 0x4000u)
+        ++s_mash_presses;
+    if (s_mash_presses >= ICE_BREAKOUT_PRESSES)
+    {
+        /* This input sample still belongs to the trapped player. Do not
+         * expose its final A/B press to the ordinary action interpreter. */
+        for (offset = 2; offset < 0x18; ++offset)
+            ((volatile unsigned char *)D_800C7DB0_C89B0)[offset] = 0;
+        (void)anchor_player_freeze_visual_shatter(0, 0, s_epoch);
+        anchor_player_cube_victim_breakout();
+        clear_ice();
+    }
 }
 
 RECOMP_HOOK_RETURN("func_801CB824_587734")
@@ -248,11 +284,18 @@ void anchor_player_freeze_after_update(void)
             rdram_pointer(s_object))
             place_frozen_body(x, y, z);
     }
-    else if (--s_ticks <= 0)
-        clear_ice();
-    else if (s_action != read_byte(s_player, 0xcc) ||
-             s_model != read_word(s_object, 0x2c))
-        latch_pose();
+    else
+    {
+        float x, y, z;
+        if (anchor_player_cube_victim_push_pose(&x, &y, &z))
+        {
+            if (rdram_pointer(s_object))
+                place_frozen_body(x, y, z);
+        }
+        else if (s_action != read_byte(s_player, 0xcc) ||
+                 s_model != read_word(s_object, 0x2c))
+            latch_pose();
+    }
 }
 
 /* FUN_801D9C54 mirrors the primary pose into the display object reached by

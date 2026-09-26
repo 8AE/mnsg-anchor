@@ -154,6 +154,13 @@ _player_cube_poses: "dict[int, tuple[int, dict]]" = {}
 _player_cube_seen: "dict[int, tuple[int, int, int, int, int]]" = {}
 _player_cube_pose_sent: "dict[tuple[int, int, int, int, int], int]" = {}
 _player_cube_closed: "dict[tuple[int, int, int, int, int, int], int]" = {}
+# Frozen rising-edge movement sequence, scoped to the victim's live identity.
+_player_cube_freeze: "dict[int, tuple[int, int, int, int]]" = {}
+# Snapshot metadata can change appearance before its first ordered POS arrives.
+_player_cube_pos_frozen: "dict[int, tuple[int, int, int]]" = {}
+_player_cube_push_sent: "dict[int, tuple[int, int, int]]" = {}
+_player_cube_push_seen: "dict[int, tuple[tuple[int, int, int, int, int], int, int]]" = {}
+_player_cube_push_log_ms: "dict[str, int]" = {}
 _player_sound_seq: int = 0
 _player_sounds = deque(maxlen=64)
 _player_sound_seen: "dict[tuple[int, int, int, int], tuple[int, int]]" = {}
@@ -247,6 +254,9 @@ PLAYER_CUBE_POSE: int = 3
 PLAYER_CUBE_THROW: int = 4
 PLAYER_CUBE_IMPACT: int = 5
 PLAYER_CUBE_CANCEL: int = 6
+PLAYER_CUBE_PUSH: int = 7
+PLAYER_CUBE_PUSH_INTERVAL_MS: int = 100
+PLAYER_CUBE_PUSH_INTENT_MAX: int = 1200
 PLAYER_SOUND_MAX_AGE_MS: int = 500
 PLAYER_SOUND_BATCH_COUNT: int = 8
 PLAYER_SOUND_QUEUE_COUNT: int = 64
@@ -627,6 +637,39 @@ def _merge_client_state(
             payload, int(state.get("appearanceFlags", 0))
         )
 
+    if enforce_movement_order:
+        identity = (int(state.get("interactionSession", 0)),
+                    int(state.get("playerEpoch", 0)),
+                    int(state.get("roomId", -1)))
+        frozen = bool(int(state.get("appearanceFlags", 0)) & APPEARANCE_FROZEN)
+        cached = _player_cube_freeze.get(cid)
+        if not frozen or not state.get("online", False) or \
+                cached and cached[:3] != identity:
+            _player_cube_freeze.pop(cid, None)
+            _player_cube_push_sent.pop(cid, None)
+            _player_cube_push_seen.pop(cid, None)
+        if not frozen or not state.get("online", False):
+            _player_cube_pos_frozen.pop(cid, None)
+        if (frozen and state.get("online", False) and
+                0 < identity[0] <= _POSITION_SEQUENCE_MASK and
+                0 < identity[1] <= _POSITION_SEQUENCE_MASK and
+                0 < int(state.get("posSeq", 0)) <= _POSITION_SEQUENCE_MASK and
+                _player_cube_pos_frozen.get(cid) != identity):
+            _player_cube_freeze[cid] = (*identity, int(state["posSeq"]))
+            _player_cube_pos_frozen[cid] = identity
+    elif cid in _player_cube_freeze:
+        identity = _player_cube_freeze[cid]
+        if (not state.get("online", False) or
+                not int(state.get("appearanceFlags", 0)) & APPEARANCE_FROZEN or
+                ("currentRoomId" in payload and int(state.get("roomId", -1)) != identity[2]) or
+                ("interactionSession" in payload and
+                 int(payload["interactionSession"]) != identity[0]) or
+                ("playerEpoch" in payload and
+                 int(payload["playerEpoch"]) != identity[1])):
+            _player_cube_freeze.pop(cid, None)
+            _player_cube_push_sent.pop(cid, None)
+            _player_cube_push_seen.pop(cid, None)
+
     # A confirmed visit ends at the metadata edge, even if the sender returns
     # before the game's next invitation poll. Unconfirmed entries retain their
     # grace period because room/session metadata may follow the arena event.
@@ -691,6 +734,7 @@ def _replace_all_client_states(states: list) -> None:
     with _player_states_lock:
         previous_players = dict(_player_states)
         new_players: dict = {}
+        snapshot_metadata: dict[int, dict] = {}
         for member in states:
             cid = int(member.get("clientId", 0))
             if not cid:
@@ -698,6 +742,7 @@ def _replace_all_client_states(states: list) -> None:
             if member.get("self"):
                 _client_id = cid
             client_state = member.get("clientState", member)
+            snapshot_metadata[cid] = client_state
             if member.get("self") and client_state.get("interactionSession") == _interaction_session:
                 _world_roster_session = _interaction_session
             room_id = int(client_state.get("currentRoomId", -1))
@@ -795,6 +840,24 @@ def _replace_all_client_states(states: list) -> None:
             if cid not in new_players:
                 order = _player_movement_order.pop(cid, previous)
                 _retire_interaction_session(cid, int(order.get("interactionSession", 0)))
+        for cid, frozen in tuple(_player_cube_freeze.items()):
+            replacement = new_players.get(cid, {})
+            metadata = snapshot_metadata.get(cid, {})
+            if (not replacement.get("online", False) or
+                    int(replacement.get("roomId", -1)) != frozen[2] or
+                    int(replacement.get("interactionSession", 0)) != frozen[0] or
+                    int(replacement.get("playerEpoch", 0)) != frozen[1] or
+                    ("interactionSession" in metadata and
+                     _bounded_int(metadata["interactionSession"], 1,
+                                  _POSITION_SEQUENCE_MASK, -1) != frozen[0]) or
+                    ("playerEpoch" in metadata and
+                     _bounded_int(metadata["playerEpoch"], 1,
+                                  _POSITION_SEQUENCE_MASK, -1) != frozen[1]) or
+                    ("appearanceFlags" in metadata and not
+                     _appearance_flags_from_payload(metadata) & APPEARANCE_FROZEN)):
+                _player_cube_freeze.pop(cid, None)
+                _player_cube_push_sent.pop(cid, None)
+                _player_cube_push_seen.pop(cid, None)
         _player_states.clear()
         _player_states.update(new_players)
         context = _boss_context()
@@ -1645,7 +1708,7 @@ _PLAYER_CUBE_FIELDS = {
     "clientId": (1, _POSITION_SEQUENCE_MASK),
     "targetClientId": (1, _POSITION_SEQUENCE_MASK),
     "roomId": (0, MAP_ROOM_MAX),
-    "cubeOp": (PLAYER_CUBE_REQUEST, PLAYER_CUBE_CANCEL),
+    "cubeOp": (PLAYER_CUBE_REQUEST, PLAYER_CUBE_PUSH),
     "carryId": (1, _POSITION_SEQUENCE_MASK),
     "controlSeq": (1, _POSITION_SEQUENCE_MASK),
     "controlT": (1, PLAYER_SOUND_TIMESTAMP_MAX),
@@ -1673,12 +1736,20 @@ def _reset_player_cube() -> None:
     _player_cube_seen.clear()
     _player_cube_pose_sent.clear()
     _player_cube_closed.clear()
+    _player_cube_freeze.clear()
+    _player_cube_pos_frozen.clear()
+    _player_cube_push_sent.clear()
+    _player_cube_push_seen.clear()
 
 
 def _drop_player_cube(cid: int) -> None:
     """Discard one departed sender's controls; caller holds the state lock."""
     _player_cube_seen.pop(cid, None)
     _player_cube_poses.pop(cid, None)
+    _player_cube_freeze.pop(cid, None)
+    _player_cube_pos_frozen.pop(cid, None)
+    _player_cube_push_sent.pop(cid, None)
+    _player_cube_push_seen.pop(cid, None)
     if _player_cube_events:
         retained = [entry for entry in _player_cube_events
                     if entry[1]["clientId"] != cid]
@@ -1710,6 +1781,20 @@ def _player_cube_matches_live_state(packet: dict) -> bool:
         value = packet.get(field)
         if type(value) is not int or not low <= value <= high:
             return False
+    op = packet["cubeOp"]
+    if op == PLAYER_CUBE_PUSH:
+        freeze_seq = packet.get("targetFreezeSeq")
+        if (type(freeze_seq) is not int or
+                not 0 < freeze_seq <= _POSITION_SEQUENCE_MASK or
+                type(packet["vx100"]) is not int or
+                type(packet["vz100"]) is not int or
+                abs(packet["vx100"]) > PLAYER_CUBE_PUSH_INTENT_MAX or
+                abs(packet["vz100"]) > PLAYER_CUBE_PUSH_INTENT_MAX or
+                not (packet["vx100"] or packet["vz100"]) or
+                packet["vy100"] != 0):
+            return False
+    elif "targetFreezeSeq" in packet:
+        return False
     try:
         if len((json.dumps(packet, separators=(",", ":"), allow_nan=False) +
                 "\x00").encode("utf-8")) > HOT_PACKET_MAX_BYTES["MNSG_PLAYER_CUBE_CTRL"]:
@@ -1732,11 +1817,16 @@ def _player_cube_matches_live_state(packet: dict) -> bool:
                 packet["sourceEpoch"] != int(source.get("playerEpoch", 0)) or
                 packet["targetEpoch"] != int(local.get("playerEpoch", 0))):
             return False
-        op = packet["cubeOp"]
         if op in (PLAYER_CUBE_REQUEST, PLAYER_CUBE_GRANT,
-                  PLAYER_CUBE_POSE, PLAYER_CUBE_THROW) and (
+                  PLAYER_CUBE_POSE, PLAYER_CUBE_THROW, PLAYER_CUBE_PUSH) and (
                 source.get("collisionDisabled", 0) or
                 local.get("collisionDisabled", 0)):
+            return False
+        if op == PLAYER_CUBE_PUSH and (
+                not int(local.get("appearanceFlags", 0)) & APPEARANCE_FROZEN or
+                _player_cube_freeze.get(_client_id) !=
+                (packet["targetSession"], packet["targetEpoch"], room,
+                 packet["targetFreezeSeq"])):
             return False
         if op == PLAYER_CUBE_REQUEST and not (
                 int(local.get("appearanceFlags", 0)) & APPEARANCE_FROZEN):
@@ -1770,11 +1860,30 @@ def _player_cube_matches_live_state(packet: dict) -> bool:
         return False
 
 
+def _cube_push_rejected(side: str, reason: str) -> None:
+    """Report one PUSH rejection per side every two seconds, without packet data."""
+    now_ms = int(time.monotonic() * 1000)
+    last_ms = _player_cube_push_log_ms.get(side)
+    if last_ms is not None and now_ms - last_ms < 2000:
+        return
+    _player_cube_push_log_ms[side] = now_ms
+    logger.warning("anchor_mnsg: cube push %s rejected: %s", side, reason)
+
+
 def _receive_player_cube_control(packet: dict) -> bool:
     """Queue bounded event edges, or replace one sender's latest carry pose."""
     received_ms = int(time.monotonic() * 1000)
     with _player_states_lock:
         if not _player_cube_matches_live_state(packet):
+            if isinstance(packet, dict) and packet.get("cubeOp") == PLAYER_CUBE_PUSH:
+                expected_freeze = (
+                    packet.get("targetSession"), packet.get("targetEpoch"),
+                    packet.get("roomId"), packet.get("targetFreezeSeq"),
+                )
+                reason = ("freeze generation" if
+                          _player_cube_freeze.get(_client_id) != expected_freeze
+                          else "live state or packet fields")
+                _cube_push_rejected("receive", reason)
             return False
         sender = packet["clientId"]
         identity = (packet["sourceSession"], packet["sourceEpoch"],
@@ -1790,7 +1899,20 @@ def _receive_player_cube_control(packet: dict) -> bool:
         if previous and previous[:4] == identity:
             delta = (sequence - previous[4]) & _POSITION_SEQUENCE_MASK
             if delta == 0 or delta >= _POSITION_SEQUENCE_HALF_RANGE:
+                if packet["cubeOp"] == PLAYER_CUBE_PUSH:
+                    _cube_push_rejected("receive", "control sequence")
                 return False
+        if packet["cubeOp"] == PLAYER_CUBE_PUSH:
+            push_identity = (*identity, packet["targetFreezeSeq"])
+            prior_push = _player_cube_push_seen.get(sender)
+            if prior_push and prior_push[0] == push_identity:
+                push_delta = (packet["carryId"] - prior_push[1]) & _POSITION_SEQUENCE_MASK
+                if (push_delta == 0 or push_delta >= _POSITION_SEQUENCE_HALF_RANGE or
+                        received_ms - prior_push[2] < PLAYER_CUBE_PUSH_INTERVAL_MS):
+                    _cube_push_rejected("receive", "push sequence or cadence")
+                    return False
+            _player_cube_push_seen[sender] = (push_identity, packet["carryId"],
+                                               received_ms)
         _player_cube_seen[sender] = (*identity, sequence)
         if packet["cubeOp"] == PLAYER_CUBE_POSE:
             _player_cube_poses.pop(sender, None)
@@ -1816,13 +1938,17 @@ def send_player_cube_control(
     rx: int = 0, ry: int = 0, rz: int = 0,
     source_epoch: "int | None" = None,
 ) -> bool:
-    """Send one direct transient carry control; ordinary poses cap at 10 Hz."""
+    """Send one direct transient cube control; poses and pushes cap at 10 Hz."""
     global _player_cube_seq
     values = (op, target_cid, target_epoch, carry_id, x100, y100, z100,
               vx100, vy100, vz100, rx, ry, rz)
     if any(type(value) is not int for value in values):
+        if op == PLAYER_CUBE_PUSH:
+            _cube_push_rejected("send", "numeric fields")
         return False
     if source_epoch is not None and type(source_epoch) is not int:
+        if op == PLAYER_CUBE_PUSH:
+            _cube_push_rejected("send", "source epoch type")
         return False
     now_ms = int(time.monotonic() * 1000)
     with _player_states_lock:
@@ -1843,6 +1969,19 @@ def send_player_cube_control(
             "vx100": vx100, "vy100": vy100, "vz100": vz100,
             "rx": rx, "ry": ry, "rz": rz, "quiet": True,
         }
+        if op == PLAYER_CUBE_PUSH:
+            freeze = _player_cube_freeze.get(target_cid)
+            if (freeze is None or
+                    freeze[:3] != (packet["targetSession"], target_epoch,
+                                   _local_room_id)):
+                _cube_push_rejected("send", "freeze generation")
+                return False
+            if (abs(vx100) > PLAYER_CUBE_PUSH_INTENT_MAX or
+                    abs(vz100) > PLAYER_CUBE_PUSH_INTENT_MAX or
+                    not (vx100 or vz100) or vy100 != 0):
+                _cube_push_rejected("send", "push vector")
+                return False
+            packet["targetFreezeSeq"] = freeze[3]
         if (not _connected or _client_id <= 0 or target_cid == _client_id or
                 not local.get("online", False) or
                 not target.get("online", False) or
@@ -1856,14 +1995,22 @@ def send_player_cube_control(
                 any(type(packet.get(field)) is not int or
                     not low <= packet[field] <= high
                     for field, (low, high) in _PLAYER_CUBE_FIELDS.items())):
+            if op == PLAYER_CUBE_PUSH:
+                _cube_push_rejected("send", "live state, room, or numeric fields")
             return False
         if op in (PLAYER_CUBE_REQUEST, PLAYER_CUBE_GRANT,
-                  PLAYER_CUBE_POSE, PLAYER_CUBE_THROW) and (
+                  PLAYER_CUBE_POSE, PLAYER_CUBE_THROW, PLAYER_CUBE_PUSH) and (
                 local.get("collisionDisabled", 0) or
                 target.get("collisionDisabled", 0)):
+            if op == PLAYER_CUBE_PUSH:
+                _cube_push_rejected("send", "collision disabled")
             return False
         if op == PLAYER_CUBE_REQUEST and not (
                 int(target.get("appearanceFlags", 0)) & APPEARANCE_FROZEN):
+            return False
+        if op == PLAYER_CUBE_PUSH and not (
+                int(target.get("appearanceFlags", 0)) & APPEARANCE_FROZEN):
+            _cube_push_rejected("send", "target frozen appearance missing")
             return False
         if op in (PLAYER_CUBE_POSE, PLAYER_CUBE_THROW,
                   PLAYER_CUBE_IMPACT) and not (
@@ -1883,7 +2030,17 @@ def send_player_cube_control(
                 last := _player_cube_pose_sent.get(pose_key)) is not None and \
                 now_ms - last < PLAYER_CUBE_POSE_INTERVAL_MS:
             return False
+        if op == PLAYER_CUBE_PUSH:
+            previous_push = _player_cube_push_sent.get(target_cid)
+            if previous_push and previous_push[0] == packet["targetFreezeSeq"]:
+                delta = (carry_id - previous_push[1]) & _POSITION_SEQUENCE_MASK
+                if (delta == 0 or delta >= _POSITION_SEQUENCE_HALF_RANGE or
+                        now_ms - previous_push[2] < PLAYER_CUBE_PUSH_INTERVAL_MS):
+                    _cube_push_rejected("send", "push sequence or cadence")
+                    return False
     if not _send_raw(packet):
+        if op == PLAYER_CUBE_PUSH:
+            _cube_push_rejected("send", "socket send")
         return False
     with _player_states_lock:
         _player_cube_seq = packet["controlSeq"]
@@ -1892,6 +2049,9 @@ def send_player_cube_control(
             if len(_player_cube_pose_sent) >= PLAYER_CUBE_POSE_COUNT:
                 _player_cube_pose_sent.pop(next(iter(_player_cube_pose_sent)))
             _player_cube_pose_sent[pose_key] = now_ms
+        elif op == PLAYER_CUBE_PUSH:
+            _player_cube_push_sent[target_cid] = (
+                packet["targetFreezeSeq"], carry_id, now_ms)
         elif op in (PLAYER_CUBE_THROW, PLAYER_CUBE_CANCEL, PLAYER_CUBE_IMPACT):
             _player_cube_pose_sent.pop(pose_key, None)
             if op != PLAYER_CUBE_THROW:
@@ -1911,6 +2071,8 @@ def poll_player_cube_control():
                 received_ms, packet = _player_cube_poses.pop(sender)
             if (now_ms - received_ms > PLAYER_CUBE_MAX_AGE_MS or
                     not _player_cube_matches_live_state(packet)):
+                if packet.get("cubeOp") == PLAYER_CUBE_PUSH:
+                    _cube_push_rejected("poll", "expired or changed live state")
                 continue
             return tuple(packet[field] for field in (
                 "cubeOp", "clientId", "targetClientId", "roomId",
@@ -3511,6 +3673,19 @@ def set_position_anim(
             local["playerEpoch"] = player_epoch
             local["interactionSession"] = _interaction_session
             local["roomId"] = _local_room_id
+            identity = (_interaction_session, player_epoch, _local_room_id)
+            frozen = bool(appearance_flags & APPEARANCE_FROZEN)
+            cached = _player_cube_freeze.get(_client_id)
+            if not frozen or cached and cached[:3] != identity:
+                _player_cube_freeze.pop(_client_id, None)
+                _player_cube_push_sent.pop(_client_id, None)
+                _player_cube_push_seen.pop(_client_id, None)
+            if not frozen:
+                _player_cube_pos_frozen.pop(_client_id, None)
+            if (frozen and player_epoch > 0 and _position_seq > 0 and
+                    _player_cube_pos_frozen.get(_client_id) != identity):
+                _player_cube_freeze[_client_id] = (*identity, _position_seq)
+                _player_cube_pos_frozen[_client_id] = identity
     return True
 
 

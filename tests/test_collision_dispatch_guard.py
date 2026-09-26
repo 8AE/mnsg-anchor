@@ -1,18 +1,32 @@
 import struct
 import unittest
 
-from tools.check_collision_dispatch import SYMBOL, check_dispatch
+from tools.check_collision_dispatch import CUBE_SYMBOL, SYMBOL, check_dispatch
 
 
-def elf_fixture(words, *, name=SYMBOL):
+def elf_fixture(words, *, name=SYMBOL, cube_words=(0x03E00008,)):
     """Small layout-faithful ELF with an unrelated indirect-dispatch function."""
-    names = b"\0" + name.encode() + b"\0unrelated\0"
-    instructions = struct.pack(">" + "I" * (len(words) + 1), *words, 0x00200008)
+    functions = [(name, words)]
+    if cube_words is not None:
+        functions.append((CUBE_SYMBOL, cube_words))
+    functions.append(("unrelated", (0x00200008,)))
+    names = bytearray(b"\0")
+    name_offsets = {}
+    packed_words = []
+    function_specs = []
+    for function_name, function_words in functions:
+        name_offsets[function_name] = len(names)
+        names.extend(function_name.encode() + b"\0")
+        function_specs.append((function_name, 0x81001000 + len(packed_words) * 4,
+                               len(function_words) * 4))
+        packed_words.extend(function_words)
+    instructions = struct.pack(">" + "I" * len(packed_words), *packed_words)
     code_offset = 52
     strings_offset = code_offset + len(instructions)
     symbols_offset = strings_offset + len(names)
-    symbols = (bytes(16) + struct.pack(">IIIBBH", 1, 0x81001000, len(words) * 4, 2, 0, 1) +
-               struct.pack(">IIIBBH", len(name) + 2, 0x81001000 + len(words) * 4, 4, 2, 0, 1))
+    symbols = bytes(16) + b"".join(
+        struct.pack(">IIIBBH", name_offsets[function_name], address, size, 2, 0, 1)
+        for function_name, address, size in function_specs)
     sections_offset = symbols_offset + len(symbols)
     ident = b"\x7fELF\x01\x02\x01" + bytes(9)
     header = struct.pack(">HHIIIIIHHHHHH", 2, 8, 1, 0, 0, sections_offset, 0,
@@ -32,13 +46,26 @@ class CollisionDispatchGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"0x81001004: jr \$1"):
             check_dispatch(elf_fixture([0, 0x00200008]))
 
+    def test_cube_interior_jump_table_dispatch_is_rejected(self):
+        with self.assertRaisesRegex(ValueError,
+                                    rf"{CUBE_SYMBOL} at 0x81001004: jr \$1"):
+            check_dispatch(elf_fixture([0x03E00008], cube_words=[0x00200008]))
+
     def test_indirect_call_is_rejected(self):
         with self.assertRaisesRegex(ValueError, r"jalr \$25"):
             check_dispatch(elf_fixture([0x0320F809]))
 
+    def test_cube_indirect_call_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, rf"{CUBE_SYMBOL}.*jalr \$25"):
+            check_dispatch(elf_fixture([0x03E00008], cube_words=[0x0320F809]))
+
     def test_missing_function_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "found 0"):
             check_dispatch(elf_fixture([0x03E00008], name="other"))
+
+    def test_missing_cube_function_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, rf"{CUBE_SYMBOL}; found 0"):
+            check_dispatch(elf_fixture([0x03E00008], cube_words=None))
 
     def test_invalid_and_truncated_files_fail_cleanly(self):
         for contents in (b"", bytes(52), elf_fixture([0x03E00008])[:-1]):

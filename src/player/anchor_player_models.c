@@ -251,6 +251,19 @@ static AnchorCollisionBody *s_collision_peers;
 static int s_collision_peer_capacity;
 static void *s_owner_task;
 static unsigned int s_interaction_tick;
+#if DEBUG_BUTTON_ENABLED
+static unsigned int s_cube_push_no_intent_tick;
+static unsigned int s_cube_push_intent_tick;
+static unsigned int s_cube_push_request_tick;
+
+static int cube_push_debug_due(unsigned int *last)
+{
+    if (*last != 0 && s_interaction_tick - *last < 60u)
+        return 0;
+    *last = s_interaction_tick ? s_interaction_tick : 1u;
+    return 1;
+}
+#endif
 static void *s_interaction_task;
 static void *s_interaction_object;
 static unsigned short s_interaction_room;
@@ -2105,7 +2118,49 @@ void anchor_collision_after_local_movement(void)
         visible_cubes, ANCHOR_FREEZE_VISUAL_MAX);
     for (i = 0; i < visual_count; ++i)
         if (visible_cubes[i].cid > 0) /* Never collide with one's own ice. */
+        {
+            float intent_x, intent_z;
+            int has_intent = anchor_collision_cube_push_intent(
+                    &s_collision_local_body, &native_target,
+                    &visible_cubes[i].cube, &intent_x, &intent_z);
+            if (has_intent)
+            {
+                int sent = anchor_player_cube_request_push(
+                    visible_cubes[i].cid, visible_cubes[i].session,
+                    visible_cubes[i].epoch,
+                    s_collision_local_body.position.x,
+                    s_collision_local_body.position.y,
+                    s_collision_local_body.position.z,
+                    intent_x, intent_z);
+#if DEBUG_BUTTON_ENABLED
+                if (cube_push_debug_due(&s_cube_push_intent_tick))
+                    recomp_printf("[cube_push] contact intent cid=%d\n",
+                                  visible_cubes[i].cid);
+                if (!sent && cube_push_debug_due(&s_cube_push_request_tick))
+                    recomp_printf("[cube_push] contact request rejected cid=%d\n",
+                                  visible_cubes[i].cid);
+#endif
+            }
+#if DEBUG_BUTTON_ENABLED
+            else
+            {
+                const AnchorCollisionCube *cube = &visible_cubes[i].cube;
+                float px = s_collision_local_body.position.x;
+                float pz = s_collision_local_body.position.z;
+                float ex = px < cube->min.x ? cube->min.x - px :
+                           px > cube->max.x ? px - cube->max.x : 0.0f;
+                float ez = pz < cube->min.z ? cube->min.z - pz :
+                           pz > cube->max.z ? pz - cube->max.z : 0.0f;
+                if (ex * ex + ez * ez < 120.0f * 120.0f &&
+                    cube_push_debug_due(&s_cube_push_no_intent_tick))
+                    recomp_printf("[cube_push] near cube, no contact intent cid=%d travel=%d,%d\n",
+                                  visible_cubes[i].cid,
+                                  (int)((native_target.x - px) * 100.0f),
+                                  (int)((native_target.z - pz) * 100.0f));
+            }
+#endif
             cubes[cube_count++] = visible_cubes[i].cube;
+        }
     peers_available = mnsg_array_reserve((void **)&s_collision_peers,
                                           &s_collision_peer_capacity,
                                           s_slot_capacity + 1,

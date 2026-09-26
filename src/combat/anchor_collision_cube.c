@@ -184,6 +184,47 @@ static void corner_hits(const AnchorCollisionBody *moving,
     }
 }
 
+int anchor_collision_cube_push_intent(const AnchorCollisionBody *moving,
+                                      const AnchorCollisionVec3 *target,
+                                      const AnchorCollisionCube *cube,
+                                      float *intent_x, float *intent_z)
+{
+    AnchorCollisionVec3 delta;
+    float best_time = 2.0f, nx = 0.0f, nz = 0.0f;
+    float blocked;
+    if (!moving || !target || !intent_x || !intent_z || !valid_cube(cube) ||
+        !coordinate(moving->position.x) ||
+        !coordinate(moving->position.y) ||
+        !coordinate(moving->position.z) ||
+        !coordinate(target->x) || !coordinate(target->y) ||
+        !coordinate(target->z) ||
+        !(moving->radius > 0.0f && moving->radius <= 10000.0f &&
+          moving->height > 0.0f && moving->height <= 10000.0f) ||
+        anchor_collision_cube_side_overlaps(moving, &moving->position, cube))
+        return 0;
+    delta.x = target->x - moving->position.x;
+    delta.y = target->y - moving->position.y;
+    delta.z = target->z - moving->position.z;
+    /* Match a native movement step, never a teleport or contact correction. */
+    if (!(delta.x * delta.x + delta.z * delta.z > CUBE_EPSILON &&
+          delta.x * delta.x + delta.z * delta.z <= 144.0f))
+        return 0;
+    face_hits(moving, moving->position, delta, cube,
+              &best_time, &nx, &nz);
+    corner_hits(moving, moving->position, delta, cube,
+                &best_time, &nx, &nz);
+    if (best_time > 1.0f)
+        return 0;
+    blocked = -(delta.x * nx + delta.z * nz) * (1.0f - best_time);
+    if (blocked <= CUBE_CONTACT_SKIN)
+        return 0;
+    if (blocked > 12.0f)
+        blocked = 12.0f;
+    *intent_x = -nx * blocked;
+    *intent_z = -nz * blocked;
+    return 1;
+}
+
 int anchor_collision_cube_move_sides(const AnchorCollisionBody *moving,
                                      const AnchorCollisionVec3 *target,
                                      const AnchorCollisionCube *cubes, int count,

@@ -6,6 +6,7 @@
 #define __RECOMPUTILS_H__
 #define RECOMP_HOOK(name)
 #define RECOMP_HOOK_RETURN(name)
+void recomp_printf(const char *format, ...);
 #include "../src/combat/anchor_player_cube.c"
 
 typedef union MockTask
@@ -28,9 +29,16 @@ static int fail_impact, mock_ground_start;
 static int rotate_count;
 static unsigned short rotate_rx, rotate_ry, rotate_rz;
 static float rotate_input_x, rotate_input_y, rotate_input_z;
+static float mock_peer_x, mock_peer_y, mock_peer_z;
+static float mock_owner_half, mock_owner_height, mock_owner_depth;
+static int mock_floor, mock_wall, mock_ledge;
+static int last_x100, last_y100, last_z100, last_vx100, last_vz100;
+
+void recomp_printf(const char *format, ...) { (void)format; }
 
 int anchor_is_connected(void) { return 1; }
 unsigned int anchor_get_client_id(void) { return (unsigned int)self_id; }
+int anchor_get_projectile_session(void) { return 4; }
 int item_sync_save_is_loaded(void) { return 1; }
 int anchor_player_models_get_epoch(void) { return 5; }
 int anchor_player_models_peer_is_current(int cid, int session, int epoch)
@@ -40,7 +48,7 @@ int anchor_player_models_get_sound_position(int cid, int session, int epoch,
 {
     if (!anchor_player_models_peer_is_current(cid, session, epoch))
         return 0;
-    *x = 12.0f; *y = 0.0f; *z = 0.0f;
+    *x = mock_peer_x; *y = mock_peer_y; *z = mock_peer_z;
     return 1;
 }
 int anchor_player_freeze_active(void) { return frozen; }
@@ -59,10 +67,15 @@ int anchor_player_freeze_visual_get_cubes(AnchorFreezeCubeCollision *out,
     if (!visual_active || capacity < 1)
         return 0;
     memset(out, 0, sizeof(*out));
-    out->cid = 2; out->session = 4; out->epoch = 5;
-    out->cube.min.x = -20; out->cube.max.x = 20;
-    out->cube.min.y = -10; out->cube.max.y = 190;
-    out->cube.min.z = -20; out->cube.max.z = 20;
+    out->cid = self_id == 2 ? 0 : 2;
+    out->session = self_id == 2 ? 0 : 4;
+    out->epoch = 5;
+    out->cube.min.x = self_id == 2 ? -mock_owner_half : -20;
+    out->cube.max.x = self_id == 2 ? mock_owner_half : 20;
+    out->cube.min.y = self_id == 2 ? 0 : -10;
+    out->cube.max.y = self_id == 2 ? mock_owner_height : 190;
+    out->cube.min.z = self_id == 2 ? -mock_owner_depth * 0.5f : -20;
+    out->cube.max.z = self_id == 2 ? mock_owner_depth * 0.5f : 20;
     return 1;
 }
 int anchor_player_freeze_visual_get_native(int cid, int session, int epoch,
@@ -91,12 +104,13 @@ int anchor_send_player_cube_control(int op, int target_cid, int target_epoch,
     int carry_id, int x100, int y100, int z100, int vx100, int vy100,
     int vz100, int rx, int ry, int rz, int source_epoch)
 {
-    (void)target_epoch; (void)x100; (void)y100; (void)z100;
-    (void)vx100; (void)vy100; (void)vz100;
+    (void)target_epoch; (void)vy100;
     (void)rx; (void)ry; (void)rz;
     assert(source_epoch == 5);
     ++sent_count; last_op = op; last_target = target_cid;
     last_carry = carry_id;
+    last_x100 = x100; last_y100 = y100; last_z100 = z100;
+    last_vx100 = vx100; last_vz100 = vz100;
     return !(fail_impact && op == ANCHOR_CUBE_IMPACT);
 }
 int anchor_poll_player_cube_control(AnchorPlayerCubeControl *out)
@@ -139,7 +153,16 @@ void *func_8002C9D4_2D5D4(void *out, float x, float y, float z,
 {
     CubeQuery *query = out;
     (void)x; (void)y; (void)z; (void)range;
-    if (mock_hit || (mock_ground_start && y <= 0.0f) ||
+    if (mock_floor && dy < 0.0f && (!mock_ledge || x < 35.0f))
+    {
+        query->hit = 0x7fff;
+        query->delta[0] = query->delta[2] = 0;
+        query->delta[1] = -y;
+        query->normal[0] = query->normal[2] = 0;
+        query->normal[1] = 1;
+    }
+    else if (mock_hit || (mock_wall && dx > 0.0f && x >= 50.0f) ||
+        (mock_ground_start && y <= 0.0f) ||
         (mock_edge_hit && x == 100.0f && y == 200.0f &&
                      z == 0.0f))
     {
@@ -161,6 +184,7 @@ static void setup(void)
     memset(&player_object, 0, sizeof(player_object));
     memset(&s_victim, 0, sizeof(s_victim));
     memset(&s_carrier, 0, sizeof(s_carrier));
+    memset(&s_push, 0, sizeof(s_push));
     D_801FC604_5B8514 = player.bytes;
     D_801FC60C_5B851C = player_object.bytes;
     *(void **)(player.bytes + 0x5c) = work.bytes;
@@ -178,6 +202,10 @@ static void setup(void)
     release_count = action_count = thaw_count = shatter_count = mock_hit =
         mock_edge_hit = 0;
     pending_incoming = fail_impact = mock_ground_start = 0;
+    mock_floor = mock_wall = mock_ledge = 0;
+    mock_peer_x = 12.0f; mock_peer_y = mock_peer_z = 0.0f;
+    mock_owner_half = 50.0f;
+    mock_owner_height = mock_owner_depth = 100.0f;
     rotate_count = 0;
 }
 
@@ -195,6 +223,195 @@ static void grant_cube_to_carrier(void)
     pending_incoming = 1;
     anchor_player_cube_tick();
     assert(s_carrier.phase == 2 && held_task_is_ours());
+}
+
+static void queue_push(int sender, int carry_id, int control_seq)
+{
+    memset(&incoming, 0, sizeof(incoming));
+    incoming.op = ANCHOR_CUBE_PUSH;
+    incoming.sender_cid = sender;
+    incoming.target_cid = 2;
+    incoming.room_id = 10;
+    incoming.source_session = incoming.target_session = 4;
+    incoming.source_epoch = incoming.target_epoch = 5;
+    incoming.source_pos_seq = 1;
+    incoming.carry_id = carry_id;
+    incoming.control_seq = control_seq;
+    incoming.x100 = -7000;
+    incoming.vx100 = 500;
+    pending_incoming = 1;
+}
+
+static void setup_push_owner(void)
+{
+    setup();
+    self_id = 2;
+    frozen = visual_active = mock_floor = 1;
+    mock_peer_x = -70.0f;
+}
+
+static void test_push_sender_and_owner_validation(void)
+{
+    float x, y, z;
+    int id;
+    setup();
+    visual_active = 1;
+    *(float *)(player_object.bytes + 8) = -45.0f;
+    assert(!anchor_player_cube_request_push(2, 4, 5,
+        -45.0f, 0.0f, 0.0f, -5.0f, 0.0f));
+    assert(!anchor_player_cube_request_push(2, 4, 5,
+        -45.0f, 0.0f, 0.0f, 13.0f, 0.0f));
+    assert(anchor_player_cube_request_push(2, 4, 5,
+        -45.0f, 0.0f, 0.0f, 5.0f, 0.0f));
+    assert(last_op == ANCHOR_CUBE_PUSH && last_target == 2);
+    assert(last_x100 == -4500 && last_y100 == 0 && last_z100 == 0);
+    assert(last_vx100 == 500 && last_vz100 == 0 && last_carry > 0);
+    id = last_carry;
+    assert(anchor_player_cube_request_push(2, 4, 5,
+        -45.0f, 0.0f, 0.0f, 5.0f, 0.0f));
+    assert(last_carry != id);
+
+    setup_push_owner();
+    queue_push(1, 10, 10);
+    incoming.x100 = -20000; /* Source pose must match the current peer. */
+    anchor_player_cube_tick();
+    assert(!s_push.pose_ready);
+    queue_push(1, 10, 10);
+    incoming.vx100 = -500; /* Intent must point into the cube. */
+    anchor_player_cube_tick();
+    assert(!s_push.pose_ready);
+    queue_push(1, 10, 10);
+    incoming.target_session = 9;
+    anchor_player_cube_tick();
+    assert(!s_push.pose_ready);
+    queue_push(1, 10, 10);
+    anchor_player_cube_tick();
+    assert(s_push.pose_ready && !s_victim.moving);
+    assert(s_push.x > 1.19f && s_push.x < 1.21f);
+    assert(anchor_player_cube_victim_push_pose(&x, &y, &z));
+    assert(x == s_push.x && y == 0.0f && z == 0.0f);
+}
+
+static void test_push_owner_scaled_cube_validation(void)
+{
+    float x, y, z;
+    setup_push_owner();
+    mock_owner_half = 10.0f; /* Drawn normal player scale is 0.1. */
+    mock_owner_height = mock_owner_depth = 20.0f;
+    queue_push(1, 10, 10);
+    anchor_player_cube_tick();
+    assert(s_push.pose_ready && s_push.half == 10.0f);
+    assert(anchor_player_cube_victim_push_pose(&x, &y, &z) && x > 0.0f);
+
+    setup_push_owner();
+    mock_owner_half = 2.5f; /* Drawn mini player scale is 0.025. */
+    mock_owner_height = mock_owner_depth = 5.0f;
+    queue_push(1, 10, 10);
+    anchor_player_cube_tick();
+    assert(s_push.pose_ready && s_push.half == 2.5f);
+    assert(anchor_player_cube_victim_push_pose(&x, &y, &z) && x > 0.0f);
+
+    setup_push_owner();
+    mock_owner_half = 10.0f;
+    mock_owner_height = 1.0f; /* Reject a flattened visual. */
+    mock_owner_depth = 20.0f;
+    queue_push(1, 10, 10);
+    anchor_player_cube_tick();
+    assert(!s_push.pose_ready);
+
+    setup_push_owner();
+    mock_owner_half = 10.0f;
+    mock_owner_height = mock_owner_depth = 20.0f;
+    *(float *)(player_object.bytes + 8) = 30.0f;
+    queue_push(1, 10, 10);
+    anchor_player_cube_tick();
+    assert(!s_push.pose_ready); /* Visual and owner object must align. */
+
+    setup_push_owner();
+    mock_owner_half = 10.0f;
+    mock_owner_height = mock_owner_depth = 20.0f;
+    *(float *)(player_object.bytes + 0xc) = 30.0f;
+    queue_push(1, 10, 10);
+    anchor_player_cube_tick();
+    assert(!s_push.pose_ready);
+}
+
+static void test_push_speed_lease_and_order(void)
+{
+    float x, y, z;
+    setup_push_owner();
+    queue_push(1, 10, 10);
+    anchor_player_cube_tick();
+    assert(s_push.lease == CUBE_PUSH_LEASE - 1);
+    queue_push(1, 10, 11); /* A new sequence with a reused id is stale. */
+    anchor_player_cube_tick();
+    assert(s_push.carry_id == 10 && s_push.control_seq == 10);
+    assert(s_push.lease == CUBE_PUSH_LEASE - 2);
+    queue_push(1, 11, 11);
+    anchor_player_cube_tick();
+    assert(s_push.carry_id == 11 && s_push.control_seq == 11);
+    assert(s_push.lease == CUBE_PUSH_LEASE - 1);
+    queue_push(3, 20, 20);
+    anchor_player_cube_tick();
+    assert(s_push.pusher_cid == 1); /* Exclusive until the lease expires. */
+    for (int i = 0; i < CUBE_PUSH_LEASE; ++i)
+        anchor_player_cube_tick();
+    assert(s_push.lease == 0);
+    assert(s_push.x > 4.79f && s_push.x < 8.41f);
+    x = s_push.x;
+    anchor_player_cube_tick();
+    assert(s_push.x == x);
+    assert(anchor_player_cube_victim_push_pose(&x, &y, &z));
+    queue_push(3, 20, 20);
+    anchor_player_cube_tick();
+    assert(s_push.pusher_cid == 3 && s_push.lease > 0);
+    assert(!s_victim.moving); /* Pushing never publishes CARRIED. */
+}
+
+static void test_push_wall_ledge_and_reset(void)
+{
+    float x, y, z;
+    setup_push_owner();
+    mock_wall = 1;
+    queue_push(1, 10, 10);
+    anchor_player_cube_tick();
+    assert(s_push.pose_ready && s_push.lease == 0 && s_push.x == 0.0f);
+    anchor_player_cube_victim_thaw();
+    assert(!anchor_player_cube_victim_push_pose(&x, &y, &z));
+
+    setup_push_owner();
+    mock_ledge = 1;
+    queue_push(1, 10, 10);
+    anchor_player_cube_tick();
+    assert(s_push.pose_ready && s_push.lease == 0 && s_push.x == 0.0f);
+    ++D_800C7AB2;
+    anchor_player_cube_tick();
+    assert(!s_push.pose_ready);
+    assert(!anchor_player_cube_victim_push_pose(&x, &y, &z));
+}
+
+static void test_carry_preempts_push(void)
+{
+    float x, y, z;
+    setup_push_owner();
+    queue_push(1, 10, 10);
+    anchor_player_cube_tick();
+    assert(s_push.pose_ready && !s_victim.moving);
+    memset(&incoming, 0, sizeof(incoming));
+    incoming.op = ANCHOR_CUBE_REQUEST;
+    incoming.sender_cid = 1; incoming.target_cid = 2;
+    incoming.room_id = 10;
+    incoming.source_session = incoming.target_session = 4;
+    incoming.source_epoch = incoming.target_epoch = 5;
+    incoming.carry_id = 30; incoming.control_seq = 30;
+    incoming.x100 = -7000;
+    pending_incoming = 1;
+    anchor_player_cube_tick();
+    assert(s_victim.moving && !s_push.pose_ready);
+    assert(!anchor_player_cube_victim_push_pose(&x, &y, &z));
+    queue_push(1, 31, 31);
+    anchor_player_cube_tick();
+    assert(s_victim.moving && !s_push.pose_ready);
 }
 
 static void test_raised_carry_and_throw(void)
@@ -538,12 +755,94 @@ static void test_victim_lock_impact_cancel(void)
     assert(last_op == ANCHOR_CUBE_CANCEL && last_target == 1);
 }
 
+static void test_breakout_cancels_carry_and_flight_once(void)
+{
+    int before;
+    setup();
+    self_id = 2;
+    frozen = 1;
+    memset(&incoming, 0, sizeof(incoming));
+    incoming.op = ANCHOR_CUBE_REQUEST;
+    incoming.sender_cid = 1; incoming.target_cid = 2;
+    incoming.room_id = 10;
+    incoming.source_session = incoming.target_session = 4;
+    incoming.source_epoch = incoming.target_epoch = 5;
+    incoming.carry_id = 9; incoming.control_seq = 10;
+    incoming.x100 = 1200;
+    pending_incoming = 1;
+    anchor_player_cube_tick();
+    assert(s_victim.moving);
+    before = sent_count;
+    anchor_player_cube_victim_breakout();
+    assert(!s_victim.moving && !s_push.pose_ready);
+    assert(sent_count == before + 1 && last_op == ANCHOR_CUBE_CANCEL);
+    anchor_player_cube_victim_breakout();
+    assert(sent_count == before + 1);
+
+    setup();
+    self_id = 2;
+    frozen = 1;
+    incoming.op = ANCHOR_CUBE_REQUEST;
+    incoming.sender_cid = 1; incoming.target_cid = 2;
+    incoming.room_id = 10;
+    incoming.source_session = incoming.target_session = 4;
+    incoming.source_epoch = incoming.target_epoch = 5;
+    incoming.carry_id = 9; incoming.control_seq = 10;
+    incoming.x100 = 1200;
+    pending_incoming = 1;
+    anchor_player_cube_tick();
+    incoming.op = ANCHOR_CUBE_THROW;
+    incoming.control_seq = 11;
+    pending_incoming = 1;
+    anchor_player_cube_tick();
+    assert(s_victim.flight);
+    before = sent_count;
+    anchor_player_cube_victim_breakout();
+    assert(!s_victim.moving && !s_victim.flight);
+    assert(sent_count == before + 1 && last_op == ANCHOR_CUBE_CANCEL);
+
+    setup();
+    grant_cube_to_carrier();
+    memset(&incoming, 0, sizeof(incoming));
+    incoming.op = ANCHOR_CUBE_CANCEL;
+    incoming.sender_cid = 2; incoming.target_cid = 1;
+    incoming.room_id = 10; incoming.source_session = 4;
+    incoming.source_epoch = incoming.target_epoch = 5;
+    incoming.carry_id = s_carrier.carry_id;
+    pending_incoming = 1;
+    anchor_player_cube_tick();
+    assert(!s_carrier.phase && release_count == 1);
+    assert(shatter_count == 1 && !visual_active);
+
+    setup();
+    grant_cube_to_carrier();
+    anchor_player_cube_throw_begin(player.bytes);
+    func_801E55A0_5A14B0(player.bytes);
+    anchor_player_cube_throw_end();
+    assert(s_carrier.phase == 3);
+    memset(&incoming, 0, sizeof(incoming));
+    incoming.op = ANCHOR_CUBE_CANCEL;
+    incoming.sender_cid = 2; incoming.target_cid = 1;
+    incoming.room_id = 10; incoming.source_session = 4;
+    incoming.source_epoch = incoming.target_epoch = 5;
+    incoming.carry_id = s_carrier.carry_id;
+    pending_incoming = 1;
+    anchor_player_cube_tick();
+    assert(!s_carrier.phase && shatter_count == 1 && !visual_active);
+}
+
 int main(void)
 {
     test_raised_carry_and_throw();
     test_interact_scoping();
     test_grant_native_throw();
     test_victim_lock_impact_cancel();
+    test_push_sender_and_owner_validation();
+    test_push_owner_scaled_cube_validation();
+    test_push_speed_lease_and_order();
+    test_push_wall_ledge_and_reset();
+    test_carry_preempts_push();
+    test_breakout_cancels_carry_and_flight_once();
     test_impact_send_failure_releases_carrier();
     test_room_change_clears_impact_attack();
     test_flight_edge_midpoint_contact();

@@ -72,6 +72,19 @@ class PlayerCubeTransportTests(unittest.TestCase):
     def sent_packets(self):
         return [json.loads(wire.removesuffix(b"\x00")) for wire in self.sock.sent]
 
+    def accept_position(self, cid, sequence, appearance, *, session=None,
+                        epoch=None, room=10):
+        old = anchor_mnsg._player_states[cid]
+        return anchor_mnsg._merge_client_state(cid, {
+            "currentRoomId": room, "online": True,
+            "posX": 100, "posY": 200, "posZ": 300,
+            "posSeq": sequence, "posT": 100000 + sequence,
+            "interactionSession": (session if session is not None else
+                                   old["interactionSession"]),
+            "playerEpoch": epoch if epoch is not None else old["playerEpoch"],
+            "appearanceFlags": appearance,
+        }, enforce_movement_order=True)
+
     def test_direct_envelope_numeric_tuple_and_roles(self):
         self.assertTrue(anchor_mnsg.send_player_cube_control(
             anchor_mnsg.PLAYER_CUBE_REQUEST, 2, 7, 55, 100, 200, 300,
@@ -315,6 +328,205 @@ class PlayerCubeTransportTests(unittest.TestCase):
         anchor_mnsg._player_states[1]["roomId"] = 11
         anchor_mnsg.set_local_room(11)
         self.assertIsNone(anchor_mnsg.poll_player_cube_control())
+
+    def test_push_sender_latches_remote_freeze_generation_and_rate(self):
+        remote = anchor_mnsg._player_states[2]
+        remote["appearanceFlags"] = 0
+        self.assertFalse(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 1, vx100=1200))
+        self.assertTrue(self.accept_position(2, 5,
+            anchor_mnsg.APPEARANCE_FROZEN))
+        self.assertTrue(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 1, 100, 200, 300, 1200, 0, -1200))
+        packet = self.sent_packets()[-1]
+        self.assertEqual(packet["targetFreezeSeq"], 5)
+        self.assertEqual((packet["targetClientId"], packet["clientId"]), (2, 1))
+        self.assertNotIn("targetTeamId", packet)
+        self.assertNotIn("addToQueue", packet)
+        self.assertEqual(len(self.sock.sent), 1)
+        self.assertLessEqual(len(self.sock.sent[-1]), 512)
+        worst = {"type": "MNSG_PLAYER_CUBE_CTRL", "quiet": True,
+                 "targetFreezeSeq": anchor_mnsg._POSITION_SEQUENCE_MASK}
+        for field, (low, high) in anchor_mnsg._PLAYER_CUBE_FIELDS.items():
+            worst[field] = low if len(str(low)) > len(str(high)) else high
+        worst_wire = (json.dumps(worst, separators=(",", ":")) + "\x00").encode()
+        self.assertEqual(len(worst_wire), 501)
+        self.assertLessEqual(len(worst_wire), 512)
+        self.clock.return_value = 100.05
+        self.assertFalse(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 2, vx100=100))
+        self.clock.return_value = 100.10
+        self.assertFalse(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 1, vx100=100))
+        self.assertTrue(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 2, vx100=100))
+        self.assertEqual([p["cubeOp"] for p in self.sent_packets()], [7, 7])
+        self.assertEqual(len(anchor_mnsg._player_cube_poses), 0)
+        self.clock.return_value = 100.20
+        for velocity in ((1201, 0, 0), (0, 0, -1201),
+                         (0, 0, 0), (100, 1, 0)):
+            with self.subTest(velocity=velocity):
+                self.assertFalse(anchor_mnsg.send_player_cube_control(
+                    7, 2, 7, 3, vx100=velocity[0], vy100=velocity[1],
+                    vz100=velocity[2]))
+        remote["collisionDisabled"] = 1
+        self.assertFalse(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 3, vx100=100))
+        remote["collisionDisabled"] = 0
+
+    def test_push_local_generation_and_failed_send_retry(self):
+        local = anchor_mnsg._player_states[1]
+        local["appearanceFlags"] = 0
+        self.assertFalse(anchor_mnsg._receive_player_cube_control(
+            self.incoming(op=7, targetFreezeSeq=2, vy100=0)))
+        self.assertTrue(anchor_mnsg.set_position_anim(
+            100, 200, 300, 0, 0, 0, 0, 0, 0,
+            appearance_flags=anchor_mnsg.APPEARANCE_FROZEN,
+            player_epoch=3))
+        self.assertEqual(anchor_mnsg._player_cube_freeze[1], (101, 3, 10, 1))
+        self.assertTrue(anchor_mnsg._receive_player_cube_control(
+            self.incoming(op=7, targetFreezeSeq=1, vy100=0)))
+        event = anchor_mnsg.poll_player_cube_control()
+        self.assertEqual(len(event), 20)
+        self.assertEqual(event[0], 7)
+        self.assertEqual(event[8], 55)
+
+        remote = anchor_mnsg._player_states[2]
+        remote["appearanceFlags"] = 0
+        self.assertTrue(self.accept_position(2, 5,
+            anchor_mnsg.APPEARANCE_FROZEN))
+        with mock.patch.object(anchor_mnsg, "_send_raw", return_value=False):
+            self.assertFalse(anchor_mnsg.send_player_cube_control(
+                7, 2, 7, 1, vx100=100))
+        self.assertFalse(anchor_mnsg._player_cube_push_sent)
+        self.assertTrue(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 1, vx100=100))
+
+    def test_push_thaw_refreeze_and_snapshot_conflicts(self):
+        remote = anchor_mnsg._player_states[2]
+        remote["appearanceFlags"] = 0
+        self.assertTrue(self.accept_position(2, 5,
+            anchor_mnsg.APPEARANCE_FROZEN))
+        self.assertEqual(anchor_mnsg._player_cube_freeze[2][-1], 5)
+        snapshot = [
+            {"clientId": 1, "self": True, "clientState": {
+                "currentRoomId": 10, "interactionSession": 101}},
+            {"clientId": 2, "clientState": {
+                "currentRoomId": 10, "interactionSession": 202,
+                "playerEpoch": 7, "appearanceFlags":
+                anchor_mnsg.APPEARANCE_FROZEN}},
+        ]
+        anchor_mnsg._replace_all_client_states(snapshot)
+        self.assertEqual(anchor_mnsg._player_cube_freeze[2][-1], 5)
+        snapshot[1]["clientState"]["interactionSession"] = 999
+        anchor_mnsg._replace_all_client_states(snapshot)
+        self.assertNotIn(2, anchor_mnsg._player_cube_freeze)
+        self.assertFalse(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 1, vx100=100))
+        snapshot[1]["clientState"]["interactionSession"] = 202
+        snapshot[1]["clientState"]["appearanceFlags"] = 0
+        anchor_mnsg._replace_all_client_states(snapshot)
+        self.assertNotIn(2, anchor_mnsg._player_cube_freeze)
+        self.assertTrue(self.accept_position(2, 6, 0))
+        self.assertTrue(self.accept_position(2, 7,
+            anchor_mnsg.APPEARANCE_FROZEN))
+        self.assertEqual(anchor_mnsg._player_cube_freeze[2][-1], 7)
+        self.assertTrue(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 2, vx100=100))
+        self.assertEqual(self.sent_packets()[-1]["targetFreezeSeq"], 7)
+
+    def test_push_snapshot_first_freeze_waits_for_ordered_position(self):
+        remote = anchor_mnsg._player_states[2]
+        remote["appearanceFlags"] = 0
+        snapshot = [
+            {"clientId": 1, "self": True, "clientState": {
+                "currentRoomId": 10, "interactionSession": 101}},
+            {"clientId": 2, "clientState": {
+                "currentRoomId": 10, "interactionSession": 202,
+                "playerEpoch": 7,
+                "appearanceFlags": anchor_mnsg.APPEARANCE_FROZEN}},
+        ]
+        anchor_mnsg._replace_all_client_states(snapshot)
+        self.assertEqual(anchor_mnsg._player_states[2]["posSeq"], 4)
+        self.assertNotIn(2, anchor_mnsg._player_cube_freeze)
+        self.assertFalse(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 1, vx100=100))
+        self.assertTrue(self.accept_position(2, 5,
+            anchor_mnsg.APPEARANCE_FROZEN))
+        self.assertEqual(anchor_mnsg._player_cube_freeze[2][-1], 5)
+        self.assertTrue(self.accept_position(2, 6,
+            anchor_mnsg.APPEARANCE_FROZEN))
+        self.assertEqual(anchor_mnsg._player_cube_freeze[2][-1], 5)
+        self.assertTrue(anchor_mnsg.send_player_cube_control(
+            7, 2, 7, 1, vx100=100))
+        self.assertEqual(self.sent_packets()[-1]["targetFreezeSeq"], 5)
+
+        # A conflicting roster edge retires this generation. A later frozen
+        # POS in the same ordered freeze cannot silently rearm it.
+        snapshot[1]["clientState"]["appearanceFlags"] = 0
+        anchor_mnsg._replace_all_client_states(snapshot)
+        self.assertNotIn(2, anchor_mnsg._player_cube_freeze)
+        self.assertTrue(self.accept_position(2, 7,
+            anchor_mnsg.APPEARANCE_FROZEN))
+        self.assertNotIn(2, anchor_mnsg._player_cube_freeze)
+        self.assertTrue(self.accept_position(2, 8, 0))
+        self.assertTrue(self.accept_position(2, 9,
+            anchor_mnsg.APPEARANCE_FROZEN))
+        self.assertEqual(anchor_mnsg._player_cube_freeze[2][-1], 9)
+
+    def test_push_receive_rejects_generation_spoof_age_cadence_and_shape(self):
+        local = anchor_mnsg._player_states[1]
+        local["appearanceFlags"] = 0
+        self.assertTrue(self.accept_position(1, 2,
+            anchor_mnsg.APPEARANCE_FROZEN))
+        valid = dict(op=7, targetFreezeSeq=2, vy100=0,
+                     vx100=1200, vz100=-1200)
+        for changes in (
+                {"targetFreezeSeq": 1}, {"targetFreezeSeq": 0},
+                {"targetFreezeSeq": True}, {"targetFreezeSeq": 2.0},
+                {"vx100": 1201}, {"vz100": -1201},
+                {"vx100": 0, "vz100": 0}, {"vy100": 1},
+                {"targetClientId": 3}, {"clientId": 1},
+                {"roomId": 11}, {"sourceSession": 303},
+                {"targetEpoch": 4}, {"controlT": 99000},
+                {"padding": "x" * 512},
+                {"targetTeamId": "default"}, {"addToQueue": True},
+        ):
+            with self.subTest(changes=changes):
+                self.assertFalse(anchor_mnsg._receive_player_cube_control(
+                    self.incoming(**{**valid, **changes})))
+        local["collisionDisabled"] = 1
+        self.assertFalse(anchor_mnsg._receive_player_cube_control(
+            self.incoming(**valid)))
+        local["collisionDisabled"] = 0
+        anchor_mnsg._player_states[2]["collisionDisabled"] = 1
+        self.assertFalse(anchor_mnsg._receive_player_cube_control(
+            self.incoming(**valid)))
+        anchor_mnsg._player_states[2]["collisionDisabled"] = 0
+        self.assertTrue(anchor_mnsg._receive_player_cube_control(
+            self.incoming(**valid)))
+        self.assertFalse(anchor_mnsg._receive_player_cube_control(
+            self.incoming(sequence=2, **valid)))
+        self.clock.return_value = 100.05
+        self.assertFalse(anchor_mnsg._receive_player_cube_control(
+            self.incoming(sequence=2, carry_id=56, **valid)))
+        self.clock.return_value = 100.10
+        self.assertTrue(anchor_mnsg._receive_player_cube_control(
+            self.incoming(sequence=2, carry_id=56, **valid)))
+        self.assertEqual([anchor_mnsg.poll_player_cube_control()[8]
+                          for _ in range(2)], [55, 56])
+        self.assertIsNone(anchor_mnsg.poll_player_cube_control())
+
+        self.assertTrue(self.accept_position(1, 3, 0))
+        self.assertFalse(anchor_mnsg._receive_player_cube_control(
+            self.incoming(sequence=3, carry_id=57, **valid)))
+        self.assertTrue(self.accept_position(1, 4,
+            anchor_mnsg.APPEARANCE_FROZEN))
+        self.assertFalse(anchor_mnsg._receive_player_cube_control(
+            self.incoming(sequence=3, carry_id=57, **valid)))
+        self.assertTrue(anchor_mnsg._receive_player_cube_control(
+            self.incoming(sequence=3, carry_id=57,
+                          **{**valid, "targetFreezeSeq": 4})))
 
 
 if __name__ == "__main__":

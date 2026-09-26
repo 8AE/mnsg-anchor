@@ -29,6 +29,12 @@ extern void *func_8002C9D4_2D5D4(void *out, float x, float y, float z,
 #define CUBE_IMPACT_ATTACK_FRAMES 5
 #define CUBE_MAX_RAY_SAMPLES 7
 #define CUBE_INTERACT_STACK 8
+#define CUBE_PUSH_LEASE 4
+#define CUBE_PUSH_SPEED 1.2f
+#define CUBE_PUSH_INTENT_MAX 12.0f
+#define CUBE_PUSH_SOURCE_TOLERANCE 48.0f
+#define CUBE_PUSH_MIN_HALF 2.0f
+#define CUBE_PUSH_MAX_HALF 200.0f
 /* The visual cube extends 100 * scale below its object center. Native carry
  * and throw poses put that center near the hand, leaving the cube in ground. */
 #define CUBE_CARRY_LIFT 180.0f
@@ -65,6 +71,15 @@ typedef struct CubeCarrier
     unsigned char throw_sent, impact_sent;
 } CubeCarrier;
 
+typedef struct CubePush
+{
+    int pusher_cid, pusher_session, pusher_epoch;
+    int carry_id, control_seq, lease, target_epoch;
+    float x, y, z, dx, dz, half;
+    unsigned short room;
+    unsigned char pose_ready;
+} CubePush;
+
 typedef struct CubeInteract
 {
     unsigned int selector;
@@ -74,9 +89,48 @@ typedef struct CubeInteract
 
 static CubeVictim s_victim;
 static CubeCarrier s_carrier;
+static CubePush s_push;
 static CubeInteract s_interact[CUBE_INTERACT_STACK];
 static unsigned int s_interact_depth;
 static int s_next_carry_id;
+static int s_next_push_id;
+#if DEBUG_BUTTON_ENABLED
+static unsigned int s_push_debug_frame;
+static unsigned int s_push_debug_last[10];
+
+static void push_debug(int stage, const char *reason)
+{
+    unsigned int *last = &s_push_debug_last[stage];
+    if (*last != 0 && s_push_debug_frame - *last < 60u)
+        return;
+    *last = s_push_debug_frame ? s_push_debug_frame : 1u;
+    recomp_printf("[cube_push] %s\n", reason);
+}
+#else
+#define push_debug(stage, reason) ((void)0)
+#endif
+
+static void reset_push(void)
+{
+    /* MIPS mod imports do not include libc memset. Volatile field stores keep
+     * the compiler from lowering a whole-struct zero assignment to memset. */
+    volatile CubePush *push = &s_push;
+    push->pusher_cid = 0;
+    push->pusher_session = 0;
+    push->pusher_epoch = 0;
+    push->carry_id = 0;
+    push->control_seq = 0;
+    push->lease = 0;
+    push->target_epoch = 0;
+    push->x = 0.0f;
+    push->y = 0.0f;
+    push->z = 0.0f;
+    push->dx = 0.0f;
+    push->dz = 0.0f;
+    push->half = 0.0f;
+    push->room = 0;
+    push->pose_ready = 0;
+}
 
 static int coordinate(float v)
 {
@@ -85,6 +139,10 @@ static int coordinate(float v)
 static int valid_pose(float x, float y, float z)
 {
     return coordinate(x) && coordinate(y) && coordinate(z);
+}
+static float magnitude(float x, float z)
+{
+    return __builtin_sqrtf(x * x + z * z);
 }
 static float read_float(const void *p, unsigned int offset)
 {
@@ -170,14 +228,15 @@ static void cancel_carrier(void)
 void anchor_player_cube_reset(void)
 {
     cancel_carrier();
-    s_victim.moving = s_victim.flight = s_victim.pose_ready = 0;
+    anchor_player_cube_victim_thaw();
     s_interact_depth = 0;
 }
 void anchor_player_cube_victim_thaw(void)
 {
     s_victim.moving = s_victim.flight = s_victim.pose_ready = 0;
+    reset_push();
 }
-static void cancel_victim(void)
+void anchor_player_cube_victim_breakout(void)
 {
     if (s_victim.moving && anchor_is_connected() &&
         s_victim.carrier_cid > 0)
@@ -185,6 +244,10 @@ static void cancel_victim(void)
             s_victim.carrier_epoch, s_victim.carry_id,
             0, 0, 0, 0, 0, 0, 0, 0, 0);
     anchor_player_cube_victim_thaw();
+}
+static void cancel_victim(void)
+{
+    anchor_player_cube_victim_breakout();
 }
 int anchor_player_cube_victim_moving(void)
 {
@@ -197,6 +260,19 @@ int anchor_player_cube_victim_pose(float *x, float *y, float *z)
     *x = s_victim.x;
     *y = s_victim.y;
     *z = s_victim.z;
+    return 1;
+}
+int anchor_player_cube_victim_push_pose(float *x, float *y, float *z)
+{
+    if (!s_push.pose_ready || s_victim.moving ||
+        !anchor_player_freeze_active() ||
+        s_push.room != D_800C7AB2 ||
+        s_push.target_epoch != anchor_player_models_get_epoch() ||
+        !x || !y || !z)
+        return 0;
+    *x = s_push.x;
+    *y = s_push.y;
+    *z = s_push.z;
     return 1;
 }
 int anchor_player_cube_visual_owned(int cid, int session, int epoch)
@@ -216,6 +292,92 @@ static int newer_sequence(int incoming, int previous)
     unsigned int delta = ((unsigned int)incoming - (unsigned int)previous) &
                          0x7fffffffu;
     return delta > 0 && delta < 0x40000000u;
+}
+
+static int find_visible_cube(int cid, int session, int epoch,
+                             AnchorFreezeCubeCollision *out)
+{
+    AnchorFreezeCubeCollision cubes[ANCHOR_FREEZE_VISUAL_MAX];
+    int i, count = anchor_player_freeze_visual_get_cubes(cubes,
+                                                          ANCHOR_FREEZE_VISUAL_MAX);
+    for (i = 0; i < count; ++i)
+        if (cubes[i].cid == cid && cubes[i].session == session &&
+            cubes[i].epoch == epoch)
+        {
+            *out = cubes[i];
+            return 1;
+        }
+    return 0;
+}
+
+static int push_contact(const AnchorFreezeCubeCollision *cube,
+                        float x, float y, float z, float vx, float vz)
+{
+    float cx = (cube->cube.min.x + cube->cube.max.x) * 0.5f;
+    float cz = (cube->cube.min.z + cube->cube.max.z) * 0.5f;
+    float tx = cx - x, tz = cz - z;
+    float ex = x < cube->cube.min.x ? cube->cube.min.x - x :
+               x > cube->cube.max.x ? x - cube->cube.max.x : 0.0f;
+    float ez = z < cube->cube.min.z ? cube->cube.min.z - z :
+               z > cube->cube.max.z ? z - cube->cube.max.z : 0.0f;
+    float speed = magnitude(vx, vz);
+    float distance = magnitude(tx, tz);
+    return speed > 0.01f && speed <= CUBE_PUSH_INTENT_MAX &&
+           distance > 1.0f && ex * ex + ez * ez <= 80.0f * 80.0f &&
+           y >= cube->cube.min.y - 80.0f &&
+           y <= cube->cube.min.y + 80.0f &&
+           tx * vx + tz * vz > 0.25f * speed * distance;
+}
+
+int anchor_player_cube_request_push(int cid, int session, int epoch,
+    float source_x, float source_y, float source_z,
+    float intent_x, float intent_z)
+{
+    AnchorFreezeCubeCollision cube;
+    float x, y, z;
+    if (cid <= 0 || session <= 0 || epoch <= 0 ||
+        !anchor_is_connected() || !item_sync_save_is_loaded() ||
+        anchor_player_freeze_active() || s_victim.moving ||
+        !D_801FC60C_5B851C ||
+        !anchor_player_models_peer_is_current(cid, session, epoch) ||
+        !valid_pose(source_x, source_y, source_z) ||
+        !coordinate(intent_x) || !coordinate(intent_z))
+    {
+        push_debug(0, "request rejected: local or peer lifetime");
+        return 0;
+    }
+    if (!find_visible_cube(cid, session, epoch, &cube))
+    {
+        push_debug(0, "request rejected: visible cube identity");
+        return 0;
+    }
+    if (!push_contact(&cube, source_x, source_y, source_z,
+                      intent_x, intent_z))
+    {
+        push_debug(0, "request rejected: source contact geometry");
+        return 0;
+    }
+    x = read_float(D_801FC60C_5B851C, 8);
+    y = read_float(D_801FC60C_5B851C, 0xc);
+    z = read_float(D_801FC60C_5B851C, 0x10);
+    if (!valid_pose(x, y, z) ||
+        (x - source_x) * (x - source_x) +
+        (y - source_y) * (y - source_y) +
+        (z - source_z) * (z - source_z) > 24.0f * 24.0f)
+    {
+        push_debug(0, "request rejected: local source position");
+        return 0;
+    }
+    s_next_push_id = s_next_push_id == 0x7fffffff ? 1 : s_next_push_id + 1;
+    if (!send_control(ANCHOR_CUBE_PUSH, cid, epoch, s_next_push_id,
+                        source_x, source_y, source_z,
+                        intent_x, 0.0f, intent_z, 0, 0, 0))
+    {
+        push_debug(0, "request rejected: Python send");
+        return 0;
+    }
+    push_debug(1, "request sent");
+    return 1;
 }
 
 /* The native interaction caller invokes this only on the fresh 0x4000 button
@@ -380,6 +542,7 @@ static void accept_request(const AnchorPlayerCubeControl *c)
     s_victim.control_seq = c->control_seq;
     s_victim.room = D_800C7AB2;
     s_victim.lease = CUBE_LEASE;
+    reset_push();
     s_victim.moving = 1;
     s_victim.flight = 0;
     s_victim.x = victim_x;
@@ -498,6 +661,9 @@ static void accept_carrier_cancel(const AnchorPlayerCubeControl *c)
         c->source_epoch != s_carrier.target_epoch ||
         c->carry_id != s_carrier.carry_id)
         return;
+    if (s_carrier.phase >= 2)
+        (void)anchor_player_freeze_visual_shatter(s_carrier.target_cid,
+            s_carrier.target_session, s_carrier.target_epoch);
     detach_carrier();
     clear_impact_attack();
     s_carrier.phase = 0;
@@ -695,6 +861,190 @@ static int sweep_cube(float x, float y, float z, float dx, float dy, float dz,
     return 0;
 }
 
+static int push_ground_supported(float x, float y, float z, float half)
+{
+    int ix, iz;
+    /* Sample inside all four bottom corners. A step down over 16 units or a
+     * missing corner is a ledge, so the frozen body remains at its last safe
+     * owner position. Keep each ray below the native dynamic-hit distance. */
+    for (ix = -1; ix <= 1; ix += 2)
+        for (iz = -1; iz <= 1; iz += 2)
+        {
+            CubeQuery query;
+            float sample_x = x + (float)ix * half * 0.7f;
+            float sample_z = z + (float)iz * half * 0.7f;
+            query.hit = 0;
+            func_8002C9D4_2D5D4(&query, sample_x, y + 8.0f, sample_z,
+                                  0.0f, -1.0f, 0.0f, 24.0f);
+            if (query.hit != 0x7fffu ||
+                !coordinate(query.delta[1]) ||
+                query.delta[1] < -24.0f || query.delta[1] > 0.0f ||
+                query.normal[1] < 0.5f || query.normal[1] > 1.01f)
+                return 0;
+        }
+    return 1;
+}
+
+static void accept_push(const AnchorPlayerCubeControl *c)
+{
+    AnchorFreezeCubeCollision cube;
+    float source_x, source_y, source_z, peer_x, peer_y, peer_z;
+    float x, y, z, vx, vz, speed, half, height, depth, center_x, center_z;
+    int same_pusher;
+    if (c->target_cid != (int)anchor_get_client_id() ||
+        c->target_epoch != anchor_player_models_get_epoch() ||
+        c->target_session != anchor_get_projectile_session() ||
+        c->source_session <= 0 || c->source_epoch <= 0 ||
+        c->carry_id <= 0 || c->control_seq <= 0 ||
+        c->source_pos_seq <= 0 || c->vy100 != 0 ||
+        c->vx100 < -1200 || c->vx100 > 1200 ||
+        c->vz100 < -1200 || c->vz100 > 1200 ||
+        !anchor_player_freeze_active() || s_victim.moving ||
+        !D_801FC60C_5B851C ||
+        !anchor_player_models_peer_is_current(c->sender_cid,
+            c->source_session, c->source_epoch))
+    {
+        push_debug(3, "owner rejected: lifetime or peer state");
+        return;
+    }
+    if (!find_visible_cube(0, 0, c->target_epoch, &cube))
+    {
+        push_debug(3, "owner rejected: local cube missing");
+        return;
+    }
+    source_x = (float)c->x100 / 100.0f;
+    source_y = (float)c->y100 / 100.0f;
+    source_z = (float)c->z100 / 100.0f;
+    vx = (float)c->vx100 / 100.0f;
+    vz = (float)c->vz100 / 100.0f;
+    speed = magnitude(vx, vz);
+    if (!valid_pose(source_x, source_y, source_z) ||
+        !push_contact(&cube, source_x, source_y, source_z, vx, vz) ||
+        !anchor_player_models_get_sound_position(c->sender_cid,
+            c->source_session, c->source_epoch,
+            &peer_x, &peer_y, &peer_z) ||
+        !valid_pose(peer_x, peer_y, peer_z) ||
+        (source_x - peer_x) * (source_x - peer_x) +
+        (source_y - peer_y) * (source_y - peer_y) +
+        (source_z - peer_z) * (source_z - peer_z) >
+            CUBE_PUSH_SOURCE_TOLERANCE * CUBE_PUSH_SOURCE_TOLERANCE)
+    {
+        push_debug(3, "owner rejected: source contact or peer position");
+        return;
+    }
+    x = read_float(D_801FC60C_5B851C, 8);
+    y = read_float(D_801FC60C_5B851C, 0xc);
+    z = read_float(D_801FC60C_5B851C, 0x10);
+    center_x = (cube.cube.min.x + cube.cube.max.x) * 0.5f;
+    center_z = (cube.cube.min.z + cube.cube.max.z) * 0.5f;
+    half = (cube.cube.max.x - cube.cube.min.x) * 0.5f;
+    height = cube.cube.max.y - cube.cube.min.y;
+    depth = cube.cube.max.z - cube.cube.min.z;
+    /* The drawn cube has half-width 100 * player scale: 10 at normal scale
+     * and 2.5 at mini scale. Check that this is still an owned cube rather
+     * than accepting arbitrary or non-finite visual bounds. */
+    if (!valid_pose(x, y, z) ||
+        !valid_pose(cube.cube.min.x, cube.cube.min.y, cube.cube.min.z) ||
+        !valid_pose(cube.cube.max.x, cube.cube.max.y, cube.cube.max.z) ||
+        !(half >= CUBE_PUSH_MIN_HALF && half <= CUBE_PUSH_MAX_HALF) ||
+        height < 1.9f * half || height > 2.1f * half ||
+        depth < 1.9f * half || depth > 2.1f * half)
+    {
+        push_debug(7, "owner rejected: local cube size or shape");
+        return;
+    }
+    if ((center_x - x) * (center_x - x) +
+        (center_z - z) * (center_z - z) > 20.0f * 20.0f)
+    {
+        push_debug(8, "owner rejected: local cube XZ alignment");
+        return;
+    }
+    if (cube.cube.min.y - y < -20.0f ||
+        cube.cube.min.y - y > 20.0f)
+    {
+        push_debug(9, "owner rejected: local cube Y alignment");
+        return;
+    }
+    same_pusher = s_push.pusher_cid == c->sender_cid &&
+        s_push.pusher_session == c->source_session &&
+        s_push.pusher_epoch == c->source_epoch;
+    if (s_push.lease > 0 && !same_pusher)
+    {
+        push_debug(3, "owner rejected: another pusher lease");
+        return;
+    }
+    if (same_pusher &&
+        (!newer_sequence(c->carry_id, s_push.carry_id) ||
+         !newer_sequence(c->control_seq, s_push.control_seq)))
+    {
+        push_debug(3, "owner rejected: push sequence");
+        return;
+    }
+    if (!s_push.pose_ready)
+    {
+        s_push.x = x;
+        s_push.y = y;
+        s_push.z = z;
+    }
+    s_push.pusher_cid = c->sender_cid;
+    s_push.pusher_session = c->source_session;
+    s_push.pusher_epoch = c->source_epoch;
+    s_push.carry_id = c->carry_id;
+    s_push.control_seq = c->control_seq;
+    s_push.target_epoch = c->target_epoch;
+    s_push.room = D_800C7AB2;
+    s_push.dx = vx / speed;
+    s_push.dz = vz / speed;
+    s_push.half = half;
+    s_push.lease = CUBE_PUSH_LEASE;
+    s_push.pose_ready = 1;
+    push_debug(4, "owner accepted push");
+}
+
+static void push_frame(void)
+{
+    float dx, dz, next_x, next_z;
+    if (!s_push.pose_ready || s_push.lease <= 0)
+        return;
+    if (!anchor_player_freeze_active() || s_victim.moving ||
+        !D_801FC60C_5B851C || s_push.room != D_800C7AB2 ||
+        s_push.target_epoch != anchor_player_models_get_epoch() ||
+        !anchor_player_models_peer_is_current(s_push.pusher_cid,
+            s_push.pusher_session, s_push.pusher_epoch))
+    {
+        push_debug(5, "owner movement stopped: lifetime or peer state");
+        reset_push();
+        return;
+    }
+    --s_push.lease;
+    dx = s_push.dx * CUBE_PUSH_SPEED;
+    dz = s_push.dz * CUBE_PUSH_SPEED;
+    next_x = s_push.x + dx;
+    next_z = s_push.z + dz;
+    if (!valid_pose(next_x, s_push.y, next_z))
+    {
+        push_debug(5, "owner movement blocked: invalid next pose");
+        s_push.lease = 0;
+        return;
+    }
+    if (sweep_cube(s_push.x, s_push.y + s_push.half, s_push.z,
+                   dx, 0.0f, dz, s_push.half))
+    {
+        push_debug(5, "owner movement blocked: cube sweep");
+        s_push.lease = 0;
+        return;
+    }
+    if (!push_ground_supported(next_x, s_push.y, next_z, s_push.half))
+    {
+        push_debug(5, "owner movement blocked: ground support");
+        s_push.lease = 0;
+        return;
+    }
+    s_push.x = next_x;
+    s_push.z = next_z;
+    push_debug(6, "owner cube moved");
+}
+
 static void carrier_frame(void)
 {
     unsigned char *object = s_carrier.object;
@@ -819,6 +1169,9 @@ void anchor_player_cube_tick(void)
 {
     AnchorPlayerCubeControl c;
     int i, epoch = anchor_player_models_get_epoch();
+#if DEBUG_BUTTON_ENABLED
+    ++s_push_debug_frame;
+#endif
     if (!anchor_is_connected() || !item_sync_save_is_loaded())
     {
         anchor_player_cube_reset();
@@ -842,12 +1195,22 @@ void anchor_player_cube_tick(void)
                 s_victim.carrier_session, s_victim.carrier_epoch) ||
          --s_victim.lease <= 0))
         cancel_victim();
+    if (s_push.pose_ready &&
+        (s_push.room != D_800C7AB2 ||
+         s_push.target_epoch != epoch ||
+         !anchor_player_freeze_active()))
+        reset_push();
     for (i = 0; i < 16 && anchor_poll_player_cube_control(&c); ++i)
     {
         if (c.room_id != (int)D_800C7AB2)
             continue;
         if (c.op == ANCHOR_CUBE_REQUEST)
             accept_request(&c);
+        else if (c.op == ANCHOR_CUBE_PUSH)
+        {
+            push_debug(2, "owner received push from Python");
+            accept_push(&c);
+        }
         else if (c.op == ANCHOR_CUBE_GRANT)
             accept_grant(&c);
         else if (c.op == ANCHOR_CUBE_CANCEL &&
@@ -859,4 +1222,5 @@ void anchor_player_cube_tick(void)
     }
     if (s_carrier.phase)
         carrier_frame();
+    push_frame();
 }

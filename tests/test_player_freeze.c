@@ -13,19 +13,54 @@ unsigned char D_800C7AE0;
 unsigned char D_800C7AE2;
 unsigned char D_800C7AE3;
 unsigned char D_800C7DB0_C89B0[0x60];
+static unsigned char s_system_storage[0x3b080];
+unsigned char *D_8015C5C8_15D1C8 = s_system_storage;
 static int s_mock_epoch, s_connected, s_loaded, s_dialog, s_damage_calls;
 static int s_last_scripted;
+static int s_breakout_calls, s_shatter_calls, s_thaw_calls, s_mock_moving;
+static int s_mock_pushing;
+static int s_shatter_epoch;
+static char s_event_log[4];
+static int s_event_count;
 static unsigned int s_health;
 static unsigned long long s_player_storage[0x100 / 8];
 static unsigned long long s_object_storage[0x80 / 8];
 static unsigned long long s_middle_storage[0x80 / 8];
 static unsigned long long s_follower_storage[0x80 / 8];
-void anchor_player_cube_victim_thaw(void) {}
-int anchor_player_cube_victim_moving(void) { return 0; }
+void anchor_player_cube_victim_thaw(void)
+{
+    ++s_thaw_calls;
+    s_mock_moving = 0;
+    s_mock_pushing = 0;
+    s_event_log[s_event_count++] = 'T';
+}
+void anchor_player_cube_victim_breakout(void)
+{
+    ++s_breakout_calls;
+    s_event_log[s_event_count++] = 'B';
+}
+int anchor_player_freeze_visual_shatter(int cid, int session, int epoch)
+{
+    assert(cid == 0 && session == 0);
+    ++s_shatter_calls;
+    s_shatter_epoch = epoch;
+    s_event_log[s_event_count++] = 'S';
+    return 1;
+}
+int anchor_player_cube_victim_moving(void) { return s_mock_moving; }
 int anchor_player_cube_victim_pose(float *x, float *y, float *z)
 {
-    (void)x; (void)y; (void)z;
-    return 0;
+    if (!s_mock_moving)
+        return 0;
+    *x = 40.0f; *y = 50.0f; *z = 60.0f;
+    return 1;
+}
+int anchor_player_cube_victim_push_pose(float *x, float *y, float *z)
+{
+    if (!s_mock_pushing)
+        return 0;
+    *x = 70.0f; *y = 80.0f; *z = 90.0f;
+    return 1;
 }
 void func_801CF3A0_58B2B0(void *player) { (void)player; }
 
@@ -60,6 +95,11 @@ int anchor_dialog_busy(void) { return s_dialog; }
 static void setup(void)
 {
     clear_ice();
+    s_breakout_calls = s_shatter_calls = s_thaw_calls = s_mock_moving = 0;
+    s_mock_pushing = 0;
+    s_shatter_epoch = s_event_count = 0;
+    memset(s_event_log, 0, sizeof(s_event_log));
+    memset(s_system_storage, 0, sizeof(s_system_storage));
     s_move_bit = 0;
     memset(s_player_storage, 0, sizeof(s_player_storage));
     memset(s_object_storage, 0, sizeof(s_object_storage));
@@ -84,10 +124,16 @@ static void setup(void)
     memset(D_800C7DB0_C89B0, 0x5a, sizeof(D_800C7DB0_C89B0));
 }
 
+static void mash_sample(unsigned short held, unsigned short pressed)
+{
+    *(unsigned short *)(s_system_storage + ICE_RAW_HELD_OFFSET) = held;
+    *(unsigned short *)(s_system_storage + ICE_RAW_PRESSED_OFFSET) = pressed;
+    anchor_player_freeze_input();
+}
+
 static void test_damage_then_scoped_freeze(void)
 {
     int i;
-    assert(ICE_FRAMES == 125);
     setup();
     assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
     assert(s_damage_calls == 1 && s_health == 9);
@@ -107,15 +153,106 @@ static void test_damage_then_scoped_freeze(void)
     anchor_player_freeze_after_movement();
     assert(D_800C7AE0 == 0);
     assert(anchor_player_models_get_epoch() == s_epoch);
-    for (i = 0; i < ICE_FRAMES - 1; ++i)
+    for (i = 0; i < 500; ++i)
     {
         anchor_player_freeze_after_update();
         assert(anchor_player_freeze_active());
     }
-    anchor_player_freeze_after_update();
-    assert(!anchor_player_freeze_active());
     anchor_player_freeze_before_movement(D_801FC604_5B8514);
-    assert(D_800C7AE0 == 0);
+    assert(D_800C7AE0 == 2);
+    anchor_player_freeze_after_movement();
+    assert(s_breakout_calls == 0);
+}
+
+static void test_fresh_a_or_b_edges_break_out(void)
+{
+    int i;
+    setup();
+    *(unsigned short *)(s_system_storage + ICE_RAW_HELD_OFFSET) = 0x8000u;
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    mash_sample(0x8000u, 0x8000u);
+    assert(s_mash_presses == 0); /* A was already held when ice arrived. */
+    mash_sample(0, 0);
+    /* The first edge may arrive before the pending hurt animation ends. */
+    mash_sample(0x8000u, 0x8000u);
+    assert(s_mash_presses == 1 && !anchor_player_freeze_active());
+    mash_sample(0x8000u, 0x8000u);
+    assert(s_mash_presses == 1);
+    mash_sample(0, 0);
+    anchor_player_freeze_after_update();
+    assert(anchor_player_freeze_active());
+    for (i = 1; i < ICE_BREAKOUT_PRESSES; ++i)
+    {
+        unsigned short button = (i & 1) ? 0x4000u : 0x8000u;
+        memset(D_800C7DB0_C89B0, 0x5a, sizeof(D_800C7DB0_C89B0));
+        mash_sample(button, button);
+        assert(D_800C7DB0_C89B0[2] == 0);
+        if (i + 1 < ICE_BREAKOUT_PRESSES)
+        {
+            assert(anchor_player_freeze_active());
+            assert(s_mash_presses == i + 1);
+        }
+        mash_sample(button, button); /* A second hook is not a new edge. */
+        if (i + 1 < ICE_BREAKOUT_PRESSES)
+            assert(s_mash_presses == i + 1);
+        mash_sample(0, 0);
+    }
+    assert(!anchor_player_freeze_active());
+    assert(s_breakout_calls == 1 && s_shatter_calls == 1);
+    assert(s_shatter_epoch == s_mock_epoch);
+    assert(s_event_count == 3);
+    assert(memcmp(s_event_log, "SBT", 3) == 0);
+}
+
+static void test_breakout_while_cube_is_moving(void)
+{
+    int i;
+    setup();
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    anchor_player_freeze_after_update();
+    s_mock_moving = 1;
+    anchor_player_freeze_after_update();
+    assert(*(float *)((unsigned char *)s_object_storage + 8) == 40.0f);
+    for (i = 0; i < ICE_BREAKOUT_PRESSES; ++i)
+    {
+        mash_sample(0x8000u, 0x8000u);
+        mash_sample(0, 0);
+    }
+    assert(!anchor_player_freeze_active());
+    assert(!s_mock_moving);
+    assert(s_breakout_calls == 1 && s_shatter_calls == 1);
+    assert(memcmp(s_event_log, "SBT", 3) == 0);
+}
+
+static void test_pushed_cube_moves_frozen_body(void)
+{
+    int action;
+    float frame;
+    int i;
+
+    setup();
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1));
+    anchor_player_freeze_after_update();
+    s_mock_pushing = 1;
+    set_frame(9.0f);
+    anchor_player_freeze_after_update();
+    assert(*(float *)((unsigned char *)s_object_storage + 8) == 70.0f);
+    assert(*(float *)((unsigned char *)s_object_storage + 0xc) == 80.0f);
+    assert(*(float *)((unsigned char *)s_object_storage + 0x10) == 90.0f);
+    assert(*(float *)((unsigned char *)s_middle_storage + 8) == 70.0f);
+    assert(anchor_player_freeze_visual_pose(&action, &frame));
+    assert(action == 7 && frame == 3.0f);
+    anchor_player_freeze_before_movement(D_801FC604_5B8514);
+    assert(D_800C7AE0 == 2 && anchor_player_freeze_active());
+    anchor_player_freeze_after_movement();
+
+    for (i = 0; i < ICE_BREAKOUT_PRESSES; ++i)
+    {
+        mash_sample(0x4000u, 0x4000u);
+        mash_sample(0, 0);
+    }
+    assert(!anchor_player_freeze_active());
+    assert(!s_mock_pushing && s_breakout_calls == 1);
 }
 
 static void test_lifecycle_and_ordinary_hits(void)
@@ -205,6 +342,9 @@ static void test_render_override_restores_each_native_frame(void)
 int main(void)
 {
     test_damage_then_scoped_freeze();
+    test_fresh_a_or_b_edges_break_out();
+    test_breakout_while_cube_is_moving();
+    test_pushed_cube_moves_frozen_body();
     test_lifecycle_and_ordinary_hits();
     test_visual_pose_stays_fixed_without_rewinding_native_frame();
     test_render_override_restores_each_native_frame();

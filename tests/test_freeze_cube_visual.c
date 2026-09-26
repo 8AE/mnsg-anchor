@@ -29,6 +29,7 @@ static unsigned int material[96];
 static unsigned char resource[3];
 static int peer_current = 1;
 static int peer_frozen = 1;
+static int local_frozen;
 static AnchorFreezeVisualTarget mock_targets[ANCHOR_FREEZE_VISUAL_MAX];
 static int mock_target_count;
 void anchor_player_cube_reset(void) {}
@@ -64,7 +65,7 @@ int anchor_player_models_peer_frozen(int cid, int session, int epoch)
     return peer_frozen && anchor_player_models_peer_is_current(cid, session,
                                                                epoch);
 }
-int anchor_player_freeze_active(void) { return 0; }
+int anchor_player_freeze_active(void) { return local_frozen; }
 int anchor_dialog_busy(void) { return 0; }
 int anchor_player_models_get_freeze_visual_targets(AnchorFreezeVisualTarget *out,
                                                     int capacity)
@@ -122,6 +123,7 @@ static void setup(void)
     D_800C7AB2 = 10;
     peer_current = 1;
     peer_frozen = 1;
+    local_frozen = 0;
     link(&tasks[ANCHOR_FREEZE_VISUAL_MAX],
          &backlinks[ANCHOR_FREEZE_VISUAL_MAX]);
     s_owner = D_801FC604_5B8514 = tasks[ANCHOR_FREEZE_VISUAL_MAX].bytes;
@@ -249,6 +251,73 @@ static void test_early_thaw_keeps_impact_object(void)
     assert(!s_slots[0].shattered);
 }
 
+static void test_remote_thaw_hides_cube_immediately(void)
+{
+    AnchorFreezeCubeCollision cubes[ANCHOR_FREEZE_VISUAL_MAX];
+    void *task = 0, *object = 0;
+    float scale = 0;
+    setup();
+    target_one();
+    peer_frozen = 0;
+    assert(!anchor_player_freeze_visual_has_cube(1, 4, 5));
+    assert(anchor_player_freeze_visual_get_cubes(cubes,
+                                                ANCHOR_FREEZE_VISUAL_MAX) == 0);
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(!s_slots[0].active && !s_slots[0].shard_frames);
+    assert(!anchor_player_freeze_visual_has_cube(1, 4, 5));
+    assert(!anchor_player_freeze_visual_get_native(1, 4, 5,
+                                                   &task, &object, &scale));
+    assert(anchor_player_freeze_visual_get_cubes(cubes,
+                                                ANCHOR_FREEZE_VISUAL_MAX) == 0);
+    assert(objects[0].bytes[0x64] & 1u);
+    assert(*(unsigned int *)(objects[0].bytes + 0x2c) == 0);
+    freeze_visual_task_update(tasks[0].bytes, objects[0].bytes);
+    assert(!anchor_player_freeze_visual_has_cube(1, 4, 5));
+    /* A stale frozen target in the same frame cannot redraw the cube. */
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(!s_slots[0].active);
+    peer_frozen = 1;
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(anchor_player_freeze_visual_has_cube(1, 4, 5));
+}
+
+static void test_missing_remote_target_keeps_frozen_cube(void)
+{
+    AnchorFreezeCubeCollision cube;
+    setup();
+    target_one();
+    anchor_player_freeze_visual_tick(s_owner);
+    mock_target_count = 0;
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(s_slots[0].active && !s_slots[0].shard_frames);
+    assert(anchor_player_freeze_visual_has_cube(1, 4, 5));
+    assert(anchor_player_freeze_visual_get_cubes(&cube, 1) == 1);
+    target_one();
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(anchor_player_freeze_visual_has_cube(1, 4, 5));
+}
+
+static void test_local_thaw_hides_cube_immediately(void)
+{
+    AnchorFreezeCubeCollision cubes[ANCHOR_FREEZE_VISUAL_MAX];
+    setup();
+    s_slots[0].target.cid = 0;
+    s_slots[0].target.session = 0;
+    local_frozen = 1;
+    target_one();
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(anchor_player_freeze_visual_has_cube(0, 0, 5));
+    local_frozen = 0;
+    assert(!anchor_player_freeze_visual_has_cube(0, 0, 5));
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(!s_slots[0].active && !s_slots[0].shard_frames);
+    assert(!anchor_player_freeze_visual_has_cube(0, 0, 5));
+    assert(anchor_player_freeze_visual_get_cubes(cubes,
+                                                ANCHOR_FREEZE_VISUAL_MAX) == 7);
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(!s_slots[0].active);
+}
+
 int main(void)
 {
     AnchorFreezeCubeCollision cubes[ANCHOR_FREEZE_VISUAL_MAX];
@@ -277,6 +346,9 @@ int main(void)
     test_shatter_and_tombstone();
     test_shatter_reset();
     test_early_thaw_keeps_impact_object();
+    test_remote_thaw_hides_cube_immediately();
+    test_missing_remote_target_keeps_frozen_cube();
+    test_local_thaw_hides_cube_immediately();
     puts("freeze cube visual lifecycle tests passed");
     return 0;
 }

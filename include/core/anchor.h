@@ -370,7 +370,8 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
    enum {
        ANCHOR_CUBE_REQUEST = 1, ANCHOR_CUBE_GRANT = 2,
        ANCHOR_CUBE_POSE = 3, ANCHOR_CUBE_THROW = 4,
-       ANCHOR_CUBE_IMPACT = 5, ANCHOR_CUBE_CANCEL = 6
+       ANCHOR_CUBE_IMPACT = 5, ANCHOR_CUBE_CANCEL = 6,
+       ANCHOR_CUBE_PUSH = 7
    };
    int anchor_send_player_cube_control(int op, int target_cid,
        int target_epoch, int carry_id, int x100, int y100, int z100,

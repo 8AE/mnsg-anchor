@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject compiler-generated indirect dispatch in the native enemy collector."""
+"""Reject indirect dispatch in callbacks executed by the game runtime."""
 
 import argparse
 from pathlib import Path
@@ -8,9 +8,11 @@ import sys
 
 
 SYMBOL = "anchor_collision_append_enemies"
+CUBE_SYMBOL = "anchor_player_cube_tick"
+SYMBOLS = (SYMBOL, CUBE_SYMBOL)
 
 
-def function_bytes(data: bytes) -> tuple[int, bytes]:
+def function_bytes(data: bytes, symbol: str) -> tuple[int, bytes]:
     """Locate the exact function using the linked ELF32 big-endian symtab."""
     def read(offset: int, size: int) -> bytes:
         if offset < 0 or size < 0 or offset + size > len(data):
@@ -46,32 +48,33 @@ def function_bytes(data: bytes) -> tuple[int, bytes]:
             end = names.find(b"\0", name)
             if end < 0:
                 raise ValueError("unterminated ELF symbol name")
-            if names[name:end] != SYMBOL.encode():
+            if names[name:end] != symbol.encode():
                 continue
             if info & 15 != 2 or not (0 < index < len(sections)):
-                raise ValueError(f"{SYMBOL} is not a defined function")
+                raise ValueError(f"{symbol} is not a defined function")
             code = sections[index]
             relative = address - code[3]
             if (code[1] != 1 or not code[2] & 4 or relative < 0 or
                     length == 0 or address % 4 or length % 4 or
                     relative + length > code[5]):
-                raise ValueError(f"invalid code range for {SYMBOL}")
+                raise ValueError(f"invalid code range for {symbol}")
             matches.append((address, read(code[4] + relative, length)))
     if len(matches) != 1:
-        raise ValueError(f"expected one defined {SYMBOL}; found {len(matches)}")
+        raise ValueError(f"expected one defined {symbol}; found {len(matches)}")
     return matches[0]
 
 
 def check_dispatch(data: bytes) -> None:
-    address, code = function_bytes(data)
-    for offset in range(0, len(code), 4):
-        word = struct.unpack_from(">I", code, offset)[0]
-        opcode, operation, register = word >> 26, word & 63, (word >> 21) & 31
-        if opcode == 0 and (operation == 9 or (operation == 8 and register != 31)):
-            instruction = "jalr" if operation == 9 else "jr"
-            raise ValueError(
-                f"unsafe indirect dispatch in {SYMBOL} at 0x{address + offset:08X}: "
-                f"{instruction} ${register}; keep enemy selection free of jump tables")
+    for symbol in SYMBOLS:
+        address, code = function_bytes(data, symbol)
+        for offset in range(0, len(code), 4):
+            word = struct.unpack_from(">I", code, offset)[0]
+            opcode, operation, register = word >> 26, word & 63, (word >> 21) & 31
+            if opcode == 0 and (operation == 9 or (operation == 8 and register != 31)):
+                instruction = "jalr" if operation == 9 else "jr"
+                raise ValueError(
+                    f"unsafe indirect dispatch in {symbol} at 0x{address + offset:08X}: "
+                    f"{instruction} ${register}; keep callback dispatch free of jump tables")
 
 
 def main() -> int:
@@ -83,7 +86,7 @@ def main() -> int:
     except (OSError, ValueError, struct.error) as error:
         print(f"Collision dispatch check failed ({args.elf}): {error}", file=sys.stderr)
         return 1
-    print(f"Collision dispatch check passed: {SYMBOL}")
+    print(f"Collision dispatch check passed: {', '.join(SYMBOLS)}")
     return 0
 
 

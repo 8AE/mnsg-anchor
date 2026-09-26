@@ -1,12 +1,70 @@
 #include "combat/anchor_collision_cube.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 
 static int near(float a, float b)
 {
     float difference = a - b;
     return difference > -0.03f && difference < 0.03f;
+}
+
+static void test_push_intent(void)
+{
+    AnchorCollisionCube cube = {{-5.0f, 0.0f, -5.0f},
+                                {5.0f, 10.0f, 5.0f}};
+    AnchorCollisionBody body = {{-10.0f, 0.0f, 0.0f}, 1.0f, 5.0f};
+    AnchorCollisionVec3 target = {-4.0f, 0.0f, 0.0f};
+    float x = -1.0f, z = -1.0f;
+
+    assert(anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    assert(near(x, 2.0f) && near(z, 0.0f));
+    assert(x * x + z * z <= 144.0f);
+    target.x = -6.0f; /* Touching the side, with no blocked travel. */
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    body.position.x = 10.0f;
+    target.x = 4.0f;
+    assert(anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    assert(near(x, -2.0f) && near(z, 0.0f));
+    body.position.x = -6.0f;
+    target.x = -6.0f;
+    target.z = 4.0f; /* Tangential slide along the face. */
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    body.position.x = -5.5f;
+    target = body.position; /* Stationary existing overlap. */
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    target.x = -10.0f; /* Separating an existing overlap. */
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+
+    body.position = (AnchorCollisionVec3){-10.0f, 0.0f, -10.0f};
+    target = (AnchorCollisionVec3){-5.0f, 0.0f, -5.0f};
+    assert(anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    assert(x > 0.0f && z > 0.0f && near(x, z));
+
+    body.position = (AnchorCollisionVec3){0.0f, 9.99f, 0.0f};
+    target = (AnchorCollisionVec3){2.0f, 9.99f, 0.0f};
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    body.position = (AnchorCollisionVec3){-10.0f, -6.0f, 0.0f};
+    target = (AnchorCollisionVec3){-4.0f, -6.0f, 0.0f};
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+
+    body.position = (AnchorCollisionVec3){-20.0f, 0.0f, 0.0f};
+    target = (AnchorCollisionVec3){0.0f, 0.0f, 0.0f};
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    target.x = NAN;
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    target.x = INFINITY;
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    target.x = -10.0f;
+    body.position.x = NAN;
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    body.position.x = -10.0f;
+    body.radius = INFINITY;
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
+    body.radius = 1.0f;
+    cube.max.x = NAN;
+    assert(!anchor_collision_cube_push_intent(&body, &target, &cube, &x, &z));
 }
 
 int main(void)
@@ -107,6 +165,7 @@ int main(void)
     target = (AnchorCollisionVec3){20.0f, 0.0f, 0.0f};
     assert(anchor_collision_cube_move_sides(&body, &target, 0, 0, &out));
     assert(out.x == 20.0f); /* Thaw or absent visual restores free travel. */
+    test_push_intent();
     puts("cube side and top contact tests passed");
     return 0;
 }
