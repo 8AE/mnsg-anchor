@@ -820,6 +820,54 @@ int anchor_poll_player_cube_control(AnchorPlayerCubeControl *out)
     return result;
 }
 
+int anchor_send_player_ice_break(int interaction_session, int player_epoch,
+    int cause, int x100, int y100, int z100)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("interaction_session", interaction_session);
+    REPY_FN_SET_S32("player_epoch", player_epoch);
+    REPY_FN_SET_S32("cause", cause);
+    REPY_FN_SET_S32("x100", x100);
+    REPY_FN_SET_S32("y100", y100);
+    REPY_FN_SET_S32("z100", z100);
+    REPY_FN_EXEC_CACHE(anchor_send_player_ice_break_code,
+        "import anchor_mnsg\n"
+        "result = anchor_mnsg.send_player_ice_break(\n"
+        "    interaction_session, player_epoch, cause, x100, y100, z100)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_poll_player_ice_break(AnchorPlayerIceBreak *out)
+{
+    if (!out)
+        return 0;
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_poll_player_ice_break_code,
+        "import anchor_mnsg\n"
+        "ice_break = anchor_mnsg.poll_player_ice_break()\n"
+        "has_ice_break = ice_break is not None\n"
+        "if has_ice_break:\n"
+        "    (sender_cid, sender_session, sender_epoch, room_id,\n"
+        "     break_seq, cause, x100, y100, z100) = ice_break\n");
+    int result = (int)REPY_FN_GET_BOOL("has_ice_break");
+    if (result)
+    {
+        out->sender_cid = (int)REPY_FN_GET_S32("sender_cid");
+        out->sender_session = (int)REPY_FN_GET_S32("sender_session");
+        out->sender_epoch = (int)REPY_FN_GET_S32("sender_epoch");
+        out->room_id = (int)REPY_FN_GET_S32("room_id");
+        out->break_seq = (int)REPY_FN_GET_S32("break_seq");
+        out->cause = (int)REPY_FN_GET_S32("cause");
+        out->x100 = (int)REPY_FN_GET_S32("x100");
+        out->y100 = (int)REPY_FN_GET_S32("y100");
+        out->z100 = (int)REPY_FN_GET_S32("z100");
+    }
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_send_player_sounds(int interaction_session, int player_epoch,
                               const unsigned short *sound_ids,
                               int sound_count)

@@ -1,4 +1,6 @@
 #define ANCHOR_PLAYER_FREEZE_HOST_TEST
+#define ANCHOR_ICE_BREAK_ESCAPE 1
+#define ANCHOR_ICE_BREAK_IMPACT 2
 #include "../src/combat/anchor_player_freeze.c"
 #include "../src/combat/anchor_scripted_state.c"
 
@@ -21,6 +23,8 @@ static int s_last_damage;
 static int s_breakout_calls, s_shatter_calls, s_thaw_calls, s_mock_moving;
 static int s_mock_pushing;
 static int s_shatter_epoch;
+static int s_break_cause;
+static float s_break_x, s_break_y, s_break_z;
 static char s_event_log[4];
 static int s_event_count;
 static unsigned int s_health;
@@ -40,13 +44,14 @@ void anchor_player_cube_victim_breakout(void)
     ++s_breakout_calls;
     s_event_log[s_event_count++] = 'B';
 }
-int anchor_player_freeze_visual_shatter(int cid, int session, int epoch)
+void anchor_player_freeze_visual_break_local(int epoch, int cause,
+                                             float x, float y, float z)
 {
-    assert(cid == 0 && session == 0);
     ++s_shatter_calls;
     s_shatter_epoch = epoch;
+    s_break_cause = cause;
+    s_break_x = x; s_break_y = y; s_break_z = z;
     s_event_log[s_event_count++] = 'S';
-    return 1;
 }
 int anchor_player_cube_victim_moving(void) { return s_mock_moving; }
 int anchor_player_cube_victim_pose(float *x, float *y, float *z)
@@ -100,6 +105,8 @@ static void setup(void)
     s_breakout_calls = s_shatter_calls = s_thaw_calls = s_mock_moving = 0;
     s_mock_pushing = 0;
     s_shatter_epoch = s_event_count = 0;
+    s_break_cause = 0;
+    s_break_x = s_break_y = s_break_z = 0.0f;
     memset(s_event_log, 0, sizeof(s_event_log));
     memset(s_system_storage, 0, sizeof(s_system_storage));
     s_move_bit = 0;
@@ -202,6 +209,7 @@ static void test_fresh_a_or_b_edges_break_out(void)
     assert(!anchor_player_freeze_active());
     assert(s_breakout_calls == 1 && s_shatter_calls == 1);
     assert(s_shatter_epoch == s_mock_epoch);
+    assert(s_break_cause == ANCHOR_ICE_BREAK_ESCAPE);
     assert(s_event_count == 3);
     assert(memcmp(s_event_log, "SBT", 3) == 0);
 }
@@ -223,7 +231,23 @@ static void test_breakout_while_cube_is_moving(void)
     assert(!anchor_player_freeze_active());
     assert(!s_mock_moving);
     assert(s_breakout_calls == 1 && s_shatter_calls == 1);
+    assert(s_break_cause == ANCHOR_ICE_BREAK_ESCAPE);
+    assert(s_break_x == 40.0f && s_break_y == 50.0f && s_break_z == 60.0f);
     assert(memcmp(s_event_log, "SBT", 3) == 0);
+}
+
+static void test_validated_impact_breaks_at_victim_pose(void)
+{
+    setup();
+    assert(anchor_player_freeze_apply_hit(1, 2, 3, 1, 1));
+    anchor_player_freeze_after_update();
+    s_mock_moving = 1;
+    anchor_player_freeze_thaw_on_cube_impact();
+    assert(!anchor_player_freeze_active());
+    assert(s_break_cause == ANCHOR_ICE_BREAK_IMPACT);
+    assert(s_break_x == 40.0f && s_break_y == 50.0f && s_break_z == 60.0f);
+    assert(s_shatter_calls == 1 && s_breakout_calls == 0 && s_thaw_calls == 1);
+    assert(s_event_count == 2 && memcmp(s_event_log, "ST", 2) == 0);
 }
 
 static void test_pushed_cube_moves_frozen_body(void)
@@ -347,6 +371,7 @@ int main(void)
     test_damage_then_scoped_freeze();
     test_fresh_a_or_b_edges_break_out();
     test_breakout_while_cube_is_moving();
+    test_validated_impact_breaks_at_victim_pose();
     test_pushed_cube_moves_frozen_body();
     test_lifecycle_and_ordinary_hits();
     test_visual_pose_stays_fixed_without_rewinding_native_frame();

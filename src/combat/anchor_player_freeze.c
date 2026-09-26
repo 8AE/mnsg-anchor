@@ -188,6 +188,14 @@ void anchor_player_freeze_thaw_on_cube_impact(void)
         float x, y, z;
         if (anchor_player_cube_victim_pose(&x, &y, &z))
             place_frozen_body(x, y, z);
+        else
+        {
+            x = *(float *)((unsigned char *)s_object + 8);
+            y = *(float *)((unsigned char *)s_object + 0xc);
+            z = *(float *)((unsigned char *)s_object + 0x10);
+        }
+        anchor_player_freeze_visual_break_local(s_epoch,
+            ANCHOR_ICE_BREAK_IMPACT, x, y, z);
         clear_ice();
     }
 }
@@ -255,11 +263,18 @@ void anchor_player_freeze_input(void)
         ++s_mash_presses;
     if (s_mash_presses >= ICE_BREAKOUT_PRESSES)
     {
+        float x, y, z;
         /* This input sample still belongs to the trapped player. Do not
          * expose its final A/B press to the ordinary action interpreter. */
         for (offset = 2; offset < 0x18; ++offset)
             ((volatile unsigned char *)D_800C7DB0_C89B0)[offset] = 0;
-        (void)anchor_player_freeze_visual_shatter(0, 0, s_epoch);
+        x = *(float *)((unsigned char *)s_object + 8);
+        y = *(float *)((unsigned char *)s_object + 0xc);
+        z = *(float *)((unsigned char *)s_object + 0x10);
+        if (!anchor_player_cube_victim_pose(&x, &y, &z))
+            (void)anchor_player_cube_victim_push_pose(&x, &y, &z);
+        anchor_player_freeze_visual_break_local(s_epoch,
+            ANCHOR_ICE_BREAK_ESCAPE, x, y, z);
         anchor_player_cube_victim_breakout();
         clear_ice();
     }

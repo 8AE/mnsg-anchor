@@ -48,6 +48,7 @@ static int peer_current = 1;
 static int position_current = 1;
 static int play_calls;
 static unsigned int played_sound;
+static unsigned int played_order[2];
 static float played_x;
 static float played_y;
 static float played_z;
@@ -176,6 +177,8 @@ void func_8000F420_10020(unsigned short sound_id, void *listener_state,
     assert(listener_state == D_8020CBF0_5C8B00);
     assert(radius == 400.0f);
     play_calls++;
+    if (play_calls <= 2)
+        played_order[play_calls - 1] = sound_id;
     played_sound = sound_id;
     played_x = source->x;
     played_y = source->y;
@@ -211,6 +214,7 @@ static void reset_test(void)
     peer_current = position_current = 1;
     play_calls = 0;
     played_sound = 0;
+    played_order[0] = played_order[1] = 0;
     played_x = played_y = played_z = 0.0f;
     fake_time_cycles = 0;
     send_advance_cycles = 0;
@@ -659,8 +663,21 @@ static void test_expired_cues_do_not_survive_send_or_zero_budget(void)
     assert(s_deferred_remote_sound_count == 0);
 }
 
+static void test_ice_break_cues_do_not_rebroadcast(void)
+{
+    reset_test();
+    anchor_player_sounds_play_ice_break(12.0f, 34.0f, 56.0f);
+    assert(play_calls == 2);
+    assert(played_order[0] == 0x26Eu && played_order[1] == 0x299u);
+    assert(played_x == 12.0f && played_y == 34.0f && played_z == 56.0f);
+    assert(s_pending_sound_count == 0 && !s_replaying_remote_sound);
+    anchor_player_sounds_update();
+    assert(send_calls == 0);
+}
+
 int main(void)
 {
+    test_ice_break_cues_do_not_rebroadcast();
     test_capture_filter_and_native_queue_bound();
     test_native_queue_rejection_is_not_published();
     test_disconnect_drops_unsent_frame();

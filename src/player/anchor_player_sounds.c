@@ -196,6 +196,19 @@ static void play_remote_sound(const DeferredRemoteSound *sound,
     s_replaying_remote_sound--;
 }
 
+void anchor_player_sounds_play_ice_break(float x, float y, float z)
+{
+    PlayerSoundObject source = {{0}, x, y, z};
+    /* Both cues are emitted in this order by the native ice-thaw paths.
+     * F420 reads xyz synchronously; the stack source is alive for both calls. */
+    s_replaying_remote_sound++;
+    func_8000F420_10020(0x026Eu, D_8020CBF0_5C8B00,
+                        &source, REMOTE_SOUND_RADIUS);
+    func_8000F420_10020(0x0299u, D_8020CBF0_5C8B00,
+                        &source, REMOTE_SOUND_RADIUS);
+    s_replaying_remote_sound--;
+}
+
 static void defer_remote_sound(DeferredRemoteSound sound,
                                unsigned long long now_cycles)
 {

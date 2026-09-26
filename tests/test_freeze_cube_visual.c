@@ -22,9 +22,9 @@ unsigned int *D_8015C5CC_15D1CC;
 unsigned char *D_80168504_169104;
 short D_800C7A72_C8672;
 FreezeSceneResource D_80167FC0_168BC0[48];
-static MockRecord tasks[ANCHOR_FREEZE_VISUAL_MAX + 1];
-static MockRecord backlinks[ANCHOR_FREEZE_VISUAL_MAX + 1];
-static MockRecord objects[ANCHOR_FREEZE_VISUAL_MAX];
+static MockRecord tasks[ANCHOR_FREEZE_VISUAL_MAX + SHARD_COUNT + 1];
+static MockRecord backlinks[ANCHOR_FREEZE_VISUAL_MAX + SHARD_COUNT + 1];
+static MockRecord objects[ANCHOR_FREEZE_VISUAL_MAX + SHARD_COUNT];
 static unsigned int material[96];
 static unsigned char resource[3];
 static int peer_current = 1;
@@ -32,6 +32,10 @@ static int peer_frozen = 1;
 static int local_frozen;
 static AnchorFreezeVisualTarget mock_targets[ANCHOR_FREEZE_VISUAL_MAX];
 static int mock_target_count;
+static AnchorPlayerIceBreak mock_break_event;
+static int mock_break_pending, sound_breaks, sent_breaks;
+static int sent_cause, sent_x100, sent_y100, sent_z100;
+static int shard_alloc_next;
 void anchor_player_cube_reset(void) {}
 int anchor_player_cube_visual_owned(int cid, int session, int epoch)
 {
@@ -47,10 +51,10 @@ int anchor_player_cube_visual_native_pose(int cid, int session, int epoch)
 int anchor_remote_model_pool_contains(const void *pointer)
 {
     int i;
-    for (i = 0; i <= ANCHOR_FREEZE_VISUAL_MAX; ++i)
+    for (i = 0; i <= ANCHOR_FREEZE_VISUAL_MAX + (int)SHARD_COUNT; ++i)
         if (pointer == tasks[i].bytes || pointer == backlinks[i].bytes)
             return 1;
-    for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
+    for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX + (int)SHARD_COUNT; ++i)
         if (pointer == objects[i].bytes)
             return 1;
     return 0;
@@ -66,6 +70,29 @@ int anchor_player_models_peer_frozen(int cid, int session, int epoch)
                                                                epoch);
 }
 int anchor_player_freeze_active(void) { return local_frozen; }
+int anchor_get_projectile_session(void) { return 4; }
+int anchor_send_player_ice_break(int session, int epoch, int cause,
+                                  int x100, int y100, int z100)
+{
+    assert(session == 4 && epoch == 5);
+    ++sent_breaks;
+    sent_cause = cause;
+    sent_x100 = x100; sent_y100 = y100; sent_z100 = z100;
+    return 1;
+}
+int anchor_poll_player_ice_break(AnchorPlayerIceBreak *out)
+{
+    if (!mock_break_pending)
+        return 0;
+    *out = mock_break_event;
+    mock_break_pending = 0;
+    return 1;
+}
+void anchor_player_sounds_play_ice_break(float x, float y, float z)
+{
+    (void)x; (void)y; (void)z;
+    ++sound_breaks;
+}
 int anchor_dialog_busy(void) { return 0; }
 int anchor_freeze_prompt_visible(void) { return 0; }
 int anchor_player_models_get_freeze_visual_targets(AnchorFreezeVisualTarget *out,
@@ -90,9 +117,16 @@ void *func_80034E08_35A08(void *parent, void (*update)(void *, void *),
                           unsigned short flags)
 {
     (void)parent;
-    (void)update;
     (void)flags;
-    return 0;
+    if (shard_alloc_next >= (int)SHARD_COUNT)
+        return 0;
+    {
+        int index = ANCHOR_FREEZE_VISUAL_MAX + shard_alloc_next++;
+        *(void **)(tasks[index].bytes + 4) = backlinks[index].bytes;
+        *(void **)backlinks[index].bytes = tasks[index].bytes;
+        *(void **)(tasks[index].bytes + 0xc) = (void *)update;
+        return tasks[index].bytes;
+    }
 }
 void *func_8000DBF0_E7F0(void *task, unsigned int model,
                           unsigned int material_value, float x, float y,
@@ -103,6 +137,17 @@ void *func_8000DBF0_E7F0(void *task, unsigned int model,
     (void)task; (void)model; (void)material_value;
     (void)x; (void)y; (void)z; (void)rx; (void)ry; (void)rz;
     (void)sx; (void)sy; (void)sz; (void)file8; (void)file9;
+    {
+        int i;
+        for (i = ANCHOR_FREEZE_VISUAL_MAX;
+             i < ANCHOR_FREEZE_VISUAL_MAX + (int)SHARD_COUNT; ++i)
+            if (task == tasks[i].bytes)
+            {
+                *(void **)((unsigned char *)task + 0x18) = objects[i].bytes;
+                objects[i].bytes[4] = 2;
+                return objects[i].bytes;
+            }
+    }
     return 0;
 }
 
@@ -119,15 +164,20 @@ static void setup(void)
     memset(backlinks, 0, sizeof(backlinks));
     memset(objects, 0, sizeof(objects));
     memset(s_slots, 0, sizeof(s_slots));
+    memset(s_shards, 0, sizeof(s_shards));
     memset(mock_targets, 0, sizeof(mock_targets));
     mock_target_count = 0;
+    mock_break_pending = sound_breaks = sent_breaks = 0;
+    s_next_shard_group = 0;
+    shard_alloc_next = 0;
     D_800C7AB2 = 10;
     peer_current = 1;
     peer_frozen = 1;
     local_frozen = 0;
-    link(&tasks[ANCHOR_FREEZE_VISUAL_MAX],
-         &backlinks[ANCHOR_FREEZE_VISUAL_MAX]);
-    s_owner = D_801FC604_5B8514 = tasks[ANCHOR_FREEZE_VISUAL_MAX].bytes;
+    link(&tasks[ANCHOR_FREEZE_VISUAL_MAX + SHARD_COUNT],
+         &backlinks[ANCHOR_FREEZE_VISUAL_MAX + SHARD_COUNT]);
+    s_owner = D_801FC604_5B8514 =
+        tasks[ANCHOR_FREEZE_VISUAL_MAX + SHARD_COUNT].bytes;
     s_material_arena = material;
     for (i = 0; i < 3; ++i)
         s_resources[i] = resource + i;
@@ -319,6 +369,78 @@ static void test_local_thaw_hides_cube_immediately(void)
     assert(!s_slots[0].active);
 }
 
+static void test_break_event_after_remote_cube_hidden(void)
+{
+    unsigned int i;
+    setup();
+    peer_frozen = 0;
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(!anchor_player_freeze_visual_has_cube(1, 4, 5));
+    memset(&mock_break_event, 0, sizeof(mock_break_event));
+    mock_break_event.sender_cid = 1;
+    mock_break_event.sender_session = 4;
+    mock_break_event.sender_epoch = 5;
+    mock_break_event.room_id = 10;
+    mock_break_event.cause = ANCHOR_ICE_BREAK_IMPACT;
+    mock_break_event.x100 = 1000;
+    mock_break_event.y100 = 10000;
+    mock_break_event.z100 = 2000;
+    mock_break_pending = 1;
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(sound_breaks == 1 && sent_breaks == 0);
+    assert(!anchor_player_freeze_visual_has_cube(1, 4, 5));
+    for (i = 0; i < SHARDS_PER_BREAK; ++i)
+    {
+        assert(s_shards[i].frames == SHARD_FRAMES - 1u);
+        assert(*(unsigned int *)(objects[ANCHOR_FREEZE_VISUAL_MAX + i].bytes +
+                                 0x2c) == 0x480002c0u);
+        assert(*(unsigned int *)(tasks[ANCHOR_FREEZE_VISUAL_MAX + i].bytes +
+                                 0x30) == 0);
+    }
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(sound_breaks == 1);
+}
+
+static void test_break_event_without_remote_model_slot(void)
+{
+    setup();
+    peer_current = 0;
+    memset(s_slots, 0, sizeof(s_slots));
+    memset(&mock_break_event, 0, sizeof(mock_break_event));
+    mock_break_event.sender_cid = 1;
+    mock_break_event.sender_session = 4;
+    mock_break_event.sender_epoch = 5;
+    mock_break_event.room_id = 10;
+    mock_break_event.cause = ANCHOR_ICE_BREAK_ESCAPE;
+    mock_break_event.x100 = 1000;
+    mock_break_event.y100 = 10000;
+    mock_break_event.z100 = 2000;
+    mock_break_pending = 1;
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(sound_breaks == 1 && s_shards[0].frames == SHARD_FRAMES - 1u);
+    mock_break_event.room_id = 11;
+    mock_break_pending = 1;
+    anchor_player_freeze_visual_tick(s_owner);
+    assert(sound_breaks == 1);
+}
+
+static void test_local_break_sends_center(void)
+{
+    unsigned int i;
+    setup();
+    s_slots[0].target.cid = 0;
+    s_slots[0].target.session = 0;
+    local_frozen = 1;
+    anchor_player_freeze_visual_break_local(5, ANCHOR_ICE_BREAK_ESCAPE,
+                                             10.0f, 0.0f, 20.0f);
+    assert(sound_breaks == 1 && sent_breaks == 1);
+    assert(sent_cause == ANCHOR_ICE_BREAK_ESCAPE);
+    assert(sent_x100 == 1000 && sent_y100 == 10000 && sent_z100 == 2000);
+    assert(!anchor_player_freeze_visual_has_cube(0, 0, 5));
+    for (i = 0; i < SHARDS_PER_BREAK; ++i)
+        assert(s_shards[i].frames == SHARD_FRAMES);
+}
+
 int main(void)
 {
     AnchorFreezeCubeCollision cubes[ANCHOR_FREEZE_VISUAL_MAX];
@@ -350,6 +472,9 @@ int main(void)
     test_remote_thaw_hides_cube_immediately();
     test_missing_remote_target_keeps_frozen_cube();
     test_local_thaw_hides_cube_immediately();
+    test_break_event_after_remote_cube_hidden();
+    test_break_event_without_remote_model_slot();
+    test_local_break_sends_center();
     puts("freeze cube visual lifecycle tests passed");
     return 0;
 }

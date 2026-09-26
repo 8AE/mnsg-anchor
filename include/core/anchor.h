@@ -381,6 +381,20 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
        int source_epoch);
    int anchor_poll_player_cube_control(AnchorPlayerCubeControl *out);
 
+   /* Victim-authored, room-wide one-shot ice breakup. The packet carries the
+    * break location so every observer can play the native effect in place. */
+   enum {
+       ANCHOR_ICE_BREAK_ESCAPE = 1, ANCHOR_ICE_BREAK_IMPACT = 2
+   };
+   typedef struct AnchorPlayerIceBreak
+   {
+       int sender_cid, sender_session, sender_epoch, room_id;
+       int break_seq, cause, x100, y100, z100;
+   } AnchorPlayerIceBreak;
+   int anchor_send_player_ice_break(int interaction_session, int player_epoch,
+       int cause, int x100, int y100, int z100);
+   int anchor_poll_player_ice_break(AnchorPlayerIceBreak *out);
+
    /* One-frame batches of local-player one-shot sound cues. The sender stamps
     * the current player lifecycle and movement sample. Received cues are
     * identity-checked, bounded, short-lived, and never enter durable state. */

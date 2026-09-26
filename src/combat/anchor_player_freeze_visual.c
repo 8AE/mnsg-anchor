@@ -3,8 +3,10 @@
 #include "combat/anchor_player_freeze.h"
 #include "core/anchor_dialog.h"
 #include "player/anchor_player_models.h"
+#include "player/anchor_player_sounds.h"
 #include "player/anchor_remote_model_pool.h"
 #include "ui/anchor_freeze_prompt.h"
+#include "core/anchor.h"
 #include "platform/modding.h"
 #include "platform/recomputils.h"
 
@@ -41,6 +43,15 @@ typedef struct FreezeVisualSlot
     unsigned char impact_frames;
 } FreezeVisualSlot;
 
+typedef struct IceShard
+{
+    void *task;
+    void *object;
+    float x, y, z, vx, vy, vz, scale;
+    unsigned short room;
+    unsigned char frames;
+} IceShard;
+
 /* The enemy ice child uses this immutable .file_12 material template. Copy
  * the game commands to owned low RDRAM so overlay changes cannot invalidate
  * a live cube. The wrapper supplies each cube's native translucent env RGBA. */
@@ -53,8 +64,11 @@ static const unsigned int s_cube_template[22] = {
 };
 #define CUBE_TEMPLATE_BYTES (sizeof(s_cube_template))
 #define CUBE_WRAPPER_WORDS 8u
-#define CUBE_ARENA_BYTES (CUBE_TEMPLATE_BYTES + ANCHOR_FREEZE_VISUAL_MAX * CUBE_WRAPPER_WORDS * 4u)
+#define CUBE_ARENA_BYTES (CUBE_TEMPLATE_BYTES + (ANCHOR_FREEZE_VISUAL_MAX + 1u) * CUBE_WRAPPER_WORDS * 4u)
 #define SHARD_FRAMES 40u
+#define SHARDS_PER_BREAK 7u
+#define SHARD_GROUPS 2u
+#define SHARD_COUNT (SHARDS_PER_BREAK * SHARD_GROUPS)
 #define IMPACT_FRAMES 32u
 #define NATIVE_BANK_BYTES 0x1d6d8u
 #define NATIVE_COMMAND_BYTES 0x14c80u
@@ -65,12 +79,16 @@ static const unsigned int s_cube_template[22] = {
 #define ICE_MATRIX_RESERVE (16u * 64u)
 
 static FreezeVisualSlot s_slots[ANCHOR_FREEZE_VISUAL_MAX];
+static IceShard s_shards[SHARD_COUNT];
+static unsigned int s_next_shard_group;
 static unsigned char *s_resources[3];
 static unsigned int *s_material_arena;
 static void *s_owner;
 static unsigned char *s_guard_object;
 static unsigned char s_guard_hidden;
 static void freeze_visual_task_update(void *task, void *object);
+static void ice_shard_task_update(void *task, void *object);
+static void play_break(float x, float y, float z, float scale);
 #if DEBUG_BUTTON_ENABLED
 static int s_resource_reported;
 static int s_draw_skip_reported;
@@ -112,6 +130,14 @@ static int owned(const FreezeVisualSlot *slot)
            *(void **)((unsigned char *)slot->task + 0xc) ==
                (void *)freeze_visual_task_update &&
            *(void **)((unsigned char *)slot->task + 0x18) == slot->object;
+}
+
+static int shard_owned(const IceShard *shard)
+{
+    return linked(shard->task) && rdram(shard->object) &&
+           *(void **)((unsigned char *)shard->task + 0xc) ==
+               (void *)ice_shard_task_update &&
+           *(void **)((unsigned char *)shard->task + 0x18) == shard->object;
 }
 
 static int target_frozen(const AnchorFreezeVisualTarget *target)
@@ -236,6 +262,36 @@ int anchor_player_freeze_visual_shatter(int cid, int session, int epoch)
     return 0;
 }
 
+void anchor_player_freeze_visual_break_local(int epoch, int cause,
+                                             float x, float y, float z)
+{
+    int i, session;
+    float scale = 1.0f;
+    if (epoch <= 0 || (cause != ANCHOR_ICE_BREAK_ESCAPE &&
+                       cause != ANCHOR_ICE_BREAK_IMPACT) ||
+        !(x >= -10000000.0f && x <= 10000000.0f &&
+          y >= -10000000.0f && y <= 10000000.0f &&
+          z >= -10000000.0f && z <= 10000000.0f))
+        return;
+    for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
+        if (s_slots[i].target.cid == 0 &&
+            s_slots[i].target.epoch == epoch &&
+            s_slots[i].room == D_800C7AB2 &&
+            s_slots[i].target.scale > 0.0f &&
+            s_slots[i].target.scale <= 10.0f)
+        {
+            scale = s_slots[i].target.scale;
+            break;
+        }
+    y += scale * 100.0f;
+    (void)anchor_player_freeze_visual_shatter(0, 0, epoch);
+    play_break(x, y, z, scale);
+    session = anchor_get_projectile_session();
+    if (session > 0)
+        (void)anchor_send_player_ice_break(session, epoch, cause,
+            (int)(x * 100.0f), (int)(y * 100.0f), (int)(z * 100.0f));
+}
+
 int anchor_player_freeze_visual_get_native(int cid, int session, int epoch,
                                           void **task, void **object,
                                           float *scale)
@@ -289,6 +345,16 @@ void anchor_player_freeze_visual_reset(void)
         s_slots[i].shattered = 0;
         s_slots[i].tombstoned = 0;
     }
+    for (i = 0; i < (int)SHARD_COUNT; ++i)
+    {
+        if (shard_owned(&s_shards[i]))
+        {
+            unsigned char *object = s_shards[i].object;
+            *(unsigned int *)(object + 0x2c) = 0;
+            object[0x64] |= 1u;
+        }
+        s_shards[i].frames = 0;
+    }
     s_owner = 0;
 }
 
@@ -308,10 +374,18 @@ void anchor_player_freeze_visual_before_draw(void *pointer)
              s_slots[i].shattered))
             break;
     if (i == ANCHOR_FREEZE_VISUAL_MAX)
-        return;
+    {
+        for (i = 0; i < (int)SHARD_COUNT; ++i)
+            if (s_shards[i].object == object && shard_owned(&s_shards[i]) &&
+                s_shards[i].frames)
+                break;
+        if (i == (int)SHARD_COUNT)
+            return;
+    }
     s_guard_object = object;
     s_guard_hidden = object[0x64] & 1u;
-    if (s_slots[i].shattered)
+    if (i < ANCHOR_FREEZE_VISUAL_MAX && s_slots[i].shattered &&
+        s_slots[i].object == object)
     {
         object[0x64] |= 1u;
         return;
@@ -402,7 +476,7 @@ void anchor_player_freeze_visual_load_resources(void)
     s_material_arena = (unsigned int *)(unsigned long)(start | 0x80000000u);
     for (i = 0; i < 22; ++i)
         s_material_arena[i] = s_cube_template[i];
-    for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX; ++i)
+    for (i = 0; i < ANCHOR_FREEZE_VISUAL_MAX + 1; ++i)
     {
         unsigned int *wrapper = s_material_arena + 22 + i * CUBE_WRAPPER_WORDS;
         wrapper[0] = 0x06000000u;
@@ -412,6 +486,8 @@ void anchor_player_freeze_visual_load_resources(void)
         wrapper[4] = 0xb8000000u;
         wrapper[5] = wrapper[6] = wrapper[7] = 0;
     }
+    s_material_arena[22 + ANCHOR_FREEZE_VISUAL_MAX * CUBE_WRAPPER_WORDS + 3] =
+        0x000000ffu;
 #if DEBUG_BUTTON_ENABLED
     report_resources(1); /* Native files and owned material arena are ready. */
 #endif
@@ -491,6 +567,115 @@ static void draw(FreezeVisualSlot *slot, int index)
     object[0x65] = 0;
 }
 
+static int ensure_shard(IceShard *shard)
+{
+    if (!shard_owned(shard))
+        shard->task = shard->object = 0;
+    if (!shard->task)
+        shard->task = func_80034E08_35A08(s_owner, ice_shard_task_update, 0);
+    if (!shard->task)
+        return 0;
+    if (!shard->object)
+        shard->object = func_8000DBF0_E7F0(shard->task, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    if (!shard_owned(shard))
+        return 0;
+    *(unsigned int *)((unsigned char *)shard->task + 0x30) = 0;
+    *(unsigned int *)((unsigned char *)shard->task + 0x34) = 0;
+    *(unsigned int *)((unsigned char *)shard->task + 0x38) = 0;
+    *(unsigned int *)((unsigned char *)shard->task + 0x48) = 0;
+    *(unsigned int *)((unsigned char *)shard->task + 0x5c) = 0;
+    return 1;
+}
+
+static void draw_shard(IceShard *shard)
+{
+    unsigned char *object = shard->object;
+    unsigned int *wrapper = s_material_arena + 22 +
+        ANCHOR_FREEZE_VISUAL_MAX * CUBE_WRAPPER_WORDS;
+    if (!shard->frames || !shard_owned(shard) || !s_material_arena ||
+        !s_resources[0] || !s_resources[1] || !s_resources[2] ||
+        shard->room != D_800C7AB2)
+    {
+        if (shard_owned(shard))
+        {
+            *(unsigned int *)(object + 0x2c) = 0;
+            object[0x64] |= 1u;
+        }
+        return;
+    }
+    *(unsigned int *)(object + 0x2c) = 0x480002c0u;
+    *(unsigned int *)(object + 0x30) =
+        (unsigned int)(unsigned long)wrapper | 0x60000000u;
+    *(unsigned short *)(object + 0x34) = 0x191;
+    *(void **)(object + 0x38) = s_resources[0];
+    *(unsigned short *)(object + 0x3c) = 0x192;
+    *(void **)(object + 0x40) = s_resources[1];
+    *(unsigned short *)(object + 0x44) = 0x152;
+    *(void **)(object + 0x48) = s_resources[2];
+    *(float *)(object + 8) = shard->x;
+    *(float *)(object + 0xc) = shard->y;
+    *(float *)(object + 0x10) = shard->z;
+    *(unsigned short *)(object + 0x14) = 0;
+    *(unsigned short *)(object + 0x16) = 0;
+    *(unsigned short *)(object + 0x18) = 0;
+    *(float *)(object + 0x1c) = shard->scale;
+    *(float *)(object + 0x20) = shard->scale;
+    *(float *)(object + 0x24) = shard->scale;
+    object[5] = 2; /* Match the native display kind; attack fields stay zero. */
+    object[0x64] &= (unsigned char)~1u;
+    object[0x65] = 0;
+}
+
+static void ice_shard_task_update(void *task, void *object)
+{
+    int i;
+    for (i = 0; i < (int)SHARD_COUNT; ++i)
+        if (s_shards[i].task == task && s_shards[i].object == object)
+        {
+            draw_shard(&s_shards[i]);
+            return;
+        }
+}
+
+static void spawn_shards(float x, float y, float z, float scale)
+{
+    static const float dx[SHARDS_PER_BREAK] =
+        {1.0f, 0.62f, -0.22f, -0.9f, -0.9f, -0.22f, 0.62f};
+    static const float dz[SHARDS_PER_BREAK] =
+        {0.0f, 0.78f, 0.97f, 0.43f, -0.43f, -0.97f, -0.78f};
+    unsigned int group = s_next_shard_group++ % SHARD_GROUPS;
+    unsigned int i;
+    if (!linked(s_owner) || s_owner != D_801FC604_5B8514 ||
+        !s_material_arena || !s_resources[0] || !s_resources[1] ||
+        !s_resources[2])
+        return;
+    if (!(scale > 0.00001f && scale <= 10.0f))
+        scale = 1.0f;
+    for (i = 0; i < SHARDS_PER_BREAK; ++i)
+    {
+        IceShard *shard = &s_shards[group * SHARDS_PER_BREAK + i];
+        if (!ensure_shard(shard))
+            continue;
+        shard->x = x + dx[i] * 16.0f * scale;
+        shard->y = y + (float)(i % 3u) * 8.0f * scale;
+        shard->z = z + dz[i] * 16.0f * scale;
+        shard->vx = dx[i] * 3.5f * scale;
+        shard->vy = (4.0f + (float)(i % 3u)) * scale;
+        shard->vz = dz[i] * 3.5f * scale;
+        shard->scale = 0.7f * scale;
+        shard->room = D_800C7AB2;
+        shard->frames = SHARD_FRAMES;
+        draw_shard(shard);
+    }
+}
+
+static void play_break(float x, float y, float z, float scale)
+{
+    spawn_shards(x, y, z, scale);
+    anchor_player_sounds_play_ice_break(x, y, z);
+}
+
 static void freeze_visual_task_update(void *task, void *object)
 {
     int i;
@@ -526,8 +711,9 @@ static void freeze_visual_task_update(void *task, void *object)
 void anchor_player_freeze_visual_tick(void *owner)
 {
     AnchorFreezeVisualTarget targets[ANCHOR_FREEZE_VISUAL_MAX];
+    AnchorPlayerIceBreak break_event;
     int count, i, j;
-    if (!linked(owner) || owner != D_801FC604_5B8514 || !s_material_arena)
+    if (!linked(owner) || owner != D_801FC604_5B8514)
     {
         anchor_player_freeze_visual_reset();
         return;
@@ -536,6 +722,64 @@ void anchor_player_freeze_visual_tick(void *owner)
     {
         anchor_player_freeze_visual_reset();
         s_owner = owner;
+    }
+    for (i = 0; i < 8 && anchor_poll_player_ice_break(&break_event); ++i)
+    {
+        float x, y, z, scale = 1.0f;
+        if (break_event.sender_cid <= 0 || break_event.sender_session <= 0 ||
+            break_event.sender_epoch <= 0 ||
+            break_event.room_id != (int)D_800C7AB2 ||
+            (break_event.cause != ANCHOR_ICE_BREAK_ESCAPE &&
+             break_event.cause != ANCHOR_ICE_BREAK_IMPACT))
+            continue;
+        x = (float)break_event.x100 / 100.0f;
+        y = (float)break_event.y100 / 100.0f;
+        z = (float)break_event.z100 / 100.0f;
+        if (!(x >= -10000000.0f && x <= 10000000.0f &&
+              y >= -10000000.0f && y <= 10000000.0f &&
+              z >= -10000000.0f && z <= 10000000.0f))
+            continue;
+        for (j = 0; j < ANCHOR_FREEZE_VISUAL_MAX; ++j)
+            if (s_slots[j].target.cid == break_event.sender_cid &&
+                s_slots[j].target.session == break_event.sender_session &&
+                s_slots[j].target.epoch == break_event.sender_epoch &&
+                s_slots[j].room == D_800C7AB2 &&
+                s_slots[j].target.scale > 0.0f &&
+                s_slots[j].target.scale <= 10.0f)
+            {
+                scale = s_slots[j].target.scale;
+                break;
+            }
+        /* Transport verifies sender session and epoch against the room roster.
+         * A recipient need not have a renderer slot for that player. An impact
+         * carrier may also have hidden its cube before this one-shot arrives. */
+        (void)anchor_player_freeze_visual_shatter(break_event.sender_cid,
+            break_event.sender_session, break_event.sender_epoch);
+        play_break(x, y, z, scale);
+    }
+    /* The break cue is still audible if this scene could not reserve the
+     * native ice-art arena; only shard creation needs that arena. */
+    if (!s_material_arena)
+    {
+        anchor_player_freeze_visual_reset();
+        return;
+    }
+    for (i = 0; i < (int)SHARD_COUNT; ++i)
+    {
+        IceShard *shard = &s_shards[i];
+        if (!shard->frames)
+            continue;
+        if (shard->room != D_800C7AB2 || !shard_owned(shard) ||
+            !--shard->frames)
+        {
+            shard->frames = 0;
+            draw_shard(shard);
+            continue;
+        }
+        shard->x += shard->vx;
+        shard->y += shard->vy;
+        shard->z += shard->vz;
+        shard->vy -= 0.22f * (shard->scale / 0.7f);
     }
     count = anchor_player_models_get_freeze_visual_targets(targets,
                                                           ANCHOR_FREEZE_VISUAL_MAX);

@@ -164,6 +164,9 @@ _player_cube_push_log_ms: "dict[str, int]" = {}
 _player_sound_seq: int = 0
 _player_sounds = deque(maxlen=64)
 _player_sound_seen: "dict[tuple[int, int, int, int], tuple[int, int]]" = {}
+_player_ice_break_seq: int = 0
+_player_ice_breaks = deque(maxlen=32)
+_player_ice_break_seen: "dict[tuple[int, int, int, int], int]" = {}
 _retired_interaction_sessions: "dict[int, set[int]]" = {}
 _player_movement_order: "dict[int, dict]" = {}
 _projectile_spawns: "dict[tuple[int, int, int, int], tuple[int, dict]]" = {}
@@ -228,6 +231,7 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     "MNSG_PLAYER_HIT": 512,
     "MNSG_PLAYER_CUBE_CTRL": 512,
     "MNSG_PLAYER_SOUND": 320,
+    "MNSG_PLAYER_ICE_BREAK": 352,
     "MNSG_PROJECTILE_SPAWN": 512,
     "MNSG_PROJECTILE_STOP": 256,
     "MNSG_ENEMY_LIVE": 3072,
@@ -261,6 +265,10 @@ PLAYER_CUBE_PUSH_INTENT_MAX: int = 1200
 PLAYER_SOUND_MAX_AGE_MS: int = 500
 PLAYER_SOUND_BATCH_COUNT: int = 8
 PLAYER_SOUND_QUEUE_COUNT: int = 64
+PLAYER_ICE_BREAK_MAX_AGE_MS: int = 750
+PLAYER_ICE_BREAK_QUEUE_COUNT: int = 32
+PLAYER_ICE_BREAK_ESCAPE: int = 1
+PLAYER_ICE_BREAK_IMPACT: int = 2
 TRANSFER_TARGET_MAX_AGE_MS: int = 5000
 TRANSFER_ROOM_MAX: int = 0x225
 TRANSFER_COORD_MIN: int = -0x8000
@@ -587,6 +595,7 @@ def _merge_client_state(
             _drop_projectile_spawns(cid)
             _drop_player_cube(cid)
             _drop_player_sounds(cid)
+            _drop_player_ice_breaks(cid)
     if "isSaveLoaded" in payload:
         state["isSaveLoaded"] = bool(payload["isSaveLoaded"])
     if "er" in payload:
@@ -623,6 +632,9 @@ def _merge_client_state(
             }
             if session > 0 and epoch > 0:
                 _drop_player_sounds(
+                    cid, (cid, session, epoch, int(state.get("roomId", -1)))
+                )
+                _drop_player_ice_breaks(
                     cid, (cid, session, epoch, int(state.get("roomId", -1)))
                 )
     if enforce_movement_order or "posX" in payload:
@@ -838,9 +850,11 @@ def _replace_all_client_states(states: list) -> None:
             if not replacement.get("online", False):
                 _drop_projectile_spawns(cid)
                 _drop_player_sounds(cid)
+                _drop_player_ice_breaks(cid)
             if cid not in new_players:
                 order = _player_movement_order.pop(cid, previous)
                 _retire_interaction_session(cid, int(order.get("interactionSession", 0)))
+                _drop_player_ice_breaks(cid)
         for cid, frozen in tuple(_player_cube_freeze.items()):
             replacement = new_players.get(cid, {})
             metadata = snapshot_metadata.get(cid, {})
@@ -1157,6 +1171,10 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_player_sound(packet)
                     continue
 
+                if ptype == "MNSG_PLAYER_ICE_BREAK":
+                    _receive_player_ice_break(packet)
+                    continue
+
                 if ptype == "MNSG_PROJECTILE_SPAWN":
                     _receive_projectile_spawn(packet)
                     continue
@@ -1271,6 +1289,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     global _local_map_snapshot_explicit
     global _interaction_session
     global _player_hit_seq, _player_cube_seq, _player_sound_seq
+    global _player_ice_break_seq
 
     # A receiver from an older connection must never close a newer socket.
     if expected_sock is not None and _sock is not expected_sock:
@@ -1301,6 +1320,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _player_hit_seq = 0
     _player_cube_seq = 0
     _player_sound_seq = 0
+    _player_ice_break_seq = 0
     _connected = False
     s = _sock
     _sock = None
@@ -1315,6 +1335,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _player_hit_seen.clear()
         _reset_player_cube()
         _reset_player_sounds()
+        _reset_player_ice_breaks()
         _retired_interaction_sessions.clear()
         _player_movement_order.clear()
         _reset_projectile_spawns()
@@ -1364,6 +1385,7 @@ def connect(
     global _local_map_snapshot_explicit
     global _interaction_session
     global _player_hit_seq, _player_cube_seq, _player_sound_seq
+    global _player_ice_break_seq
     global _rx_thread, _disabled, _race_status, _race_config_json, _local_save_loaded
     global _local_enemy_room, _local_enemy_sig, _local_enemy_bits
 
@@ -1400,6 +1422,7 @@ def connect(
     _player_hit_seq = 0
     _player_cube_seq = 0
     _player_sound_seq = 0
+    _player_ice_break_seq = 0
     _position_seq = 0
     _local_character = ""
     _local_save_loaded = False
@@ -1413,6 +1436,7 @@ def connect(
         _player_hit_seen.clear()
         _reset_player_cube()
         _reset_player_sounds()
+        _reset_player_ice_breaks()
         _retired_interaction_sessions.clear()
         _player_movement_order.clear()
         _reset_projectile_spawns()
@@ -2318,6 +2342,186 @@ def poll_player_sound():
                         int(packet["interactionSession"]),
                         int(packet["playerEpoch"]), int(sound_id),
                         remaining_ms)
+    return None
+
+
+def _player_ice_break_identity(packet: dict) -> tuple:
+    return (packet["clientId"], packet["interactionSession"],
+            packet["playerEpoch"], packet["currentRoomId"])
+
+
+def _reset_player_ice_breaks() -> None:
+    """Discard one-shot breakup events at a connection or room boundary."""
+    _player_ice_breaks.clear()
+    _player_ice_break_seen.clear()
+
+
+def _drop_player_ice_breaks(cid: int, keep_identity: "tuple | None" = None) -> None:
+    """Discard a departed sender or an old movement generation; lock held."""
+    retained = [entry for entry in _player_ice_breaks
+                if entry[1]["clientId"] != cid or
+                (keep_identity is not None and
+                 _player_ice_break_identity(entry[1]) == keep_identity)]
+    _player_ice_breaks.clear()
+    _player_ice_breaks.extend(retained)
+    for identity in tuple(_player_ice_break_seen):
+        if identity[0] == cid and identity != keep_identity:
+            del _player_ice_break_seen[identity]
+
+
+def _player_ice_break_status(packet: dict) -> int:
+    """Return 0 rejected, 1 awaiting movement, or 2 ready; lock held."""
+    if (type(packet) is not dict or
+            packet.get("type") != "MNSG_PLAYER_ICE_BREAK" or
+            packet.get("quiet") is not True or
+            any(key in packet for key in
+                ("targetClientId", "targetTeamId", "addToQueue")) or
+            not _connected or _client_id <= 0):
+        return 0
+    fields = {
+        "clientId": (1, _POSITION_SEQUENCE_MASK),
+        "currentRoomId": (0, MAP_ROOM_MAX),
+        "interactionSession": (1, _POSITION_SEQUENCE_MASK),
+        "playerEpoch": (1, _POSITION_SEQUENCE_MASK),
+        "breakSeq": (1, _POSITION_SEQUENCE_MASK),
+        "sourcePosSeq": (1, _POSITION_SEQUENCE_MASK),
+        "breakT": (1, PLAYER_SOUND_TIMESTAMP_MAX),
+        "cause": (PLAYER_ICE_BREAK_ESCAPE, PLAYER_ICE_BREAK_IMPACT),
+        "x100": (-1000000000, 1000000000),
+        "y100": (-1000000000, 1000000000),
+        "z100": (-1000000000, 1000000000),
+    }
+    for key, (low, high) in fields.items():
+        value = packet.get(key)
+        if type(value) is not int or not low <= value <= high:
+            return 0
+    try:
+        if len((json.dumps(packet, separators=(",", ":"), allow_nan=False) +
+                "\x00").encode("utf-8")) > HOT_PACKET_MAX_BYTES["MNSG_PLAYER_ICE_BREAK"]:
+            return 0
+        sender = packet["clientId"]
+        room = packet["currentRoomId"]
+        source = _player_states.get(sender)
+        local = _player_states.get(_client_id, {})
+        if (sender == _client_id or not source or
+                not source.get("online", False) or
+                room != _player_sound_local_room() or
+                source.get("roomId") != room or
+                local.get("roomId") != room or
+                _interaction_session <= 0 or
+                local.get("interactionSession") != _interaction_session or
+                packet["interactionSession"] in
+                _retired_interaction_sessions.get(sender, ())):
+            return 0
+        order = _player_movement_order.get(sender, source)
+        if (packet["interactionSession"] != order.get("interactionSession") or
+                packet["playerEpoch"] != order.get("playerEpoch")):
+            return 0
+        if ("posX" not in source or
+                source.get("interactionSession") != packet["interactionSession"] or
+                source.get("playerEpoch") != packet["playerEpoch"]):
+            return 1
+        source_seq = int(source.get("posSeq", 0))
+        lag = (source_seq - packet["sourcePosSeq"]) & _POSITION_SEQUENCE_MASK
+        if lag >= _POSITION_SEQUENCE_HALF_RANGE:
+            return 1
+        source_time = int(source.get("posT", 0))
+        if source_time <= 0 or packet["breakT"] - source_time > 5000:
+            return 1
+        if source_time - packet["breakT"] > 5000:
+            return 0
+        return 2
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _prune_player_ice_breaks(now_ms: int) -> None:
+    retained = [entry for entry in _player_ice_breaks
+                if now_ms - entry[0] < PLAYER_ICE_BREAK_MAX_AGE_MS and
+                _player_ice_break_status(entry[1]) != 0]
+    _player_ice_breaks.clear()
+    _player_ice_breaks.extend(retained)
+
+
+def _receive_player_ice_break(packet: dict) -> bool:
+    """Queue one validated room breakup edge with bounded lifetime."""
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        if _player_ice_break_status(packet) == 0:
+            return False
+        _prune_player_ice_breaks(now_ms)
+        identity = _player_ice_break_identity(packet)
+        previous = _player_ice_break_seen.get(identity)
+        sequence = packet["breakSeq"]
+        if previous is not None:
+            delta = (sequence - previous) & _POSITION_SEQUENCE_MASK
+            if delta == 0 or delta >= _POSITION_SEQUENCE_HALF_RANGE:
+                return False
+        if len(_player_ice_breaks) >= PLAYER_ICE_BREAK_QUEUE_COUNT:
+            return False
+        _player_ice_break_seen[identity] = sequence
+        _player_ice_breaks.append((now_ms, dict(packet)))
+        return True
+
+
+def send_player_ice_break(interaction_session: int, player_epoch: int,
+                          cause: int, x100: int, y100: int, z100: int) -> bool:
+    """Broadcast one victim-authoritative ice break to the whole Anchor room."""
+    global _player_ice_break_seq
+    if (type(interaction_session) is not int or
+            not 0 < interaction_session <= _POSITION_SEQUENCE_MASK or
+            type(player_epoch) is not int or
+            not 0 < player_epoch <= _POSITION_SEQUENCE_MASK or
+            type(cause) is not int or
+            cause not in (PLAYER_ICE_BREAK_ESCAPE, PLAYER_ICE_BREAK_IMPACT) or
+            any(type(value) is not int or not -1000000000 <= value <= 1000000000
+                for value in (x100, y100, z100))):
+        return False
+    with _player_states_lock:
+        local = _player_states.get(_client_id, {})
+        break_time = int(time.monotonic() * 1000)
+        if (not _connected or _client_id <= 0 or
+                not 0 <= _local_room_id <= MAP_ROOM_MAX or
+                local.get("roomId") != _local_room_id or
+                "posX" not in local or
+                interaction_session != _interaction_session or
+                local.get("interactionSession") != interaction_session or
+                local.get("playerEpoch") != player_epoch or
+                not 0 < int(local.get("posSeq", 0)) <= _POSITION_SEQUENCE_MASK or
+                not 0 < break_time <= PLAYER_SOUND_TIMESTAMP_MAX):
+            return False
+        next_seq = (_player_ice_break_seq % _POSITION_SEQUENCE_MASK) + 1
+        packet = {
+            "type": "MNSG_PLAYER_ICE_BREAK", "clientId": _client_id,
+            "currentRoomId": _local_room_id,
+            "interactionSession": interaction_session,
+            "playerEpoch": player_epoch, "breakSeq": next_seq,
+            "sourcePosSeq": int(local["posSeq"]), "breakT": break_time,
+            "cause": cause, "x100": x100, "y100": y100, "z100": z100,
+            "quiet": True,
+        }
+    if not _send_raw(packet):
+        return False
+    _player_ice_break_seq = next_seq
+    return True
+
+
+def poll_player_ice_break():
+    """Return a fresh break tuple, or None; stale and reordered edges expire."""
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        _prune_player_ice_breaks(now_ms)
+        for _ in range(len(_player_ice_breaks)):
+            received_ms, packet = _player_ice_breaks.popleft()
+            status = _player_ice_break_status(packet)
+            if status == 1:
+                _player_ice_breaks.append((received_ms, packet))
+                continue
+            if status == 2:
+                return (packet["clientId"], packet["interactionSession"],
+                        packet["playerEpoch"], packet["currentRoomId"],
+                        packet["breakSeq"], packet["cause"],
+                        packet["x100"], packet["y100"], packet["z100"])
     return None
 
 
@@ -3779,6 +3983,7 @@ def set_local_room(room_id: int) -> bool:
             _reset_player_cube()
             _projectile_spawns.clear()
             _reset_player_sounds()
+            _reset_player_ice_breaks()
         if _client_id in _player_states:
             _player_states[_client_id]["location"] = area_name
             _player_states[_client_id]["roomId"] = room_id

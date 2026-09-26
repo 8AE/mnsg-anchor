@@ -36,6 +36,10 @@ int anchor_player_freeze_visual_get_native(int cid, int session, int epoch,
 /* Hide an impacted cube immediately while retaining its owned native object
  * briefly for the native attack scan. Returns 1 only on the first shatter. */
 int anchor_player_freeze_visual_shatter(int cid, int session, int epoch);
+/* Break the local frozen cube at the current body feet position, emit its
+ * room event, and play the visual/audio burst immediately on this client. */
+void anchor_player_freeze_visual_break_local(int epoch, int cause,
+                                             float x, float y, float z);
 int anchor_player_freeze_visual_owns_task(const void *task);
 
 #endif
