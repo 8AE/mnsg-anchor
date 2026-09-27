@@ -19,6 +19,8 @@
 #include "world/anchor_world_doll.h"
 #include "world/anchor_world_counterweight.h"
 #include "world/anchor_world_paths.inc"
+#include "world/anchor_world_pickup_effects.h"
+#include "player/anchor_player_sounds.h"
 
 static int quest_status_rows[WORLD_QUEST_MAX][WORLD_QUEST_WORDS];
 static int quest_incoming_rows[WORLD_QUEST_MAX][WORLD_QUEST_WORDS];
@@ -212,6 +214,8 @@ static int shutter_phase(void *callback) {
 }
 extern void func_08002DBC_6FDFBC(void *, void *);
 extern void *func_802171A8_5D2678(void *, Callback, unsigned char);
+extern unsigned char D_8020CBF0_5C8B00[];
+extern void func_8000F420_10020(unsigned short, void *, void *, float);
 static Callback platform_states[74], switch_states[5];
 static void platform_addresses(void) {
   unsigned int i = 0;
@@ -231,8 +235,10 @@ typedef struct {
   unsigned short entity;
   unsigned char kind, ready, generation, have;
   unsigned char has_path, talkable, variant, animated, door_local, local_motion;
-  unsigned char door_remote, door_closing, bridge_member;
+  unsigned char door_remote, door_closing, door_audio_ready, bridge_member;
   unsigned char switch_fx, switch_fx_pending;
+  unsigned char coin_fx_pending;
+  unsigned char pot_sound_pending;
   unsigned char initialized_complete;
   unsigned char file30_appearance;
   unsigned char file30_hidden_by_sync;
@@ -258,6 +264,7 @@ static WorldActor s_actors[ANCHOR_WORLD_MAX];
 static unsigned int s_count, s_room = 0xffff, s_hash, s_signature, s_visit,
                              s_next_visit;
 static unsigned int s_old_signature, s_old_room;
+static unsigned int s_effect_visit;
 static unsigned char s_dead[32], s_previous_dead[32];
 static unsigned char s_incoming_dead[32];
 static int s_rows[ANCHOR_WORLD_MAX][ANCHOR_WORLD_WORDS];
@@ -376,6 +383,57 @@ static int travel_door(const WorldActor *w) {
    * other animated door families use local room-travel callbacks. */
   return w->kind == WORLD_DOOR && w->animated && w->entity != 0x23a;
 }
+static unsigned short travel_door_cue(const WorldActor *w) {
+  unsigned char subtype;
+  if (!travel_door(w) || !w->actor)
+    return 0;
+  subtype = U8(w->actor, 0xd0);
+  /* Each case below is a verified file_43 actor-entry/open-callback pair.
+   * Native branch loads of +0xD0 use lbu; the latch at +0xDA uses lhu. */
+  switch (w->entity) {
+  case 0x23c:
+    return subtype == 0 ? 0x0224u : 0x015Eu;
+  case 0x23e:
+    if (subtype == 0 || subtype == 1 || subtype == 2 || subtype == 6)
+      return 0x0224u;
+    if (subtype == 3)
+      return 0x0227u;
+    if (subtype == 4 || subtype == 8)
+      return 0x015Fu;
+    return subtype == 7 ? 0x015Du : 0x015Eu;
+  case 0x23f:
+    if (subtype == 0 || subtype == 1 || subtype == 4)
+      return 0x0224u;
+    if (subtype == 2 || subtype == 3)
+      return 0x015Du;
+    return 0; /* Subtype 5 uses a separate special transition. */
+  case 0x241:
+    return 0x015Eu;
+  case 0x242:
+    return subtype == 0 || subtype == 9 || subtype == 11 ?
+           0x0224u : 0x015Eu;
+  case 0x24d:
+    return subtype == 0 || subtype == 1 || subtype == 2 ||
+           subtype == 4 || subtype == 7 ? 0x0224u : 0x015Eu;
+  case 0x31f:
+    return subtype == 0 ? 0x0227u : 0x0224u;
+  case 0x321:
+    /* Subtype 2's initializer installs a separate child callback. Its
+     * 0x015E cue is not an ordinary travel-door opener. */
+    return subtype == 2 ? 0 :
+           subtype == 0 || subtype == 1 ? 0x0224u : 0x015Eu;
+  case 0x32f:
+    return 0x015Fu;
+  default:
+    return 0;
+  }
+}
+static void play_remote_door_cue(WorldActor *w, void *object) {
+  unsigned short cue = travel_door_cue(w);
+  if (cue && object && s_active && s_room == D_800C7AB2 &&
+      D_8016DAB4_16E6B4 == w->actor)
+    func_8000F420_10020(cue, D_8020CBF0_5C8B00, object, 400.0f);
+}
 int anchor_world_actor_placed(void *actor) { return find(actor) >= 0; }
 int anchor_world_source_index(const void *source, unsigned int *placed_index) {
   unsigned int i;
@@ -420,6 +478,7 @@ static void unhold(void) {
 }
 void anchor_world_reset(void) {
   unsigned int i;
+  anchor_world_pickup_effects_reset();
   unhold();
   anchor_world_crane_reset(0);
   anchor_world_bridge_reset(0);
@@ -427,6 +486,7 @@ void anchor_world_reset(void) {
   anchor_world_doll_reset(0);
   anchor_world_counterweight_reset(0);
   s_active = 0;
+  s_effect_visit = 0;
   for (i = 0; i < s_count; ++i) {
     if (physics(&s_actors[i])) {
       if (valid(i) && !physics_held(&s_actors[i]) &&
@@ -437,6 +497,8 @@ void anchor_world_reset(void) {
       s_actors[i].local_motion = 0;
     }
     s_actors[i].have = 0;
+    s_actors[i].coin_fx_pending = 0;
+    s_actors[i].pot_sound_pending = 0;
     s_actors[i].applied_valid = 0;
     s_actors[i].receipt = 0;
     s_actors[i].retained_valid = s_actors[i].restore_controller = 0;
@@ -667,6 +729,8 @@ void anchor_world_roster_end(unsigned int count) {
       s_dead[i] = s_previous_dead[i];
   } else
     s_visit = 0;
+  if (!s_visit)
+    s_effect_visit = 0;
   if (!s_visit) {
     if (++s_next_visit > 0x7fffffffu)
       s_next_visit = 1;
@@ -705,6 +769,9 @@ void anchor_world_register(void *actor, void *source) {
       s_actors[i].door_local = 0;
       s_actors[i].door_remote = 0;
       s_actors[i].door_closing = 0;
+      s_actors[i].door_audio_ready = 0;
+      s_actors[i].coin_fx_pending = 0;
+      s_actors[i].pot_sound_pending = 0;
       s_actors[i].switch_fx = s_actors[i].switch_fx_pending = 0;
       s_actors[i].restore_controller = 0;
       s_actors[i].initialized_complete = 0;
@@ -889,16 +956,23 @@ static void collected(void *actor) {
   }
 }
 RECOMP_HOOK("func_802145F0_5CFAC0")
-void anchor_world_coin(void *actor) { collected(actor); }
+void anchor_world_coin(void *actor) {
+  anchor_player_sounds_capture_pickup(actor, 0x026Bu);
+  collected(actor);
+}
 RECOMP_HOOK("func_80214AEC_5CFFBC")
 void anchor_world_health(void *actor) {
-  if (actor && (U32(actor, 0x68) & 0x200u))
+  if (actor && (U32(actor, 0x68) & 0x200u)) {
+    anchor_player_sounds_capture_pickup(actor, 0x026Cu);
     collected(actor);
+  }
 }
 RECOMP_HOOK("func_08000434_6AEC14")
 void anchor_world_food(void *actor) {
-  if (actor && (U32(actor, 0x68) & 0x200u))
+  if (actor && (U32(actor, 0x68) & 0x200u)) {
+    anchor_player_sounds_capture_pickup(actor, 0x026Cu);
     collected(actor);
+  }
 }
 RECOMP_HOOK("func_08000150_6B30F0")
 void anchor_world_container(void *actor) { collected(actor); }
@@ -2223,9 +2297,35 @@ static void world_callback(void *actor, void *object) {
   int i = find(actor);
   WorldActor *w;
   Callback real;
+  unsigned char was_remote_door, door_audio_ready;
   if (i < 0)
     return;
   w = &s_actors[i];
+  was_remote_door = w->door_remote;
+  door_audio_ready = w->door_audio_ready;
+  if (w->coin_fx_pending) {
+    /* The native coin continuation spawns this child before retiring its
+     * actor. Run only under the mapped coin's own scheduler task, while its
+     * file_12 overlay and parent pose still exist. The native helper checks
+     * category-8 capacity; no reward callback runs. */
+    w->coin_fx_pending = 0;
+    if (valid((unsigned int)i) && w->actor == actor &&
+        object == PTR(actor, 0x18) &&
+        D_8016DAB4_16E6B4 == actor &&
+        s_active && s_room == D_800C7AB2 &&
+        (w->entity == 0x82 || w->entity == 0x83))
+      anchor_world_pickup_effects_spawn(actor, s_room);
+  }
+  if (w->pot_sound_pending) {
+    w->pot_sound_pending = 0;
+    if (valid((unsigned int)i) && w->actor == actor &&
+        object == PTR(actor, 0x18) &&
+        D_8016DAB4_16E6B4 == actor && s_active &&
+        s_room == D_800C7AB2 && w->entity == 0x192)
+      /* Native file_28 pot break uses its own object and 800-unit range. */
+      func_8000F420_10020(0x026Eu, D_8020CBF0_5C8B00,
+                          object, 800.0f);
+  }
   if (w->restore_controller) {
     for (unsigned int j = 0; j < ANCHOR_WORLD_WORDS; ++j)
       w->net[j] = w->retained[j];
@@ -2312,7 +2412,18 @@ static void world_callback(void *actor, void *object) {
     /* Only presentation and mesh state travel. Native door callbacks own
      * local input, travel, fade/camera and player-control work independently.
      */
+    if (travel_door(w) && w->have && w->owner != s_self) {
+      if (door_audio_ready && !was_remote_door && w->door_remote &&
+          w->net[3])
+        play_remote_door_cue(w, object);
+      w->door_audio_ready = 1;
+    }
     door_close(w, object);
+    if (door_audio_ready && was_remote_door && !w->door_remote &&
+        w->have && w->owner != s_self && !w->net[3])
+      /* Native travel completion has no close ID. The matching door opener
+       * cue is reused once for this accepted remote reversal. */
+      play_remote_door_cue(w, object);
     unsigned int was_animating = U32(actor, 0x60) & 1u;
     if (real)
       real(actor, object);
@@ -2594,8 +2705,19 @@ void anchor_world_frame(void) {
     }
     for (i = 0; i < s_count; ++i)
       if (s_actors[i].kind == WORLD_PICKUP &&
-          (s_incoming_dead[i >> 3] & (1u << (i & 7))))
+          (s_incoming_dead[i >> 3] & (1u << (i & 7)))) {
+        WorldActor *w = &s_actors[i];
+        if (s_effect_visit == s_visit &&
+            !(s_dead[i >> 3] & (1u << (i & 7))) &&
+            valid(i)) {
+          if (w->entity == 0x82 || w->entity == 0x83)
+            w->coin_fx_pending = 1;
+          else if (w->entity == 0x192)
+            w->pot_sound_pending = 1;
+        }
         s_dead[i >> 3] |= (unsigned char)(1u << (i & 7));
+      }
+    s_effect_visit = s_visit;
   } else {
     /* A broken/stale bridge cannot leave native callbacks frozen. */
     for (i = 0; i < s_count; ++i)

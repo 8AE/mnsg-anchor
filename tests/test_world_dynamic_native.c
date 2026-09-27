@@ -37,6 +37,15 @@ static int enemy_sync_actor_authority(void *a) {
 #define WORLD_NPC_DISABLED 0ul
 #include "../src/world/anchor_world_dynamic.c"
 #include "../src/world/anchor_world_npc.c"
+static int pickup_sound_calls;
+static const void *pickup_sound_actor;
+static unsigned short pickup_sound_id;
+void anchor_player_sounds_capture_pickup(const void *task,
+                                         unsigned short sound_id) {
+  pickup_sound_actor = task;
+  pickup_sound_id = sound_id;
+  ++pickup_sound_calls;
+}
 
 unsigned short D_800C7AB2 = 302;
 unsigned char D_800C7AE2, D_8015CD00[16];
@@ -376,6 +385,9 @@ static void fixture(void) {
   loaded = 1;
   npc_loaded = 1;
   calls = awards = binds = talks = face_calls = 0;
+  pickup_sound_calls = 0;
+  pickup_sound_actor = NULL;
+  pickup_sound_id = 0;
   health = 10;
   ryo = 100;
   excluded_health = excluded_ryo = 0;
@@ -730,6 +742,9 @@ static void capped_private_rewards_test(void) {
     tick(d);
     tick(d);
     assert(awards == 1);
+    assert(pickup_sound_calls == (kind == WD_COIN ? 0 : 1));
+    if (kind != WD_COIN)
+      assert(pickup_sound_actor == d->actor && pickup_sound_id == 0x026Cu);
     if (kind == WD_COIN)
       assert(ryo == 9999 && excluded_ryo == 2 && excluded_health == 0);
     else

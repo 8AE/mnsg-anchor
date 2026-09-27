@@ -35,6 +35,11 @@ static int enemy_sync_actor_authority(void *a) { (void)a; return -1; }
 #include "../src/world/anchor_world_dynamic.c"
 #include "../src/world/anchor_world_npc.c"
 #include "../src/world/anchor_world_bomb.inc"
+void anchor_player_sounds_capture_pickup(const void *task,
+                                         unsigned short sound_id) {
+  (void)task;
+  (void)sound_id;
+}
 
 /* The bomb harness links the complete dynamic source. File_46 wave natives
  * are unreachable in this room, but their typed callback symbols must link. */

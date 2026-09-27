@@ -58,10 +58,12 @@ class AppearanceSkinFlagTests(unittest.TestCase):
     def test_bit_three_is_defined_and_part_of_the_mask(self) -> None:
         self.assertEqual(anchor_mnsg.APPEARANCE_ALTERNATIVE_EBISUMARU, 1 << 3)
         self.assertEqual(anchor_mnsg.APPEARANCE_FROZEN, 1 << 4)
-        self.assertEqual(anchor_mnsg.APPEARANCE_MASK, 0b111111)
+        self.assertEqual(anchor_mnsg.APPEARANCE_MASK, 0b11111111)
         self.assertTrue(anchor_mnsg.APPEARANCE_MASK & (1 << 3))
         self.assertTrue(anchor_mnsg.APPEARANCE_MASK & (1 << 4))
         self.assertTrue(anchor_mnsg.APPEARANCE_MASK & (1 << 5))
+        self.assertTrue(anchor_mnsg.APPEARANCE_MASK & (1 << 6))
+        self.assertTrue(anchor_mnsg.APPEARANCE_MASK & (1 << 7))
 
     def test_set_position_anim_sends_the_alternative_bit(self) -> None:
         with mock.patch.object(anchor_mnsg.time, "monotonic", return_value=100.0):
@@ -74,7 +76,7 @@ class AppearanceSkinFlagTests(unittest.TestCase):
         self.assertEqual(packet["appearanceFlags"], 1 << 3)
         self.assertTrue(packet["appearanceFlags"] & (1 << 3))
 
-    def test_set_position_anim_carries_all_six_bits(self) -> None:
+    def test_set_position_anim_carries_appearance_bits(self) -> None:
         with mock.patch.object(anchor_mnsg.time, "monotonic", return_value=100.0):
             self.assertTrue(anchor_mnsg.set_position_anim(
                 0, 0, 0, 1, 0, 100, 0, 0, 0, appearance_flags=31,
@@ -132,6 +134,24 @@ class AppearanceSkinFlagTests(unittest.TestCase):
             [p["appearanceFlags"] for p in self.packets()], [0, 1 << 3]
         )
 
+    def test_charge_active_full_and_release_edges_bypass_cadence(self) -> None:
+        with mock.patch.object(
+            anchor_mnsg.time, "monotonic",
+            side_effect=(100.0, 100.01, 100.02, 100.03),
+        ):
+            for flags in (0, 1 << 6, (1 << 6) | (1 << 7), 0):
+                self.assertTrue(anchor_mnsg.set_position_anim(
+                    0, 0, 0, 1, 0, 100, 0, 0, 0, appearance_flags=flags,
+                ))
+        self.assertEqual(
+            [p["appearanceFlags"] for p in self.packets()], [0, 64, 192, 0]
+        )
+        self.assertTrue(anchor_mnsg._merge_client_state(
+            2, {"appearanceFlags": 192}
+        ))
+        self.assertEqual(anchor_mnsg._player_states[2]["appearanceFlags"], 192)
+        self.assertEqual(json.loads(anchor_mnsg.get_lobby_positions_json())[0]["ap"], 192)
+
     def test_worst_case_appearance_value_stays_within_the_hot_budget(self) -> None:
         anchor_mnsg._client_id = 0xFFFFFFFF
         anchor_mnsg._local_room_id = 0xFFFF
@@ -140,7 +160,7 @@ class AppearanceSkinFlagTests(unittest.TestCase):
             self.assertTrue(anchor_mnsg.set_position_anim(
                 2147483647, -2147483648, 2147483647,
                 255, 65535, 65535, -32768, 32767, -32768,
-                appearance_flags=63,
+                appearance_flags=255,
                 velocity_x=1000000, velocity_y=-1000000, velocity_z=1000000,
                 angular_velocity_x=32767, angular_velocity_y=-32768,
                 angular_velocity_z=32767, force_motion_edge=1,
@@ -153,7 +173,7 @@ class AppearanceSkinFlagTests(unittest.TestCase):
             len(wire), anchor_mnsg.HOT_PACKET_MAX_BYTES["MNSG_PLAYER_POS"]
         )
         self.assertTrue(wire.endswith(b"\x00"))
-        self.assertEqual(self.packets()[-1]["appearanceFlags"], 63)
+        self.assertEqual(self.packets()[-1]["appearanceFlags"], 255)
 
 
 class StressAppearanceCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -195,7 +215,7 @@ class StressAppearanceCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stress_tool_mask_carries_bit_three(self) -> None:
         # The imported mask must be the widened one, not the old 7-bit fallback.
-        self.assertEqual(anchor_stress.APPEARANCE_MASK, 63)
+        self.assertEqual(anchor_stress.APPEARANCE_MASK, 255)
 
 
 if __name__ == "__main__":

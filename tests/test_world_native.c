@@ -43,6 +43,40 @@ static char *anchor_update_world_quest(const char *sources, const char *status) 
 #define WORLD_NPC_DISABLED 0ul
 #include "../src/world/anchor_world.c"
 #include "../src/world/anchor_world_npc.c"
+static const void *pickup_sound_actor;
+static unsigned short pickup_sound_id;
+static int pickup_sound_calls;
+static void *coin_fx_actor;
+static int coin_fx_calls;
+unsigned char D_8020CBF0_5C8B00[24];
+static unsigned short world_sound_id;
+static void *world_sound_object;
+static float world_sound_radius;
+static int world_sound_calls;
+void anchor_player_sounds_capture_pickup(const void *pickup_task,
+                                         unsigned short sound_id) {
+  pickup_sound_actor = pickup_task;
+  pickup_sound_id = sound_id;
+  ++pickup_sound_calls;
+}
+void func_8021804C_5D351C(void *coin_actor, int variant) {
+  assert(variant == 0);
+  coin_fx_actor = coin_actor;
+  ++coin_fx_calls;
+}
+void anchor_world_pickup_effects_spawn(void *coin_actor, unsigned short room) {
+  assert(room == s_room);
+  func_8021804C_5D351C(coin_actor, 0);
+}
+void anchor_world_pickup_effects_reset(void) {}
+void func_8000F420_10020(unsigned short id, void *state, void *source,
+                         float radius) {
+  assert(state == D_8020CBF0_5C8B00);
+  world_sound_id = id;
+  world_sound_object = source;
+  world_sound_radius = radius;
+  ++world_sound_calls;
+}
 void anchor_world_quest_set_self(unsigned int self) { (void)self; }
 void anchor_world_quest_frame(unsigned int r,unsigned int s,unsigned int v,int a) {
   (void)r;(void)s;(void)v;(void)a;
@@ -1043,6 +1077,64 @@ static void remote_travel_door_closes_and_reopens_test(void) {
   tick();
   assert(!w->door_closing && F32(object, 0x28) == 15);
 }
+static void remote_door_sound_test(void) {
+  WorldActor *w = fixture(0x23e, 0);
+  PTR(actor, 0xc) = travel_idle;
+  anchor_world_animation(actor, 0);
+  checkpoint(w);
+  world_sound_calls = 0;
+  U8(actor, 0xd0) = 3; /* verified locked-door subtype: 0x0227 */
+  w->net[3] = 0;
+  tick(); /* Establish a remote baseline without an arrival cue. */
+  assert(w->door_audio_ready && world_sound_calls == 0);
+  w->net[3] = 1;
+  w->net[11] = 100;
+  tick();
+  assert(world_sound_calls == 1 && world_sound_id == 0x0227u &&
+         world_sound_object == object && world_sound_radius == 400.0f);
+  tick();
+  assert(world_sound_calls == 1);
+  w->net[3] = 0;
+  w->net[11] = 0;
+  w->net[29] |= 2;
+  tick();
+  assert(world_sound_calls == 2 && world_sound_id == 0x0227u);
+  tick();
+  assert(world_sound_calls == 2);
+
+  w = fixture(0x23a, 0); /* Progression barrier has a separate lifecycle. */
+  PTR(actor, 0xc) = travel_idle;
+  anchor_world_animation(actor, 0);
+  checkpoint(w);
+  world_sound_calls = 0;
+  tick();
+  w->net[3] = 1;
+  w->net[11] = 100;
+  tick();
+  assert(world_sound_calls == 0);
+}
+static void travel_door_cue_map_test(void) {
+  static const struct {
+    unsigned short entity;
+    unsigned char subtype;
+    unsigned short cue;
+  } cases[] = {
+    {0x23a, 0, 0}, {0x23c, 0, 0x0224}, {0x23c, 1, 0x015e},
+    {0x23e, 3, 0x0227}, {0x23e, 7, 0x015d}, {0x23e, 8, 0x015f},
+    {0x23f, 0, 0x0224}, {0x23f, 3, 0x015d}, {0x23f, 5, 0},
+    {0x241, 0, 0x015e}, {0x242, 9, 0x0224}, {0x242, 2, 0x015e},
+    {0x24d, 7, 0x0224}, {0x24d, 3, 0x015e},
+    {0x31f, 0, 0x0227}, {0x31f, 1, 0x0224},
+    {0x321, 0, 0x0224}, {0x321, 2, 0}, {0x321, 3, 0x015e},
+    {0x32f, 0, 0x015f}
+  };
+  for (unsigned int i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    WorldActor *w = fixture(cases[i].entity, 0);
+    anchor_world_animation(actor, 0);
+    U8(actor, 0xd0) = cases[i].subtype;
+    assert(travel_door_cue(w) == cases[i].cue);
+  }
+}
 static void safety_test(void) {
   int n = 0;
   volatile union {
@@ -1079,8 +1171,10 @@ static void lifecycle_test(void) {
   anchor_world_post(actor);
   assert(!s_dead[0] && !w->actor);
   w = fixture(0x82, 0);
+  pickup_sound_calls = 0;
   anchor_world_coin(actor);
-  assert(s_dead[0] == 1);
+  assert(s_dead[0] == 1 && pickup_sound_calls == 1 &&
+         pickup_sound_actor == actor && pickup_sound_id == 0x026Bu);
   anchor_world_roster_begin(D_800C7AB2);
   anchor_world_roster_add(0, source, definition);
   anchor_world_roster_end(1);
@@ -1094,15 +1188,18 @@ static void lifecycle_test(void) {
   anchor_world_roster_end(1);
   assert(s_signature != sig && !s_dead[0]);
   w = fixture(0x84, 0);
+  pickup_sound_calls = 0;
   anchor_world_health(actor);
-  assert(!s_dead[0]);
+  assert(!s_dead[0] && pickup_sound_calls == 0);
   U32(actor, 0x68) = 0x200;
   anchor_world_health(actor);
-  assert(s_dead[0] == 1);
+  assert(s_dead[0] == 1 && pickup_sound_calls == 1 &&
+         pickup_sound_actor == actor && pickup_sound_id == 0x026Cu);
   w = fixture(0x85, 0);
   U32(actor, 0x68) = 0x200;
   anchor_world_food(actor);
-  assert(s_dead[0] == 1);
+  assert(s_dead[0] == 1 && pickup_sound_calls == 2 &&
+         pickup_sound_actor == actor && pickup_sound_id == 0x026Cu);
   w = fixture(0x192, 0);
   anchor_world_container(actor);
   assert(s_dead[0] == 1);
@@ -1628,6 +1725,68 @@ static void bridge_reply_build(unsigned int cid, unsigned int latency,
                   "00");
   snprintf(bridge_frame_reply + n, sizeof(bridge_frame_reply) - (size_t)n, "\"}");
   bridge_frame_reply_ready = 1;
+}
+
+static void pickup_reply_build(int coin_dead) {
+  int n = snprintf(bridge_frame_reply, sizeof(bridge_frame_reply),
+                   "{\"a\":[],\"d\":\"%02x", coin_dead ? 1 : 0);
+  for (unsigned int i = 1; i < 32; ++i)
+    n += snprintf(bridge_frame_reply + n,
+                  sizeof(bridge_frame_reply) - (size_t)n, "00");
+  snprintf(bridge_frame_reply + n, sizeof(bridge_frame_reply) - (size_t)n,
+           "\"}");
+  bridge_frame_reply_ready = 1;
+}
+
+static void remote_coin_fx_test(void) {
+  WorldActor *w = fixture(0x82, 0);
+  coin_fx_calls = pickup_sound_calls = 0;
+  coin_fx_actor = NULL;
+  pickup_reply_build(1);
+  anchor_world_frame();
+  assert((s_dead[0] & 1u) && !w->coin_fx_pending && !coin_fx_calls);
+  anchor_world_scheduler_begin();
+  world_callback(actor, object);
+  assert(!coin_fx_calls && !pickup_sound_calls);
+  anchor_world_scheduler_end();
+
+  w = fixture(0x83, 0);
+  coin_fx_calls = pickup_sound_calls = 0;
+  coin_fx_actor = NULL;
+  pickup_reply_build(0);
+  anchor_world_frame();
+  assert(s_effect_visit == s_visit && !(s_dead[0] & 1u));
+  pickup_reply_build(1);
+  anchor_world_frame();
+  assert(w->coin_fx_pending && (s_dead[0] & 1u));
+  anchor_world_scheduler_begin();
+  world_callback(actor, object);
+  assert(coin_fx_calls == 1 && coin_fx_actor == actor &&
+         !pickup_sound_calls && !w->coin_fx_pending);
+  world_callback(actor, object);
+  assert(coin_fx_calls == 1 && !pickup_sound_calls);
+  anchor_world_scheduler_end();
+
+  w = fixture(0x192, 0);
+  world_sound_calls = pickup_sound_calls = 0;
+  pickup_reply_build(0);
+  anchor_world_frame();
+  pickup_reply_build(1);
+  anchor_world_frame();
+  assert(w->pot_sound_pending);
+  anchor_world_scheduler_begin();
+  world_callback(actor, object);
+  assert(world_sound_calls == 1 && world_sound_id == 0x026Eu &&
+         world_sound_object == object && world_sound_radius == 800.0f &&
+         !pickup_sound_calls && !w->pot_sound_pending);
+  world_callback(actor, object);
+  assert(world_sound_calls == 1);
+  anchor_world_scheduler_end();
+  w->pot_sound_pending = 1;
+  w->coin_fx_pending = 1;
+  anchor_world_register(actor, source);
+  assert(!w->pot_sound_pending && !w->coin_fx_pending);
+  bridge_frame_reply_ready = 0;
 }
 
 static void bridge_roster_test(void) {
@@ -2269,6 +2428,8 @@ int main(void) {
   save_aware_constructor_does_not_finish_remote_motion_test();
   npc_checkpoint_test();
   remote_travel_door_closes_and_reopens_test();
+  remote_door_sound_test();
+  travel_door_cue_map_test();
   npc_test();
   platform_test();
   mechanism_test();
@@ -2276,6 +2437,7 @@ int main(void) {
   emitter_test();
   safety_test();
   lifecycle_test();
+  remote_coin_fx_test();
   puts("world native: NPC/dialogue, platform prediction/handoff, "
        "pickup/culling and pool reuse passed");
   return 0;

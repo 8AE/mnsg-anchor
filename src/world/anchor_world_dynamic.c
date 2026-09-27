@@ -31,6 +31,7 @@
 #include "world/anchor_world_boulder.h"
 #include "world/anchor_world_fish.h"
 #include "world/anchor_world_paths.inc"
+#include "player/anchor_player_sounds.h"
 
 #define B(p, o) (*(unsigned char *)((char *)(p) + (o)))
 #define H(p, o) (*(unsigned short *)((char *)(p) + (o)))
@@ -1376,9 +1377,12 @@ static void award(DynamicActor *d) {
   ryo = item_sync_local_player_ryo();
   if (d->kind == WD_COIN)
     func_802145F0_5CFAC0(a);
-  else if (d->kind == WD_HEALTH)
+  else if (d->kind == WD_HEALTH) {
+    anchor_player_sounds_capture_pickup(a, 0x026Cu);
     func_80213FF0_5CF4C0(a);
+  }
   else if (d->kind == WD_FOOD) {
+    anchor_player_sounds_capture_pickup(a, 0x026Cu);
     func_80038B98_39798(0x26c);
     func_801DCD48_598C58(40);
     func_8021804C_5D351C(a, 0);

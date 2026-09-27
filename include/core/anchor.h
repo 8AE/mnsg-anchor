@@ -323,6 +323,8 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
     * @param drive_x          Intended X drive, hundredths of world units/sec.
     * @param drive_z          Intended Z drive, hundredths of world units/sec.
     * @param player_epoch     Positive local-player lifecycle counter.
+    * @param jet_velocity_100 Native Sasuke jet task+0xA4 vertical speed times
+    *                         100, or ANCHOR_REMOTE_JET_SPEED_UNAVAILABLE.
     * @return 1 if sent, 0 otherwise.
     */
    int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
@@ -337,7 +339,8 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
                                 int animation_step_100,
                                 int has_animation_step,
                                 int collision_disabled,
-                                int drive_x, int drive_z, int player_epoch);
+                                int drive_x, int drive_z, int player_epoch,
+                                int jet_velocity_100);
 
    /* One compact event per throw. Capture stamps the connection session and
     * owner epoch; a failed send can retry the same bounded JSON event/id.

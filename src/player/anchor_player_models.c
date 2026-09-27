@@ -47,6 +47,8 @@
 #include "player/anchor_remote_model_pool.h"
 #include "player/anchor_remote_animation.h"
 #include "player/anchor_remote_appearance.h"
+#include "player/anchor_player_effects.h"
+#include "player/anchor_remote_smoke.h"
 #include "combat/anchor_remote_collision.h"
 #include "combat/anchor_collision_actors.h"
 #include "combat/anchor_player_damage.h"
@@ -143,6 +145,8 @@ typedef struct RemoteModelSlot
     AnchorCollisionBody collision_body;
     int collision_ready;
     unsigned int drive_sample_tick;
+    AnchorPlayerEffectState effects;
+    AnchorRemoteSmokeState smoke;
 } RemoteModelSlot;
 
 /* Allocate and insert an engine task under `task_list` with an update
@@ -426,6 +430,14 @@ static void invalidate_aux_render_arena(void)
     for (slot_index = 0; slot_index < s_slot_capacity; ++slot_index)
     {
         RemoteModelSlot *slot = &s_slots[slot_index];
+
+        /* The resource loaders replace the low-RDRAM material arenas below.
+         * Retire children while their live owner is still linked, before
+         * either module forgets its manager/material-bank generation. */
+        anchor_player_effects_reset(&slot->effects,
+                                    is_linked_remote_task(slot->task));
+        anchor_remote_smoke_reset(&slot->smoke,
+                                  is_linked_remote_task(slot->task));
 
         for (channel = 0; channel < AUX_RESOURCE_COUNT; ++channel)
         {
@@ -796,6 +808,8 @@ void anchor_player_models_load_resources(void)
             s_char_cache[ch].ready = 0;
         recomp_printf("[remote_models] face arena reservation failed\n");
     }
+    anchor_player_effects_load_resources();
+    anchor_remote_smoke_load_resources();
 }
 
 /* ------------------------------------------------------------------ */
@@ -848,6 +862,11 @@ static void clear_slot_state(RemoteModelSlot *slot, int preserve_live_task)
     void *retained_task = 0;
     void *retained_object = 0;
     int i;
+
+    anchor_player_effects_reset(&slot->effects,
+                                is_linked_remote_task(slot->task));
+    anchor_remote_smoke_reset(&slot->smoke,
+                              is_linked_remote_task(slot->task));
 
     if (preserve_live_task && is_linked_remote_task(slot->task))
     {
@@ -2379,6 +2398,12 @@ static void update_slot_hidden_pose(RemoteModelSlot *slot, const AnchorPlayerMod
  * scheduled update. This matches the stock ordering: model pointers and aux
  * face memory are finalized before the engine walks kind-2 records to build
  * the frame's display list. The frame-end hook only publishes snapshots. */
+static void suspend_slot_effects(RemoteModelSlot *slot)
+{
+    anchor_player_effects_suspend(&slot->effects);
+    anchor_remote_smoke_suspend(&slot->smoke);
+}
+
 static void remote_model_task_update(void *task, void *object)
 {
     RemoteModelSlot *slot = 0;
@@ -2410,6 +2435,7 @@ static void remote_model_task_update(void *task, void *object)
         slot->bound_action = -1;
         slot->bound_sudden_impact = 0;
         slot->bound_alternative = 0;
+        suspend_slot_effects(slot);
         return;
     }
 
@@ -2429,6 +2455,7 @@ static void remote_model_task_update(void *task, void *object)
         slot->bound_action = -1;
         slot->bound_sudden_impact = 0;
         slot->bound_alternative = 0;
+        suspend_slot_effects(slot);
         return;
     }
 
@@ -2473,6 +2500,7 @@ static void remote_model_task_update(void *task, void *object)
             slot->bound_alternative = 0;
         }
         update_slot_hidden_pose(slot, remote);
+        suspend_slot_effects(slot);
         return;
     }
 
@@ -2494,6 +2522,7 @@ static void remote_model_task_update(void *task, void *object)
                 slot->bound_sudden_impact = 0;
                 slot->bound_alternative = 0;
                 update_slot_hidden_pose(slot, remote);
+                suspend_slot_effects(slot);
                 return;
             }
             alternative = 0;
@@ -2505,10 +2534,18 @@ static void remote_model_task_update(void *task, void *object)
             slot->bound_alternative = 1;
         }
         update_slot_pose(slot, remote, 1);
+        anchor_player_effects_apply(&slot->effects, slot->task, slot->object,
+                                    remote, slot->pending_room);
+        anchor_remote_smoke_apply(&slot->smoke, slot->task, slot->object,
+                                  remote, slot->pending_room);
         return;
     }
 
     update_slot_pose(slot, remote, 0);
+    anchor_player_effects_apply(&slot->effects, slot->task, slot->object,
+                                remote, slot->pending_room);
+    anchor_remote_smoke_apply(&slot->smoke, slot->task, slot->object,
+                              remote, slot->pending_room);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2557,6 +2594,10 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
         slot->seen = 1;
         if (!ensure_slot_task(slot, remote, render_parent_task))
             continue;
+        anchor_player_effects_set_context(&slot->effects, slot->task,
+                                          remote, D_800C7AB2);
+        anchor_remote_smoke_set_context(&slot->smoke, slot->task, slot->object,
+                                        remote, D_800C7AB2);
         /* Queue only plain network state here. The task callback consumes the
          * newest complete snapshot at the engine's safe pre-render point. */
         if (!slot->pending_valid || remote->seq != slot->pending_remote.seq ||

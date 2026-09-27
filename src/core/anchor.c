@@ -566,7 +566,8 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
                              int animation_step_100,
                              int has_animation_step,
                              int collision_disabled,
-                             int drive_x, int drive_z, int player_epoch)
+                             int drive_x, int drive_z, int player_epoch,
+                             int jet_velocity_100)
 {
     REPY_FN_SETUP;
     REPY_FN_SET_S32("pos_x", pos_x);
@@ -592,6 +593,7 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
     REPY_FN_SET_S32("drive_x", drive_x);
     REPY_FN_SET_S32("drive_z", drive_z);
     REPY_FN_SET_S32("player_epoch", player_epoch);
+    REPY_FN_SET_S32("jet_velocity_100", jet_velocity_100);
     REPY_FN_EXEC_CACHE(anchor_set_position_anim_code,
                        "import anchor_mnsg\n"
                        "result = anchor_mnsg.set_position_anim(\n"
@@ -600,7 +602,8 @@ int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
                        "    appearance_flags, velocity_x, velocity_y, velocity_z,\n"
                        "    angular_velocity_x, angular_velocity_y, angular_velocity_z,\n"
                        "    force_motion_edge, animation_step_100, has_animation_step,\n"
-                       "    collision_disabled, drive_x, drive_z, player_epoch\n"
+                       "    collision_disabled, drive_x, drive_z, player_epoch,\n"
+                       "    jet_velocity_100\n"
                        ")\n");
     int result = (int)REPY_FN_GET_BOOL("result");
     REPY_FN_CLEANUP;

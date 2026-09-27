@@ -166,6 +166,19 @@ class ProjectileTransportTests(unittest.TestCase):
         self.assertNotIn('addToQueue', self.sock.sent[-1])
         self.assertEqual(self.stats()['sent'], 1)
 
+    def test_fire_ryo_kind_uses_existing_room_transient_route(self):
+        fire_ryo = self.entry(kind=0x12)
+        self.assertTrue(self.send(fire_ryo))
+        sent = self.sock.sent[-1]
+        self.assertEqual(sent['type'], 'MNSG_PROJECTILE_SPAWN')
+        self.assertEqual(sent['spawn'][1], 0x12)
+        self.assertTrue(sent['quiet'])
+        self.assertNotIn('targetClientId', sent)
+        self.assertNotIn('addToQueue', sent)
+        self.assertTrue(anchor_mnsg._receive_projectile_spawn(
+            self.packet(fire_ryo)))
+        self.assertEqual(self.rows()[0]['kind'], 0x12)
+
     def test_source_retry_keeps_same_id_and_success_does_not_echo_twice(self):
         with mock.patch.object(anchor_mnsg, '_send_raw', side_effect=[False, True]) as send:
             self.assertFalse(self.send())

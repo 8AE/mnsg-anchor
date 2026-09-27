@@ -250,6 +250,8 @@ static void test_capture_filter_and_native_queue_bound(void)
     D_8016DAB4_16E6B4 = D_801FC604_5B8514;
     anchor_capture_local_player_sound(0x80, 0, 0);
     anchor_capture_local_player_sound(0x8212, 0, 0);
+    anchor_capture_local_player_sound(0x170, 0, 0);
+    anchor_capture_local_player_sound(0x8170, 0, 0);
     anchor_capture_local_player_sound(0x26D, 0, 0);
     assert(s_pending_sound_count == 0);
 
@@ -266,6 +268,78 @@ static void test_capture_filter_and_native_queue_bound(void)
     assert(send_calls == 1 && sent_count == PLAYER_SOUND_BATCH_MAX);
     assert(memcmp(sent_sounds, expected, sizeof(expected)) == 0);
     assert(s_pending_sound_count == 0);
+}
+
+static void test_exact_pickup_capture_requires_actor_queue_and_live_player(void)
+{
+    void *pickup_task = (void *)0x5000;
+    reset_test();
+    D_8016DAB4_16E6B4 = pickup_task;
+    anchor_player_sounds_capture_pickup((void *)0x6000, 0x26b);
+    anchor_player_sounds_capture_pickup(pickup_task, 0x212);
+    assert(s_pending_sound_count == 0);
+
+    /* The explicit pickup hook runs before the native actor queues this
+     * exact cue; it must not publish a cue the native queue would reject. */
+    native_enqueue((void *)0x6000, 0x26b, 0, 0);
+    anchor_player_sounds_capture_pickup(pickup_task, 0x26b);
+    assert(s_pending_sound_count == 0);
+    drain_native_sound_queue();
+    anchor_player_sounds_capture_pickup(pickup_task, 0x26b);
+    native_enqueue(pickup_task, 0x26b, 0, 0);
+    anchor_player_sounds_update();
+    assert(send_calls == 1 && sent_count == 1 && sent_sounds[0] == 0x26b);
+
+    reset_test();
+    D_8016DAB4_16E6B4 = pickup_task;
+    anchor_player_sounds_capture_pickup(pickup_task, 0x26c);
+    local_player_epoch++;
+    anchor_player_sounds_update();
+    assert(send_calls == 0);
+
+    reset_test();
+    D_8016DAB4_16E6B4 = pickup_task;
+    D_801FC60C_5B851C = 0;
+    anchor_player_sounds_capture_pickup(pickup_task, 0x26c);
+    assert(s_pending_sound_count == 0);
+}
+
+static void test_verified_player_weapon_one_shots(void)
+{
+    reset_test();
+    native_enqueue(D_801FC604_5B8514, 0x015a, 0, 0); /* Fire Ryo */
+    native_enqueue(D_801FC604_5B8514, 0x020b, 0, 0); /* ice kunai */
+    native_enqueue(D_801FC604_5B8514, 0x0103, 0, 0); /* bazooka */
+    anchor_player_sounds_update();
+    assert(send_calls == 1 && sent_count == 3);
+    assert(sent_sounds[0] == 0x015a && sent_sounds[1] == 0x020b &&
+           sent_sounds[2] == 0x0103);
+
+    reset_test();
+    local_owned_sound_task = (void *)0x5000;
+    native_enqueue(local_owned_sound_task, 0x029a, 0, 0); /* Fire Ryo hit */
+    anchor_player_sounds_update();
+    assert(send_calls == 1 && sent_count == 1 && sent_sounds[0] == 0x029a);
+}
+
+static void test_ownerless_loops_are_not_sent_or_replayed(void)
+{
+    reset_test();
+    native_enqueue(D_801FC604_5B8514, 0x014f, 0, 0);
+    native_enqueue(D_801FC604_5B8514, 0x0170, 0, 0);
+    native_enqueue(D_801FC604_5B8514, 0x026d, 0, 0);
+    anchor_player_sounds_update();
+    assert(send_calls == 0 && s_pending_sound_count == 0);
+
+    reset_test();
+    queue_sound(0x014f);
+    queue_sound(0x814f);
+    queue_sound(0x0170);
+    queue_sound(0x8170);
+    queue_sound(0x026d);
+    queue_sound(0x826d);
+    anchor_player_sounds_update();
+    assert(play_calls == 0 && s_deferred_remote_sound_count == 0);
 }
 
 static void test_native_queue_rejection_is_not_published(void)
@@ -679,6 +753,9 @@ int main(void)
 {
     test_ice_break_cues_do_not_rebroadcast();
     test_capture_filter_and_native_queue_bound();
+    test_exact_pickup_capture_requires_actor_queue_and_live_player();
+    test_verified_player_weapon_one_shots();
+    test_ownerless_loops_are_not_sent_or_replayed();
     test_native_queue_rejection_is_not_published();
     test_disconnect_drops_unsent_frame();
     test_player_owned_camera_and_bomb_child_sounds();

@@ -23,6 +23,8 @@
 /* libultra osGetTime ticks at OS_CLOCK_RATE * 3 / 4 = 46.875 MHz. */
 #define N64_COUNTER_CYCLES_PER_MS 46875ull
 #define REMOTE_SOUND_RADIUS 400.0f
+#define JETPACK_LOOP_SOUND_ID 0x014Fu
+#define FLUTE_LOOP_SOUND_ID 0x0170u
 #define LOOPING_PLAYER_SOUND_ID 0x026Du
 
 typedef struct PlayerSoundObject
@@ -232,13 +234,16 @@ static int player_sound_is_safe_one_shot(unsigned int raw_sound_id)
     unsigned int sound_id = raw_sound_id & 0xffffu;
 
     /* The high bit is a global stop/control command. IDs below 0x100 are
-     * sequences/music. 0x026D is a player loop with a matching 0x826D stop;
-     * replaying only its start would leave a remote loop running forever. */
+     * sequences/music. Sasuke's jetpack 0x014F, Yae's flute 0x0170, and
+     * player 0x026D are loops with matching global stops. */
     return !(sound_id & 0x8000u) && sound_id >= 0x100u &&
+           sound_id != JETPACK_LOOP_SOUND_ID &&
+           sound_id != FLUTE_LOOP_SOUND_ID &&
            sound_id != LOOPING_PLAYER_SOUND_ID;
 }
 
-static void capture_player_sound(unsigned int raw_sound_id)
+static void capture_player_sound(unsigned int raw_sound_id,
+                                 const void *pickup_task)
 {
     unsigned short sound_id;
     int allow_alive_rebase;
@@ -246,7 +251,8 @@ static void capture_player_sound(unsigned int raw_sound_id)
 
     if (s_replaying_remote_sound || !D_801FC604_5B8514 ||
         !D_801FC60C_5B851C ||
-        !anchor_player_models_is_local_sound_task(D_8016DAB4_16E6B4) ||
+        !(pickup_task ? D_8016DAB4_16E6B4 == pickup_task :
+          anchor_player_models_is_local_sound_task(D_8016DAB4_16E6B4)) ||
         !player_sound_is_safe_one_shot(raw_sound_id))
         return;
 
@@ -349,7 +355,19 @@ void anchor_capture_local_player_sound(unsigned short sound_id,
     /* This entry hook runs before C30's own duplicate/full checks. Publish
      * only cues the local native queue is about to accept. */
     if (native_sound_queue_will_accept(sound_id))
-        capture_player_sound(sound_id);
+        capture_player_sound(sound_id, 0);
+}
+
+void anchor_player_sounds_capture_pickup(const void *pickup_task,
+                                         unsigned short sound_id)
+{
+    /* These native pickup continuations award only the contacting local
+     * player, but run under the pickup actor rather than the player task.
+     * Observe their exact one-shot commands before the native queue call. */
+    if (pickup_task &&
+        (sound_id == 0x026Bu || sound_id == 0x026Cu) &&
+        native_sound_queue_will_accept(sound_id))
+        capture_player_sound(sound_id, pickup_task);
 }
 
 void anchor_player_sounds_update(void)

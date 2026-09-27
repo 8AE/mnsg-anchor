@@ -27,6 +27,7 @@
 #include "player/anchor_remote_model_pool.h"
 #include "combat/anchor_render_scratch.h"
 #include "world/anchor_dungeon_maps.h"
+#include "world/anchor_world_pickup_effects.h"
 #include "utils/string_utils.h"
 #include "utils/array_utils.h"
 #include "utils/json_utils.h"
@@ -98,6 +99,7 @@ typedef struct RemotePlayer
     int collision_disabled;
     int drive_x;
     int drive_z;
+    int jet_velocity_100;
     int player_epoch;
     int interaction_session;
     int motion_phase_frames;
@@ -270,6 +272,7 @@ void anchor_load_remote_cutscene_resources(void)
     anchor_projectile_models_load_resources();
     anchor_player_freeze_visual_load_resources();
     anchor_dungeon_maps_load_resources();
+    anchor_world_pickup_effects_load_resources();
     anchor_render_scratch_load_resources();
 }
 
@@ -344,6 +347,12 @@ static int parse_lobby_positions(char *json)
             parse_int_after(p, "cd", 0) != 0;
         s_remote_players[count].drive_x = parse_int_after(p, "dx", 0);
         s_remote_players[count].drive_z = parse_int_after(p, "dz", 0);
+        s_remote_players[count].jet_velocity_100 =
+            parse_int_after(p, "jv", ANCHOR_REMOTE_JET_SPEED_UNAVAILABLE);
+        if (s_remote_players[count].jet_velocity_100 < -10000 ||
+            s_remote_players[count].jet_velocity_100 > 10000)
+            s_remote_players[count].jet_velocity_100 =
+                ANCHOR_REMOTE_JET_SPEED_UNAVAILABLE;
         s_remote_players[count].player_epoch = parse_int_after(p, "pe", 0);
         s_remote_players[count].interaction_session = parse_int_after(p, "ps", 0);
         s_remote_players[count].same_team = parse_int_after(p, "tm", 1);
@@ -607,6 +616,7 @@ static void publish_local_state(PlayerObject *local_obj)
     int drive_x = 0;
     int drive_z = 0;
     int player_epoch;
+    int jet_velocity_100 = ANCHOR_REMOTE_JET_SPEED_UNAVAILABLE;
     int velocity_x = 0;
     int velocity_y = 0;
     int velocity_z = 0;
@@ -706,6 +716,14 @@ static void publish_local_state(PlayerObject *local_obj)
     /* Read the stable player task/model fields after the game frame so peers
      * receive the action boundary, animation phase, and final rotations. */
     action = (int)read_u8_at(D_801FC604_5B8514, 0xcc);
+    if (char_idx == CHARACTER_SASUKE && action == 0x9b)
+    {
+        float speed_100 =
+            read_float_at(D_801FC604_5B8514, 0xa4) * 100.0f;
+        /* Ordered bounds reject NaN and infinities before integer cast. */
+        if (speed_100 >= -10000.0f && speed_100 <= 10000.0f)
+            jet_velocity_100 = round_float_to_int(speed_100);
+    }
     frame_100 = (int)(read_float_at(local_obj, 0x28) * 100.0f);
     {
         float frozen_frame;
@@ -812,6 +830,19 @@ static void publish_local_state(PlayerObject *local_obj)
             if (char_idx == CHARACTER_EBISUMARU &&
                 read_u16_at(player_work, 0x86) != 0)
                 appearance_flags |= ANCHOR_APPEARANCE_MINI_EBISUMARU;
+            /* func_801DC27C's signed-byte mode at work+0x68 is 1 or 2
+             * while selector 0x11's charge particles are active. Goemon,
+             * Ebisumaru camera and Sasuke ice kunai share this path. */
+            if (char_idx == CHARACTER_GOEMON ||
+                char_idx == CHARACTER_EBISUMARU ||
+                char_idx == CHARACTER_SASUKE)
+            {
+                unsigned int charge_mode = read_u8_at(player_work, 0x68);
+                if (charge_mode == 1 || charge_mode == 2)
+                    appearance_flags |= ANCHOR_APPEARANCE_WEAPON_CHARGE;
+                if (charge_mode == 2)
+                    appearance_flags |= ANCHOR_APPEARANCE_WEAPON_CHARGE_FULL;
+            }
         }
     }
     /* Bit 3 is the local alternative-skin toggle and is only meaningful for
@@ -877,7 +908,8 @@ static void publish_local_state(PlayerObject *local_obj)
                                  angular_velocity_y, angular_velocity_z,
                                  force_motion_edge, animation_step_100,
                                  has_animation_step, collision_disabled,
-                                 drive_x, drive_z, player_epoch))
+                                 drive_x, drive_z, player_epoch,
+                                 jet_velocity_100))
     {
         s_have_sent_position = 1;
         s_last_sent_x = x;
@@ -1051,6 +1083,7 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
             model->collision_disabled = smoothed_remote.collision_disabled;
             model->drive_x = smoothed_remote.drive_x;
             model->drive_z = smoothed_remote.drive_z;
+            model->jet_velocity_100 = smoothed_remote.jet_velocity_100;
             model->player_epoch = smoothed_remote.player_epoch;
             model->interaction_session = smoothed_remote.interaction_session;
             model->same_team = smoothed_remote.same_team;

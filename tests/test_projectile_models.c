@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "combat/anchor_projectile_models.h"
+
 extern int anchor_projectile_recipe_id(unsigned int model, int family);
 extern int anchor_projectile_material_decode(unsigned int context,
                                              const unsigned int *commands,
@@ -11,6 +13,9 @@ extern int anchor_projectile_material_decode(unsigned int context,
 extern int anchor_projectile_material_build(int material, unsigned int prim_rgb,
                                             unsigned int env_rgba,
                                             unsigned int commands[8]);
+extern int anchor_projectile_material_word_offset_for_test(int index, int layer,
+                                                            int fire_trail_bank);
+short D_800C7A72_C8672;
 
 static void test_character_and_effect_recipes(void)
 {
@@ -27,6 +32,7 @@ static void test_character_and_effect_recipes(void)
         {0x4900a350u, 3}, {0x4900a430u, 3},
         {0x19000124u, 3}, {0x1900025cu, 3},
         {0x1900025cu, 4},
+        {0x4900b878u, 0}, {0x49002790u, 4},
     };
     int ids[sizeof(required) / sizeof(required[0])];
     unsigned int i, j;
@@ -45,6 +51,35 @@ static void test_character_and_effect_recipes(void)
     assert(anchor_projectile_recipe_id(0xdeadbeefu, 2) == 0);
     assert(anchor_projectile_recipe_id(0u, 4) == 0);
     assert(anchor_projectile_recipe_id(0x49007f91u, 2) == 0);
+}
+
+static void test_fire_ryo_trail_cadence_and_fade(void)
+{
+    AnchorFireRyoTrail trails[ANCHOR_FIRE_RYO_TRAIL_COUNT] = {0};
+    int tick;
+    for (tick = 2; tick <= 12; ++tick)
+    {
+        anchor_projectile_fire_ryo_trail_step(trails, 1, tick,
+            (float)tick, 2.0f, 3.0f, 4, 5, 6);
+        if (tick == 2)
+            assert(trails[0].alpha == 0);
+        if (tick == 3)
+        {
+            assert(trails[0].alpha == 0xf0);
+            assert(trails[0].scale == 0.25f);
+            assert(trails[0].x == 3.0f && trails[0].ry == 5);
+        }
+    }
+    assert(trails[0].alpha > 0 && trails[1].alpha > 0 &&
+           trails[2].alpha > 0 && trails[3].alpha > 0);
+    anchor_projectile_fire_ryo_trail_step(trails, 0, 15,
+        15.0f, 2.0f, 3.0f, 4, 5, 6);
+    assert(trails[0].x == 3.0f && trails[0].scale > 0.25f);
+    for (tick = 0; tick < 10; ++tick)
+        anchor_projectile_fire_ryo_trail_step(trails, 0, 16 + tick,
+            0, 0, 0, 0, 0, 0);
+    for (tick = 0; tick < ANCHOR_FIRE_RYO_TRAIL_COUNT; ++tick)
+        assert(trails[tick].alpha == 0);
 }
 
 static void test_direct_material_styles(void)
@@ -169,13 +204,58 @@ static void test_reject_malformed_commands_and_materials(void)
     assert(memcmp(preserved, commands, sizeof(commands)) == 0);
 }
 
+static void test_native_graphics_bank_material_ownership(void)
+{
+    unsigned int arena[2048];
+    unsigned int first_bank_env[4];
+    int layer, tick;
+    memset(arena, 0x5a, sizeof(arena));
+    D_800C7A72_C8672 = 0;
+    /* Fire Ryo trail layer 1 uses its projectile slot; layers 2-4 use
+     * a separate trail bank. All four must follow the same graphics bank. */
+    for (tick = 0; tick < 3; ++tick)
+        for (layer = 1; layer <= ANCHOR_FIRE_RYO_TRAIL_COUNT; ++layer)
+        {
+            int offset = anchor_projectile_material_word_offset_for_test(2, layer, 1);
+            assert(offset >= 0 && offset + 8 <= (int)(sizeof(arena) / sizeof(arena[0])));
+            assert(anchor_projectile_material_build(38, 0,
+                0xf50d0000u | (unsigned int)(0xf0 - tick * 0x1a), arena + offset));
+            assert(arena[offset + 8] == 0x5a5a5a5au);
+        }
+    for (layer = 1; layer <= ANCHOR_FIRE_RYO_TRAIL_COUNT; ++layer)
+    {
+        int offset = anchor_projectile_material_word_offset_for_test(2, layer, 1);
+        first_bank_env[layer - 1] = arena[offset + 3];
+    }
+    D_800C7A72_C8672 = 1;
+    for (layer = 1; layer <= ANCHOR_FIRE_RYO_TRAIL_COUNT; ++layer)
+    {
+        int offset = anchor_projectile_material_word_offset_for_test(2, layer, 1);
+        assert(offset >= 0 && (offset & 7) == 0);
+        assert(arena[offset] == 0x5a5a5a5au);
+        assert(anchor_projectile_material_build(38, 0, 0xf50d0090u,
+                                                arena + offset));
+        assert(arena[offset - 8 + 3] == first_bank_env[layer - 1]);
+    }
+    /* Other dynamic projectile materials use the same native selector. */
+    assert(anchor_projectile_material_word_offset_for_test(3, 0, -1) ==
+           (3 * 2 * 2 + 1) * 8);
+    D_800C7A72_C8672 = -1;
+    assert(anchor_projectile_material_word_offset_for_test(2, 1, 1) == -1);
+    D_800C7A72_C8672 = 2;
+    assert(anchor_projectile_material_word_offset_for_test(2, 4, 1) == -1);
+    D_800C7A72_C8672 = 0;
+}
+
 int main(void)
 {
     test_character_and_effect_recipes();
+    test_fire_ryo_trail_cadence_and_fade();
     test_direct_material_styles();
     test_dynamic_templates_styles_and_alpha();
     test_blue_explosion_fade_round_trip();
     test_reject_malformed_commands_and_materials();
+    test_native_graphics_bank_material_ownership();
     puts("Projectile recipe and material tests passed");
     return 0;
 }

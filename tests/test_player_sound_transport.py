@@ -106,7 +106,8 @@ class PlayerSoundTransportTests(unittest.TestCase):
 
     def test_sender_strictly_rejects_music_stops_loops_duplicates_and_bad_lifecycle(self):
         invalid_batches = (
-            [], [0x100] * 9, [0xFF], [0x8000], [0x8212], [0x26D],
+            [], [0x100] * 9, [0xFF], [0x8000], [0x8212], [0x14F],
+            [0x170], [0x26D],
             [0x212, 0x212], [True], [1.5], ["0x212"], (0x212,), None,
         )
         for sounds in invalid_batches:
@@ -166,7 +167,9 @@ class PlayerSoundTransportTests(unittest.TestCase):
             {"soundT": True},
             {"soundT": anchor_mnsg.PLAYER_SOUND_TIMESTAMP_MAX + 1},
             {"soundIds": []}, {"soundIds": [0xFF]},
-            {"soundIds": [0x8212]}, {"soundIds": [0x26D]},
+            {"soundIds": [0x8212]}, {"soundIds": [0x14F]},
+            {"soundIds": [0x170]},
+            {"soundIds": [0x26D]},
             {"soundIds": [0x212, 0x212]}, {"soundIds": [True]},
         )
         for changes in invalid:

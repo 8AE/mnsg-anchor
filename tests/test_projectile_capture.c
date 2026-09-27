@@ -78,7 +78,7 @@ static void test_native_visible_record_and_signed_rotations(void)
 
 static void test_initialized_native_kinds(void)
 {
-    static const unsigned char ready[] = {1, 2, 0x17, 0x18, 0x19, 0x1a, 0x1b};
+    static const unsigned char ready[] = {1, 2, 0x12, 0x17, 0x18, 0x19, 0x1a, 0x1b};
     static const unsigned char delayed[] = {0xc, 0xd, 0xe, 0xf, 0x10};
     NativeRecord task, object;
     AnchorProjectileSpawn spawn;
@@ -106,7 +106,8 @@ static void test_initialized_native_kinds(void)
     }
     for (i = 0; i < 256; ++i)
     {
-        int supported = i == 1 || i == 2 || (i >= 0xc && i <= 0x10) ||
+        int supported = i == 1 || i == 2 || i == 0x12 ||
+                        (i >= 0xc && i <= 0x10) ||
                         (i >= 0x17 && i <= 0x1b);
         task.bytes[0x64] = (unsigned char)i;
         task.bytes[0x60] = i >= 0xc && i <= 0x10;
@@ -117,7 +118,7 @@ static void test_initialized_native_kinds(void)
 
 static void test_first_update_native_lifecycle(void)
 {
-    static const unsigned char kinds[] = {1, 2, 0xc, 0xd, 0xe, 0xf, 0x10,
+    static const unsigned char kinds[] = {1, 2, 0xc, 0xd, 0xe, 0xf, 0x10, 0x12,
                                          0x17, 0x18, 0x19, 0x1a, 0x1b};
     NativeRecord task, object;
     AnchorProjectileSpawn spawn;

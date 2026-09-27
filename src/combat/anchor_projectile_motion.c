@@ -13,6 +13,7 @@ static int rocket(int kind)
 int anchor_projectile_kind_supported(int kind)
 {
     return kind == 1 || kind == 2 || kind == 0x0c || kind == 0x0d ||
+           kind == 0x12 ||
            bomb(kind) || rocket(kind) || kind == 0x1a || kind == 0x1b;
 }
 
@@ -69,7 +70,7 @@ int anchor_projectile_motion_init(AnchorProjectileMotion *motion,
         motion->ttl = 90;
         motion->acceleration.y = -0.6666666269302368f; /* D_8020BA74 */
     }
-    else if (spawn->kind == 0x1a || spawn->kind == 0x1b)
+    else if (spawn->kind == 0x12 || spawn->kind == 0x1a || spawn->kind == 0x1b)
         motion->ttl = 59;
     else if (rocket(spawn->kind))
     {
@@ -135,7 +136,8 @@ static void begin_impact(AnchorProjectileMotion *motion)
     else
     {
         motion->phase = ANCHOR_SHOT_IMPACT;
-        motion->scale = motion->kind == 1 || rocket(motion->kind) ? 0.3f : 0.15f;
+        motion->scale = motion->kind == 0x12 ? 0.2f :
+            (motion->kind == 1 || rocket(motion->kind) ? 0.3f : 0.15f);
     }
 }
 
@@ -182,7 +184,8 @@ void anchor_projectile_motion_step(AnchorProjectileMotion *motion,
             motion->alive = 0;
         return;
     }
-    motion->alpha -= (motion->kind == 0x1a || motion->kind == 0x1b) ? 12 : 24;
+    motion->alpha -= motion->kind == 0x12 ? 16 :
+        ((motion->kind == 0x1a || motion->kind == 0x1b) ? 12 : 24);
     if (motion->alpha <= 0)
     {
         motion->alpha = 0;

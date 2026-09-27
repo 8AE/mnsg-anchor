@@ -274,10 +274,9 @@ TRANSFER_ROOM_MAX: int = 0x225
 TRANSFER_COORD_MIN: int = -0x8000
 TRANSFER_COORD_MAX: int = 0x7FFF
 PLAYER_SOUND_TIMESTAMP_MAX: int = 0x7fffffffffffffff
-# 0x026D has a matching 0x826D global stop command. The native mixer owns
-# sounds by cue rather than player, so replaying that loop for one peer could
-# stop (or be stopped by) the local player or another peer.
-PLAYER_SOUND_BLOCKED_IDS = frozenset({0x026D})
+# Jetpack 0x014F, flute 0x0170, and player loop 0x026D have matching global
+# stop commands. Native mixer voices are keyed by cue, not player identity.
+PLAYER_SOUND_BLOCKED_IDS = frozenset({0x014F, 0x0170, 0x026D})
 PROJECTILE_MAX_AGE_MS: int = 750
 PROJECTILE_BATCH_COUNT: int = 16
 PROJECTILE_QUEUE_COUNT: int = 64
@@ -330,9 +329,12 @@ APPEARANCE_HURT_RECOVERY: int = 1 << 2
 APPEARANCE_ALTERNATIVE_EBISUMARU: int = 1 << 3
 APPEARANCE_FROZEN: int = 1 << 4
 APPEARANCE_CARRIED: int = 1 << 5
+APPEARANCE_WEAPON_CHARGE: int = 1 << 6
+APPEARANCE_WEAPON_CHARGE_FULL: int = 1 << 7
 APPEARANCE_MASK: int = (APPEARANCE_SUDDEN_IMPACT | APPEARANCE_MINI_EBISUMARU |
                        APPEARANCE_HURT_RECOVERY | APPEARANCE_ALTERNATIVE_EBISUMARU |
-                       APPEARANCE_FROZEN | APPEARANCE_CARRIED)
+                       APPEARANCE_FROZEN | APPEARANCE_CARRIED |
+                       APPEARANCE_WEAPON_CHARGE | APPEARANCE_WEAPON_CHARGE_FULL)
 _PROJECTILE_SPAWN_LIMITS = {
     "id": (1, 0x7fffffff), "kind": (1, 255),
     "x100": (-1000000000, 1000000000),
@@ -349,7 +351,11 @@ _MOVEMENT_STATE_FIELDS: "tuple[str, ...]" = (
     "rotVelX", "rotVelY", "rotVelZ", "animStep100", "hasAnimStep",
     "collisionDisabled",
     "driveX", "driveZ", "playerEpoch", "interactionSession",
+    "jetVelocity100",
 )
+JET_VELOCITY_100_UNAVAILABLE: int = -32768
+JET_VELOCITY_100_MIN: int = -10000
+JET_VELOCITY_100_MAX: int = 10000
 _POSITION_SEQUENCE_MASK: int = 0x7fffffff
 _POSITION_SEQUENCE_HALF_RANGE: int = 0x40000000
 
@@ -390,6 +396,25 @@ def _bounded_int(value: object, minimum: int, maximum: int, default: int) -> int
     except (TypeError, ValueError, OverflowError):
         return default
     return result if minimum <= result <= maximum else default
+
+
+def _jet_velocity_100(value: object) -> int:
+    """Accept only the bounded native speed sample; never coerce bad types."""
+    return (value if type(value) is int and
+            JET_VELOCITY_100_MIN <= value <= JET_VELOCITY_100_MAX
+            else JET_VELOCITY_100_UNAVAILABLE)
+
+
+def _jet_context_changed(state: dict, payload: dict) -> bool:
+    """A metadata identity/character edge invalidates a prior jet sample."""
+    if ("currentCharacter" in payload and
+            str(payload["currentCharacter"]) != state.get("character", "")):
+        return True
+    for field in ("interactionSession", "playerEpoch"):
+        value = payload.get(field)
+        if type(value) is int and value != state.get(field, 0):
+            return True
+    return False
 
 
 def _normalize_enemy_bits(bits: object) -> "str | None":
@@ -568,6 +593,9 @@ def _merge_client_state(
             _retire_interaction_session(cid, previous_session)
             _clear_movement_state(state)
 
+    if _jet_context_changed(state, payload):
+        state.pop("jetVelocity100", None)
+
     if "currentRoomId" in payload:
         next_room = int(payload["currentRoomId"])
         previous_room = int(state.get("roomId", -1))
@@ -606,9 +634,12 @@ def _merge_client_state(
         state["eb"] = _normalize_enemy_bits(payload["eb"])
     _cache_map_snapshot(state, payload)
     for field in _MOVEMENT_STATE_FIELDS:
-        if field in payload:
+        if field != "jetVelocity100" and field in payload:
             state[field] = int(payload[field])
     if enforce_movement_order or "posX" in payload:
+        state["jetVelocity100"] = (_jet_velocity_100(payload.get("jetVelocity100"))
+                                   if payload.get("action") == 0x9B
+                                   else JET_VELOCITY_100_UNAVAILABLE)
         # Collision bypass belongs to this exact movement sample. Legacy
         # senders omit it and must resume collision rather than inherit a
         # cutscene bypass from an earlier sender version or connection.
@@ -794,6 +825,8 @@ def _replace_all_client_states(states: list) -> None:
                     merged["_positionReceivedMs"] = previous["_positionReceivedMs"]
                 if "appearanceFlags" in previous:
                     merged["appearanceFlags"] = previous["appearanceFlags"]
+                if _jet_context_changed(previous, client_state):
+                    merged.pop("jetVelocity100", None)
             # A fresh handshake already identifies this live connection.
             # Arena events do not require movement to have started, but an
             # older room snapshot must not replace a newer motion session.
@@ -3680,6 +3713,7 @@ def set_position_anim(
     drive_x: int = 0,
     drive_z: int = 0,
     player_epoch: int = 0,
+    jet_velocity_100: int = JET_VELOCITY_100_UNAVAILABLE,
 ) -> bool:
     """
     Broadcast world-space position and the live animation phase to teammates.
@@ -3703,7 +3737,8 @@ def set_position_anim(
         rot_z: Current model Z rotation.
         appearance_flags: Bitmap containing Sudden Impact (bit 0), Mini
             Ebisumaru (bit 1), native hurt recovery (bit 2), and the alternative
-            Ebisumaru skin (bit 3), and player ice freeze (bit 4).
+            Ebisumaru skin (bit 3), player ice freeze (bit 4), carried state
+            (bit 5), and weapon charge active/full (bits 6 and 7).
         velocity_x: Optional final-frame X velocity in world units per second.
         velocity_y: Optional final-frame Y velocity in world units per second.
         velocity_z: Optional final-frame Z velocity in world units per second.
@@ -3721,6 +3756,8 @@ def set_position_anim(
         drive_x, drive_z: Intended horizontal drive, hundredths of world
             units per second. Each axis is bounded to +/-30000.
         player_epoch: Positive local-player lifecycle counter.
+        jet_velocity_100: Native Sasuke jet vertical speed times 100. The
+            unavailable sentinel is omitted from the hot position packet.
 
     Returns True if the packet was sent.
     """
@@ -3805,7 +3842,7 @@ def set_position_anim(
         rot_vel_y = 0
         rot_vel_z = 0
     next_seq = (_position_seq + 1) & 0x7fffffff
-    sent = _send_raw({
+    packet = {
         "type": "MNSG_PLAYER_POS",
         "clientId": _client_id,
         "currentRoomId": _local_room_id,
@@ -3835,7 +3872,12 @@ def set_position_anim(
         "playerEpoch": player_epoch,
         "interactionSession": _interaction_session,
         "quiet": True,
-    })
+    }
+    jet_velocity_100 = _jet_velocity_100(jet_velocity_100)
+    if (_local_character == "Sasuke" and int(action) == 0x9B and
+            jet_velocity_100 != JET_VELOCITY_100_UNAVAILABLE):
+        packet["jetVelocity100"] = jet_velocity_100
+    sent = _send_raw(packet)
     if not sent:
         return False
 
@@ -3885,6 +3927,9 @@ def set_position_anim(
             local["driveZ"] = drive_z
             local["playerEpoch"] = player_epoch
             local["interactionSession"] = _interaction_session
+            local["jetVelocity100"] = packet.get(
+                "jetVelocity100", JET_VELOCITY_100_UNAVAILABLE
+            )
             local["roomId"] = _local_room_id
             identity = (_interaction_session, player_epoch, _local_room_id)
             frozen = bool(appearance_flags & APPEARANCE_FROZEN)
@@ -4244,8 +4289,11 @@ def get_lobby_positions_json() -> str:
       "hp"   – 1 if the player has sent at least one position update, 0 otherwise.
       "t"    – sender monotonic milliseconds, masked to a positive 31-bit value.
       "ap"   – Sudden Impact bit 0, Mini Ebisumaru bit 1, hurt recovery bit 2,
-               alternative Ebisumaru skin bit 3.
+               alternative Ebisumaru skin bit 3, ice freeze bit 4, carried
+               state bit 5, and weapon charge active/full bits 6 and 7.
       "cd"   – 1 while the sender requires cutscene/script collision bypass.
+      "jv"   – Sasuke action 0x9B native jet vertical speed times 100,
+               or -32768 when unavailable.
       "mr"   – gameplay room used by the Japan-map marker, -1 if unavailable.
       "mx","my","mz" – signed fixed-point map position in hundredths.
       "mhp"  – 1 when mr/mx/my/mz form a complete usable map snapshot.
@@ -4324,6 +4372,10 @@ def get_lobby_positions_json() -> str:
                 "cd": 1 if v.get("collisionDisabled", 0) else 0,
                 "dx": int(v.get("driveX", 0)),
                 "dz": int(v.get("driveZ", 0)),
+                "jv": (_jet_velocity_100(v.get("jetVelocity100"))
+                       if has_complete_pos and ch == 2 and
+                       v.get("action") == 0x9B
+                       else JET_VELOCITY_100_UNAVAILABLE),
                 "pe": int(v.get("playerEpoch", 0)),
                 "ps": int(v.get("interactionSession", 0)),
                 "tm": 1 if v.get("teamId", "") == _team_id else 0,

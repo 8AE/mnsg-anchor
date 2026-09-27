@@ -3,6 +3,20 @@
 
 #include "combat/anchor_projectiles.h"
 
+/* Native Fire Ryo kind 0x12 leaves four independently fading particles. */
+#define ANCHOR_FIRE_RYO_TRAIL_COUNT 4
+typedef struct AnchorFireRyoTrail
+{
+    float x, y, z, scale;
+    unsigned short rx, ry, rz;
+    int alpha;
+} AnchorFireRyoTrail;
+
+void anchor_projectile_fire_ryo_trail_step(
+    AnchorFireRyoTrail trails[ANCHOR_FIRE_RYO_TRAIL_COUNT],
+    int flight, int native_tick, float x, float y, float z,
+    unsigned short rx, unsigned short ry, unsigned short rz);
+
 /* Pure native-recipe/material validation, also exercised by host tests. */
 int anchor_projectile_recipe_id(unsigned int model, int family);
 int anchor_projectile_material_decode(unsigned int context,

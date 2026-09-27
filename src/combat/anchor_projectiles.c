@@ -162,6 +162,23 @@ void anchor_projectile_coin_return(void)
     s_coin_task = 0;
 }
 
+/* Fire Ryo uses a separate native coin callback (file_11 kind 0x12).
+ * Its first tick advances timer 0 -> 1 without running collision; capture the
+ * resulting position/velocity at return exactly like the ordinary coin. */
+static void *s_fire_ryo_task;
+RECOMP_HOOK("func_801ECCF0_5A8C00")
+void anchor_projectile_fire_ryo_entry(void *task)
+{
+    s_fire_ryo_task = rdram(task) &&
+        anchor_projectile_capture_first_update(task) ? task : 0;
+}
+RECOMP_HOOK_RETURN("func_801ECCF0_5A8C00")
+void anchor_projectile_fire_ryo_return(void)
+{
+    capture_throw(s_fire_ryo_task);
+    s_fire_ryo_task = 0;
+}
+
 static void *s_charged_task;
 RECOMP_HOOK("func_801EA0D8_5A5FE8")
 void anchor_projectile_charged_entry(void *task)

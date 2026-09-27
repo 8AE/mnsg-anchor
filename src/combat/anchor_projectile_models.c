@@ -1,6 +1,44 @@
 #include "combat/anchor_projectile_models.h"
 #include "player/anchor_remote_model_pool.h"
 
+/* File_11 func_801ED26C/801ED420: spawn one available trail object every
+ * third flying tick, then grow and fade each of the four independently. This
+ * mirrors visual state only; the remote coin never runs collision callbacks. */
+void anchor_projectile_fire_ryo_trail_step(
+    AnchorFireRyoTrail trails[ANCHOR_FIRE_RYO_TRAIL_COUNT],
+    int flight, int native_tick, float x, float y, float z,
+    unsigned short rx, unsigned short ry, unsigned short rz)
+{
+    int i;
+    if (!trails)
+        return;
+    for (i = 0; i < ANCHOR_FIRE_RYO_TRAIL_COUNT; ++i)
+    {
+        if (trails[i].alpha <= 0)
+            continue;
+        trails[i].scale += 0.01f;
+        trails[i].alpha -= 0x1a;
+        if (trails[i].alpha < 0)
+            trails[i].alpha = 0;
+    }
+    if (!flight || native_tick <= 0 || native_tick % 3)
+        return;
+    for (i = 0; i < ANCHOR_FIRE_RYO_TRAIL_COUNT; ++i)
+    {
+        if (trails[i].alpha > 0)
+            continue;
+        trails[i].x = x;
+        trails[i].y = y;
+        trails[i].z = z;
+        trails[i].rx = rx;
+        trails[i].ry = ry;
+        trails[i].rz = rz;
+        trails[i].scale = 0.25f;
+        trails[i].alpha = 0xf0;
+        return;
+    }
+}
+
 /* Native projectile constructors bind these exact model commands. Resource
  * families 0..3 are the character broad files; family 4 is common file 0x80.
  * IDs are table indices, never a received model pointer or asset offset. */
@@ -56,7 +94,48 @@ static const unsigned int s_material_templates[] = {
 #define MATERIAL_DYNAMIC_FIRST 5
 #define MATERIAL_DYNAMIC_END (MATERIAL_DYNAMIC_FIRST + ARRAY_COUNT(s_material_templates) * 8)
 #define MATERIAL_BYTES 32u
-#define MATERIAL_ARENA_BYTES (ANCHOR_PROJECTILE_REMOTE_MAX * 2u * MATERIAL_BYTES)
+#define FIRE_RYO_TRAIL_BANKS 4
+#define FIRE_RYO_EXTRA_TRAIL_OBJECTS (ANCHOR_FIRE_RYO_TRAIL_COUNT - 1)
+#define MATERIAL_ARENA_BYTES \
+    ((ANCHOR_PROJECTILE_REMOTE_MAX * 2u + \
+      FIRE_RYO_TRAIL_BANKS * FIRE_RYO_EXTRA_TRAIL_OBJECTS * 2u) * MATERIAL_BYTES)
+
+extern short D_800C7A72_C8672;
+
+static int current_graphics_bank(void)
+{
+    int bank = D_800C7A72_C8672;
+    return bank >= 0 && bank < 2 ? bank : -1;
+}
+
+static int material_word_offset(int index, int layer, int fire_trail_bank,
+                                int graphics_bank)
+{
+    int material_slot;
+    if (graphics_bank < 0 || graphics_bank > 1 ||
+        index < 0 || index >= ANCHOR_PROJECTILE_REMOTE_MAX / 2 ||
+        layer < 0 || layer > ANCHOR_FIRE_RYO_TRAIL_COUNT)
+        return -1;
+    if (layer > 1)
+    {
+        if (fire_trail_bank < 0 || fire_trail_bank >= FIRE_RYO_TRAIL_BANKS)
+            return -1;
+        material_slot = ANCHOR_PROJECTILE_REMOTE_MAX +
+            fire_trail_bank * FIRE_RYO_EXTRA_TRAIL_OBJECTS + layer - 2;
+    }
+    else
+        material_slot = index * 2 + layer;
+    return (material_slot * 2 + graphics_bank) * 8;
+}
+
+#ifdef ANCHOR_PROJECTILE_MODELS_HOST_TEST
+int anchor_projectile_material_word_offset_for_test(int index, int layer,
+                                                     int fire_trail_bank)
+{
+    return material_word_offset(index, layer, fire_trail_bank,
+                                current_graphics_bank());
+}
+#endif
 
 static unsigned int physical(unsigned int value)
 {
@@ -176,19 +255,22 @@ typedef struct ProjectileSceneResource
 } ProjectileSceneResource;
 extern ProjectileSceneResource D_80167FC0_168BC0[48];
 
-/* Two display records per shot cap this entire renderer at 64 kind-2 objects,
- * including the second kunai/bomb impact layer. No attack actors are created. */
+/* Two display records per ordinary shot; up to four Fire Ryo shots may use
+ * three more records apiece for their four native-style trail particles.
+ * This caps the renderer at 76 kind-2 roots. No attack actors are created. */
 #define PROJECTILE_SLOTS (ANCHOR_PROJECTILE_REMOTE_MAX / 2)
 typedef struct ProjectileSlot
 {
     void *task;
-    void *object[2];
+    void *object[1 + ANCHOR_FIRE_RYO_TRAIL_COUNT];
     AnchorProjectileRemote remote;
     AnchorProjectileMotion motion;
     AnchorCollisionVec3 trail_position;
+    AnchorFireRyoTrail fire_trail[ANCHOR_FIRE_RYO_TRAIL_COUNT];
     unsigned short angles[3];
     unsigned short room;
-    unsigned char active, flip;
+    unsigned char active;
+    signed char fire_trail_bank;
     int trail_age, trail_alpha;
 } ProjectileSlot;
 
@@ -242,9 +324,22 @@ static int owned_task(const ProjectileSlot *slot)
 
 static int owned_object(const ProjectileSlot *slot, int index)
 {
-    return owned_task(slot) && rdram(slot->object[index]) &&
-           *(void **)((unsigned char *)slot->task + 0x18) == slot->object[0] &&
-           (!index || *(void **)slot->object[0] == slot->object[1]);
+    void *object;
+    int i;
+    if (!owned_task(slot) || index < 0 ||
+        index > ANCHOR_FIRE_RYO_TRAIL_COUNT ||
+        !rdram(slot->object[index]))
+        return 0;
+    object = *(void **)((unsigned char *)slot->task + 0x18);
+    for (i = 0; i <= index; ++i)
+    {
+        if (!rdram(object))
+            return 0;
+        if (object == slot->object[index])
+            return 1;
+        object = *(void **)object;
+    }
+    return 0;
 }
 
 static unsigned char *resident(unsigned int file)
@@ -258,7 +353,7 @@ static unsigned char *resident(unsigned int file)
 static void hide(ProjectileSlot *slot)
 {
     int i;
-    for (i = 0; i < 2; ++i)
+    for (i = 0; i <= ANCHOR_FIRE_RYO_TRAIL_COUNT; ++i)
         if (owned_object(slot, i))
         {
             unsigned char *object = slot->object[i];
@@ -269,13 +364,18 @@ static void hide(ProjectileSlot *slot)
 
 static void clear_slot(ProjectileSlot *slot, int retain)
 {
+    int i;
     hide(slot);
     if (!retain || !owned_task(slot))
     {
         slot->task = 0;
-        slot->object[0] = slot->object[1] = 0;
+        for (i = 0; i <= ANCHOR_FIRE_RYO_TRAIL_COUNT; ++i)
+            slot->object[i] = 0;
     }
     slot->active = 0;
+    slot->fire_trail_bank = -1;
+    for (i = 0; i < ANCHOR_FIRE_RYO_TRAIL_COUNT; ++i)
+        slot->fire_trail[i].alpha = 0;
 }
 
 void anchor_projectile_models_reset(void)
@@ -339,7 +439,7 @@ void anchor_projectile_models_load_resources(void)
 
 static int family_for_kind(int kind)
 {
-    if (kind <= 2) return 0;
+    if (kind <= 2 || kind == 0x12) return 0;
     if (kind == 0x0c || kind == 0x0d) return 1;
     if (kind >= 0x17 && kind <= 0x19) return 3;
     return 2;
@@ -347,10 +447,12 @@ static int family_for_kind(int kind)
 
 static int ensure_task(ProjectileSlot *slot)
 {
+    int i;
     if (!owned_task(slot))
     {
         slot->task = 0;
-        slot->object[0] = slot->object[1] = 0;
+        for (i = 0; i <= ANCHOR_FIRE_RYO_TRAIL_COUNT; ++i)
+            slot->object[i] = 0;
     }
     if (!slot->task)
         slot->task = func_80034E08_35A08(s_owner, projectile_task_update, 0);
@@ -394,7 +496,57 @@ static void select_draw(const ProjectileSlot *slot, int layer, ProjectileDraw *d
     const AnchorProjectileMotion *m = &slot->motion;
     int flight = m->phase == ANCHOR_SHOT_FLIGHT || m->phase == ANCHOR_SHOT_RETURN;
     initialize_draw(slot, draw);
-    if (m->kind == 1)
+    if (m->kind == 0x12)
+    {
+        if (layer)
+        {
+            const AnchorFireRyoTrail *trail = &slot->fire_trail[layer - 1];
+            if (trail->alpha > 0)
+            {
+                draw->model = 0x4900b878u;
+                draw->mode = 10;
+                draw->material = 38; /* 80204CA8 env wrapper, style 1. */
+                draw->env_rgba = 0xf50d0000u | (unsigned int)trail->alpha;
+                draw->texture = 0x09006cf0u;
+                draw->scale = trail->scale;
+                draw->position.x = trail->x;
+                draw->position.y = trail->y;
+                draw->position.z = trail->z;
+                draw->angles[0] = trail->rx;
+                draw->angles[1] = trail->ry;
+                draw->angles[2] = trail->rz;
+            }
+        }
+        else if (flight)
+        {
+            draw->model = 0x49009498u;
+            draw->mode = 2;
+            draw->texture = 0x0a000980u;
+        }
+        else
+        {
+            static const unsigned int impact_textures[] = {
+                0x0a008980u, 0x0a009980u, 0x0a00a980u,
+                0x0a00b980u, 0x0a00c980u, 0x0a00d980u,
+                0x0a00e980u, 0x0a00f980u, 0x0a010980u,
+                0x0a011980u
+            };
+            int texture_index = m->phase_age / 2;
+            if (texture_index > 9)
+                texture_index = 9;
+            draw->model = 0x49002790u;
+            draw->family = 4;
+            draw->mode = 7;
+            draw->material = 6; /* Native 802049C0 env wrapper, style 1. */
+            draw->env_rgba = (unsigned int)m->alpha;
+            draw->texture = impact_textures[texture_index];
+            draw->position.x -= m->velocity.x;
+            draw->position.y -= m->velocity.y + 15.0f;
+            draw->position.z -= m->velocity.z;
+            draw->angles[0] = draw->angles[1] = draw->angles[2] = 0x8000;
+        }
+    }
+    else if (m->kind == 1)
     {
         if (!layer)
         {
@@ -500,11 +652,13 @@ static void select_draw(const ProjectileSlot *slot, int layer, ProjectileDraw *d
     }
 }
 
-static void draw_object(ProjectileSlot *slot, int index, int layer, const ProjectileDraw *draw)
+static void draw_object(ProjectileSlot *slot, int index, int layer,
+                        int graphics_bank, const ProjectileDraw *draw)
 {
     unsigned char *object = slot->object[layer];
     unsigned int material = 0;
     unsigned int *commands;
+    int material_offset;
     float frame = draw->frame;
     if (!owned_object(slot, layer))
         return;
@@ -519,7 +673,15 @@ static void draw_object(ProjectileSlot *slot, int index, int layer, const Projec
         material = 0x8006d920u | ((unsigned int)(draw->material - 1) << 29);
     else if (draw->material >= MATERIAL_DYNAMIC_FIRST)
     {
-        commands = s_material_arena + ((index * 2 + layer) * 2 + slot->flip) * 8;
+        material_offset = material_word_offset(index, layer,
+            slot->fire_trail_bank, graphics_bank);
+        if (material_offset < 0)
+        {
+            object[0x64] |= 1u;
+            *(unsigned int *)(object + 0x2c) = 0;
+            return;
+        }
+        commands = s_material_arena + material_offset;
         if (!anchor_projectile_material_build(draw->material, draw->prim_rgb, draw->env_rgba, commands))
             return;
         material = (unsigned int)(unsigned long)commands |
@@ -564,16 +726,23 @@ static void draw_object(ProjectileSlot *slot, int index, int layer, const Projec
 static void render_slot(ProjectileSlot *slot, int index)
 {
     int layer;
+    int graphics_bank = current_graphics_bank();
+    int layers = slot->motion.kind == 0x12 ?
+        1 + ANCHOR_FIRE_RYO_TRAIL_COUNT : 2;
     ProjectileDraw draw;
-    slot->flip ^= 1u;
-    for (layer = 0; layer < 2; ++layer)
+    if (graphics_bank < 0)
+    {
+        hide(slot);
+        return;
+    }
+    for (layer = 0; layer < layers; ++layer)
     {
         select_draw(slot, layer, &draw);
         if (draw.model && !slot->object[layer])
             slot->object[layer] = func_8000DBF0_E7F0(slot->task, 0, 0,
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         if (slot->object[layer])
-            draw_object(slot, index, layer, &draw);
+            draw_object(slot, index, layer, graphics_bank, &draw);
     }
 }
 
@@ -665,6 +834,21 @@ static void simulate_slot(ProjectileSlot *slot)
         slot->trail_age = 0;
         slot->trail_alpha = 240;
     }
+    if (m->kind == 0x12)
+    {
+        if (m->phase == ANCHOR_SHOT_FLIGHT)
+        {
+            float direction[3] = {m->velocity.x, m->velocity.y, m->velocity.z};
+            if (direction[0] * direction[0] + direction[1] * direction[1] +
+                direction[2] * direction[2] > 0.0001f)
+                func_8001DB04_1E704(slot->angles, direction, 0,
+                    (unsigned short)((m->age + 1) * 0x80 & 0x3ff), 0);
+        }
+        anchor_projectile_fire_ryo_trail_step(slot->fire_trail,
+            m->phase == ANCHOR_SHOT_FLIGHT, m->age + 1,
+            m->position.x, m->position.y, m->position.z,
+            slot->angles[0], slot->angles[1], slot->angles[2]);
+    }
 }
 
 void anchor_projectile_models_tick(void *owner)
@@ -700,7 +884,7 @@ void anchor_projectile_models_tick(void *owner)
 int anchor_projectile_models_spawn(const AnchorProjectileRemote *remote, void *owner)
 {
     ProjectileSlot *slot = 0;
-    int i, index = 0;
+    int i, index = 0, trail_bank = -1;
     if (!remote || !anchor_projectile_spawn_valid(&remote->spawn) ||
         !anchor_projectile_kind_supported(remote->spawn.kind) || remote->cid <= 0 ||
         remote->session <= 0 || remote->epoch <= 0 || remote->age_ms < 0 || remote->age_ms > 750)
@@ -722,6 +906,25 @@ int anchor_projectile_models_spawn(const AnchorProjectileRemote *remote, void *o
             index = i;
         }
     }
+    if (remote->spawn.kind == 0x12)
+    {
+        int bank;
+        for (bank = 0; bank < FIRE_RYO_TRAIL_BANKS; ++bank)
+        {
+            int used = 0;
+            for (i = 0; i < PROJECTILE_SLOTS; ++i)
+                if (s_slots[i].active && s_slots[i].motion.kind == 0x12 &&
+                    s_slots[i].fire_trail_bank == bank)
+                    used = 1;
+            if (!used)
+            {
+                trail_bank = bank;
+                break;
+            }
+        }
+        if (trail_bank < 0)
+            return 0;
+    }
     if (!slot || !ensure_task(slot))
         return 0;
     slot->remote = *remote;
@@ -732,6 +935,9 @@ int anchor_projectile_models_spawn(const AnchorProjectileRemote *remote, void *o
     slot->angles[1] = (unsigned short)remote->spawn.ry;
     slot->angles[2] = (unsigned short)remote->spawn.rz;
     slot->trail_age = slot->trail_alpha = 0;
+    slot->fire_trail_bank = (signed char)trail_bank;
+    for (i = 0; i < ANCHOR_FIRE_RYO_TRAIL_COUNT; ++i)
+        slot->fire_trail[i].alpha = 0;
     slot->active = 1;
     /* Receiver-local queue age compensates time spent waiting for peer bind.
      * Network transit time is unknown and is not fabricated from sender clocks. */

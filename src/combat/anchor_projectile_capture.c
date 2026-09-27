@@ -2,7 +2,7 @@
 
 int anchor_projectile_capture_kind(int kind)
 {
-    return kind == 1 || kind == 2 ||
+    return kind == 1 || kind == 2 || kind == 0x12 ||
            (kind >= 0xc && kind <= 0x10) ||
            (kind >= 0x17 && kind <= 0x1b);
 }
@@ -16,7 +16,7 @@ int anchor_projectile_capture_first_update(const void *pointer)
     timer = *(const unsigned short *)(task + 0x62);
     switch (task[0x64])
     {
-        case 1: case 2:
+        case 1: case 2: case 0x12:
             return timer == 0;
         case 0xc: case 0xd: case 0xe: case 0xf: case 0x10:
             return 1;
@@ -62,7 +62,7 @@ int anchor_projectile_capture_fields(const void *task_pointer,
     out->kind = task[0x64];
     switch (out->kind)
     {
-        case 1: case 2: case 0x17: case 0x18: case 0x19:
+        case 1: case 2: case 0x12: case 0x17: case 0x18: case 0x19:
         case 0x1a: case 0x1b:
             if (task[0x60] != 0)
                 return 0; /* The first update already changed into impact. */

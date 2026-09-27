@@ -128,6 +128,33 @@ static void test_coin_ttl_and_native_clip_completion(void)
     assert(!motion.alive); /* Missing frame metadata still has a finite life. */
 }
 
+static void test_fire_ryo_flight_and_impact(void)
+{
+    AnchorProjectileSpawn spawn = shot(0x12);
+    AnchorProjectileMotion motion;
+    AnchorCollisionVec3 impact = {4, 5, 6};
+    int i;
+    assert(anchor_projectile_kind_supported(0x12));
+    assert(anchor_projectile_motion_init(&motion, &spawn));
+    assert(motion.ttl == 59);
+    for (i = 0; i < 58; ++i)
+        anchor_projectile_motion_step(&motion, 0);
+    assert(motion.alive && motion.ttl == 1);
+    anchor_projectile_motion_step(&motion, 0);
+    assert(!motion.alive);
+
+    assert(anchor_projectile_motion_init(&motion, &spawn));
+    anchor_projectile_motion_step(&motion, &impact);
+    assert(motion.phase == ANCHOR_SHOT_IMPACT && motion.alpha == 255);
+    near(motion.scale, 0.2f);
+    at(motion.position, 4, 5, 6);
+    anchor_projectile_motion_step(&motion, 0);
+    assert(motion.alpha == 239 && motion.phase_age == 1);
+    for (i = 1; i < 16; ++i)
+        anchor_projectile_motion_step(&motion, 0);
+    assert(!motion.alive && motion.alpha == 0);
+}
+
 static void test_yae_acceleration_clamp_and_impact_clip(void)
 {
     int kind;
@@ -236,6 +263,7 @@ int main(void)
     test_bomb_ballistics_growth_and_fade();
     test_kunai_constant_motion_and_blue_fade();
     test_coin_ttl_and_native_clip_completion();
+    test_fire_ryo_flight_and_impact();
     test_yae_acceleration_clamp_and_impact_clip();
     test_charged_reversal_and_impact_return();
     test_camera_flash_and_invalid_inputs();

@@ -11,6 +11,10 @@
 #define ANCHOR_APPEARANCE_ALTERNATIVE_EBISUMARU (1 << 3)
 #define ANCHOR_APPEARANCE_FROZEN (1 << 4)
 #define ANCHOR_APPEARANCE_CARRIED (1 << 5)
+/* Native selector 0x11 charge for Goemon, Ebisumaru and Sasuke weapons. */
+#define ANCHOR_APPEARANCE_WEAPON_CHARGE (1 << 6)
+#define ANCHOR_APPEARANCE_WEAPON_CHARGE_FULL (1 << 7)
+#define ANCHOR_REMOTE_JET_SPEED_UNAVAILABLE (-32768)
 
 /* An alternative appearance change replaces both segment bases. */
 static inline int anchor_player_model_remote_rebind_required(
@@ -92,6 +96,8 @@ typedef struct AnchorPlayerModelRemote
     int collision_disabled;
     int drive_x;
     int drive_z;
+    /* Native Sasuke task+0xA4 vertical speed, scaled by 100 for action 0x9B. */
+    int jet_velocity_100;
     int player_epoch;
     int interaction_session;
     int same_team;
