@@ -134,11 +134,6 @@ extern void *D_801FC604_5B8514;
  * contains position, rotation, current animation frame, and model resources. */
 extern PlayerObject *D_801FC60C_5B851C;
 
-/* Camera offset and radius maintained by the game. They are read only to
- * project the existing remote-player nameplates. */
-extern Vec3f D_8020D1C0_5C90D0;
-extern float D_8020D1D0_5C90E0;
-
 /* Resolve the active model pointer and return its animation frame count.
  * Local counts are transmitted for normalized phase mapping; remote counts
  * bound the selected cutscene model's frame field. */
@@ -154,7 +149,6 @@ static AnchorPlayerModelRemote *s_remote_models;
 static int s_remote_capacity;
 static int s_smoothing_capacity;
 static int s_model_capacity;
-static int s_nameplate_count;
 static int s_remote_count;
 static int s_state_send_timer;
 static int s_position_keepalive_timer;
@@ -273,6 +267,7 @@ void anchor_load_remote_cutscene_resources(void)
     anchor_player_freeze_visual_load_resources();
     anchor_dungeon_maps_load_resources();
     anchor_world_pickup_effects_load_resources();
+    anchor_nameplates_load_resources();
     anchor_render_scratch_load_resources();
 }
 
@@ -958,35 +953,6 @@ static void refresh_lobby(void)
         recomp_free(json);
 }
 
-static int render_remote_nameplate(int slot_index, const RemotePlayer *remote,
-                                   const PlayerObject *local_obj)
-{
-    AnchorNameplateCamera camera;
-    AnchorNameplatePlayer nameplate_remote;
-
-    if (!is_rdram_pointer(local_obj) || !remote)
-    {
-        anchor_nameplates_hide_slot(slot_index);
-        return 0;
-    }
-    camera.player_x = local_obj->x;
-    camera.player_y = local_obj->y;
-    camera.player_z = local_obj->z;
-    /* Read the engine-maintained camera orbit only for nameplate projection so
-     * the cutscene model renderer does not create a second camera state. */
-    camera.camera_x = D_8020D1C0_5C90D0.x;
-    camera.camera_y = D_8020D1C0_5C90D0.y;
-    camera.camera_z = D_8020D1C0_5C90D0.z;
-    camera.camera_radius = D_8020D1D0_5C90E0;
-    nameplate_remote.x = remote->x;
-    nameplate_remote.y = remote->y;
-    nameplate_remote.z = remote->z;
-    nameplate_remote.ch = remote->ch;
-    nameplate_remote.same_team = remote->same_team;
-    nameplate_remote.name = remote->name;
-    return anchor_nameplates_render_slot(slot_index, &nameplate_remote, &camera);
-}
-
 static void update_remote_cutscene_models(PlayerObject *local_obj)
 {
     /* Use the live player task only as the owner of independent remote render
@@ -994,9 +960,6 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
     void *owner_task = D_801FC604_5B8514;
     int remote_index;
     int model_count = 0;
-    int slot_index = 0;
-    int visible_nameplates = 0;
-    int i;
 
     if (!is_rdram_pointer(local_obj) || !is_rdram_pointer(owner_task))
     {
@@ -1004,10 +967,6 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
          * handles without dereferencing or deleting that stale external task. */
         anchor_player_models_reset();
         clear_remote_smoothing();
-        for (i = 0; i < s_nameplate_count; ++i)
-            anchor_nameplates_hide_slot(i);
-        s_nameplate_count = 0;
-        anchor_nameplates_set_context_visible(0);
         return;
     }
     if (!anchor_is_connected())
@@ -1017,10 +976,6 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
         /* An empty update hides and retires all remote objects. Their reusable
          * child tasks remain owned by the player task until engine teardown. */
         anchor_player_models_update(0, 0, owner_task);
-        for (i = 0; i < s_nameplate_count; ++i)
-            anchor_nameplates_hide_slot(i);
-        s_nameplate_count = 0;
-        anchor_nameplates_set_context_visible(0);
         return;
     }
 
@@ -1087,18 +1042,9 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
             model->player_epoch = smoothed_remote.player_epoch;
             model->interaction_session = smoothed_remote.interaction_session;
             model->same_team = smoothed_remote.same_team;
+            __builtin_memcpy(model->name, smoothed_remote.name,
+                             sizeof(model->name));
         }
-
-        /* Contact can constrain the displayed model away from its predicted
-         * network target. Keep the nameplate on the actual visible body. */
-        if (!(smoothed_remote.appearance_flags & ANCHOR_APPEARANCE_FROZEN) &&
-            !smoothed_remote.collision_disabled &&
-            !anchor_remote_collision_is_scripted())
-            anchor_player_models_get_position(smoothed_remote.cid,
-                &smoothed_remote.x, &smoothed_remote.y, &smoothed_remote.z);
-        visible_nameplates +=
-            render_remote_nameplate(slot_index, &smoothed_remote, local_obj);
-        slot_index++;
     }
     end_remote_smoothing_frame();
 
@@ -1106,10 +1052,6 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
      * objects. This call never runs playable constructors or behavior code. */
     anchor_player_models_update(s_remote_models, model_count,
                                 owner_task);
-    for (i = slot_index; i < s_nameplate_count; ++i)
-        anchor_nameplates_hide_slot(i);
-    s_nameplate_count = slot_index;
-    anchor_nameplates_set_context_visible(visible_nameplates > 0);
 }
 
 /* Run after the normal game frame so published and displayed state both use

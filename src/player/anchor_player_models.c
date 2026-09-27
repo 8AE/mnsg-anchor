@@ -63,6 +63,7 @@
 #include "utils/array_utils.h"
 #include "player/alternative_ebisumaru/anchor_alternative_model.h"
 #include "utils/texture_cache.h"
+#include "ui/anchor_nameplates.h"
 
 #define REMOTE_PLAYER_ACTION_IDLE 0
 #define REMOTE_PLAYER_ACTION_MAX 0xe8
@@ -863,6 +864,9 @@ static void clear_slot_state(RemoteModelSlot *slot, int preserve_live_task)
     void *retained_object = 0;
     int i;
 
+    if (slot->active)
+        anchor_nameplates_hide(slot->cid);
+
     anchor_player_effects_reset(&slot->effects,
                                 is_linked_remote_task(slot->task));
     anchor_remote_smoke_reset(&slot->smoke,
@@ -918,6 +922,7 @@ void anchor_player_models_reset(void)
     for (i = 0; i < s_slot_capacity; ++i)
         clear_slot_state(&s_slots[i], 0);
     s_owner_task = 0;
+    anchor_nameplates_reset();
 }
 
 static RemoteModelSlot *find_slot(int cid)
@@ -1014,6 +1019,18 @@ int anchor_player_models_is_remote_object(const void *object)
     for (i = 0; i < s_slot_capacity; ++i)
         if (s_slots[i].active && s_slots[i].object == object &&
             is_linked_remote_task(s_slots[i].task))
+            return 1;
+    return 0;
+}
+
+int anchor_player_models_is_remote_pair(const void *task, const void *object)
+{
+    int i;
+    if (!task || !object || s_owner_task != D_801FC604_5B8514)
+        return 0;
+    for (i = 0; i < s_slot_capacity; ++i)
+        if (s_slots[i].active && s_slots[i].task == task &&
+            s_slots[i].object == object && is_linked_remote_task(task))
             return 1;
     return 0;
 }
@@ -2404,6 +2421,25 @@ static void suspend_slot_effects(RemoteModelSlot *slot)
     anchor_remote_smoke_suspend(&slot->smoke);
 }
 
+static void sync_slot_nameplate(RemoteModelSlot *slot,
+                                const AnchorPlayerModelRemote *remote)
+{
+    float scale = *(const float *)((const unsigned char *)slot->object + 0x20);
+    float height;
+    if (!(scale > 0.0f && scale < 1.0f))
+        scale = REMOTE_MODEL_SCALE;
+    height = (float)D_801FC668_5B8578[remote->ch] * scale;
+    if (remote->appearance_flags & ANCHOR_APPEARANCE_FROZEN)
+    {
+        float cube_top = 200.0f * scale;
+        if (height < cube_top)
+            height = cube_top;
+    }
+    anchor_nameplates_sync(slot->cid, remote->name, remote->same_team,
+                           slot->task, slot->object, slot->pending_room,
+                           height);
+}
+
 static void remote_model_task_update(void *task, void *object)
 {
     RemoteModelSlot *slot = 0;
@@ -2430,6 +2466,7 @@ static void remote_model_task_update(void *task, void *object)
         s_owner_task != D_801FC604_5B8514)
     {
         hide_object(slot->object);
+        anchor_nameplates_hide(slot->cid);
         slot->pending_valid = 0;
         slot->bound_ch = -1;
         slot->bound_action = -1;
@@ -2451,6 +2488,7 @@ static void remote_model_task_update(void *task, void *object)
     if (remote->cid <= 0 || ch < 0 || ch >= CHARACTER_COUNT)
     {
         hide_object(slot->object);
+        anchor_nameplates_hide(slot->cid);
         slot->bound_ch = -1;
         slot->bound_action = -1;
         slot->bound_sudden_impact = 0;
@@ -2500,6 +2538,7 @@ static void remote_model_task_update(void *task, void *object)
             slot->bound_alternative = 0;
         }
         update_slot_hidden_pose(slot, remote);
+        anchor_nameplates_hide(slot->cid);
         suspend_slot_effects(slot);
         return;
     }
@@ -2522,6 +2561,7 @@ static void remote_model_task_update(void *task, void *object)
                 slot->bound_sudden_impact = 0;
                 slot->bound_alternative = 0;
                 update_slot_hidden_pose(slot, remote);
+                anchor_nameplates_hide(slot->cid);
                 suspend_slot_effects(slot);
                 return;
             }
@@ -2538,6 +2578,7 @@ static void remote_model_task_update(void *task, void *object)
                                     remote, slot->pending_room);
         anchor_remote_smoke_apply(&slot->smoke, slot->task, slot->object,
                                   remote, slot->pending_room);
+        sync_slot_nameplate(slot, remote);
         return;
     }
 
@@ -2546,6 +2587,7 @@ static void remote_model_task_update(void *task, void *object)
                                 remote, slot->pending_room);
     anchor_remote_smoke_apply(&slot->smoke, slot->task, slot->object,
                               remote, slot->pending_room);
+    sync_slot_nameplate(slot, remote);
 }
 
 /* ------------------------------------------------------------------ */

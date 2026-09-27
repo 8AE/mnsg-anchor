@@ -1,32 +1,22 @@
 #ifndef ANCHOR_NAMEPLATES_H
 #define ANCHOR_NAMEPLATES_H
 
-typedef struct AnchorNameplateCamera
-{
-    float player_x;
-    float player_y;
-    float player_z;
-    float camera_x;
-    float camera_y;
-    float camera_z;
-    float camera_radius;
-} AnchorNameplateCamera;
+/* Reserve scene-lifetime, renderer-addressable plate data after stage assets
+ * are loaded and before the render scratch pool consumes the remaining arena. */
+void anchor_nameplates_load_resources(void);
 
-typedef struct AnchorNameplatePlayer
-{
-    float x;
-    float y;
-    float z;
-    int ch;
-    int same_team;
-    const char *name;
-} AnchorNameplatePlayer;
+/* Forget native handles when the player owner or stage is replaced. */
+void anchor_nameplates_reset(void);
 
-void anchor_nameplates_hide_slot(int slot_index);
-void anchor_nameplates_set_context_visible(int visible);
-int anchor_nameplates_render_slot(
-    int slot_index,
-    const AnchorNameplatePlayer *remote,
-    const AnchorNameplateCamera *camera);
+/* Hide a current peer's plate without touching an unrelated reused task. */
+void anchor_nameplates_hide(int cid);
+
+/* Called after the remote child task has finalized its displayed body pose.
+ * The plate follows that exact render object and is submitted only if it is
+ * visible in the current room. height is the rendered body's top above its
+ * origin; the plate adds its own half-height and clearance. */
+void anchor_nameplates_sync(int cid, const char *name, int same_team,
+                            void *task, const void *body, unsigned short room,
+                            float height);
 
 #endif

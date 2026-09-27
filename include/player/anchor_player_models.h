@@ -101,6 +101,7 @@ typedef struct AnchorPlayerModelRemote
     int player_epoch;
     int interaction_session;
     int same_team;
+    char name[32];
 } AnchorPlayerModelRemote;
 
 typedef struct AnchorPlayerHitTarget
@@ -133,6 +134,9 @@ int anchor_player_models_get_sound_position(int cid, int session, int epoch,
 int anchor_player_models_is_local_sound_task(const void *task);
 int anchor_player_models_capacity(void);
 int anchor_player_models_is_remote_object(const void *object);
+/* Validate a retained task and body together before another visual module
+ * dereferences its own child object after owner or task-pool reuse. */
+int anchor_player_models_is_remote_pair(const void *task, const void *object);
 /* True for an active remote slot currently bound to the alternative mesh graft. */
 int anchor_player_models_is_alternative_object(const void *object);
 const void *anchor_player_models_resolve_render_address(const void *object,
