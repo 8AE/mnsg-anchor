@@ -10,6 +10,7 @@ extern void *D_801FC604_5B8514;
 extern void *D_801FC60C_5B851C;
 extern unsigned short D_800C7AB2;
 extern unsigned int D_8015C604;
+extern unsigned int D_8015C5DC_15D1DC;
 extern void func_801E54A8_5A13B8(void *player, void *task);
 extern void func_801E55A0_5A14B0(void *player);
 extern void func_801DACDC_596BEC(void *player, unsigned char action);
@@ -26,6 +27,8 @@ extern void *func_8002C9D4_2D5D4(void *out, float x, float y, float z,
 #define CUBE_FLIGHT_SEGMENT 32.0f
 #define CUBE_FLIGHT_SPEED_LIMIT 128.0f
 #define CUBE_GRAVITY 0.6666666269302368f
+#define CUBE_SUDDEN_ARC_SCALE 1.224744871391589f /* sqrt(1.5) */
+#define CUBE_SUDDEN_RANGE_SCALE 1.632993161855452f /* 2 / sqrt(1.5) */
 #define CUBE_IMPACT_ATTACK_FRAMES 5
 #define CUBE_MAX_RAY_SAMPLES 7
 #define CUBE_INTERACT_STACK 8
@@ -729,15 +732,52 @@ void anchor_player_cube_placement_end(void)
  * from player task +0x68..+0x70, adds (0, 5, 3), then rotates it by the
  * player object's angles. Reuse that vector without running bomb task logic. */
 static void *s_throw_task;
+static unsigned char s_throw_sudden_impact;
+
+static int valid_launch_velocity(float vx, float vy, float vz)
+{
+    return coordinate(vx) && coordinate(vy) && coordinate(vz) &&
+        vx * vx + vy * vy + vz * vz <=
+            CUBE_FLIGHT_SPEED_LIMIT * CUBE_FLIGHT_SPEED_LIMIT;
+}
+
+static float sudden_impact_horizontal_scale(float vy, float height)
+{
+    float boosted_vy, normal_flight, boosted_flight, root;
+    /* With a level landing surface at the carrier's feet, range is speed
+     * times flight duration. The cube starts above those feet, so a fixed
+     * horizontal multiplier would undershoot the requested double range. */
+    if (!(vy > 0.0f) || !(height > 0.0f) || !coordinate(height))
+        return vy > 0.0f ? CUBE_SUDDEN_RANGE_SCALE : 2.0f;
+    boosted_vy = vy * CUBE_SUDDEN_ARC_SCALE;
+    root = __builtin_sqrtf(vy * vy + 2.0f * CUBE_GRAVITY * height);
+    normal_flight = vy + root;
+    boosted_flight = boosted_vy + __builtin_sqrtf(
+        boosted_vy * boosted_vy + 2.0f * CUBE_GRAVITY * height);
+    if (!(boosted_flight > 0.0f))
+        return CUBE_SUDDEN_RANGE_SCALE;
+    return 2.0f * normal_flight / boosted_flight;
+}
+
 RECOMP_HOOK("func_801E55D4_5A14E4")
 void anchor_player_cube_throw_begin(void *player)
 {
+    void *work;
     s_throw_task = player == s_carrier.player && s_carrier.phase == 2 &&
                    held_task_is_ours() ? s_carrier.task : 0;
+    s_throw_sudden_impact = 0;
+    if (!s_throw_task || (D_8015C5DC_15D1DC & 0xffu) != 0)
+        return;
+    work = *(void **)((unsigned char *)player + 0x5c);
+    if (work && read_byte(work, 0x84) == 1)
+        s_throw_sudden_impact = 1;
 }
 RECOMP_HOOK_RETURN("func_801E55D4_5A14E4")
 void anchor_player_cube_throw_end(void)
 {
+    unsigned char sudden_impact = s_throw_sudden_impact;
+    float base_vx, base_vy, base_vz;
+    s_throw_sudden_impact = 0;
     if (!s_throw_task || s_throw_task != s_carrier.task ||
         !anchor_player_freeze_visual_owns_task(s_throw_task) ||
         !s_carrier.object)
@@ -759,15 +799,34 @@ void anchor_player_cube_throw_end(void)
         *(unsigned short *)((unsigned char *)D_801FC60C_5B851C + 0x16),
         *(unsigned short *)((unsigned char *)D_801FC60C_5B851C + 0x18),
         &s_carrier.vx, &s_carrier.vy, &s_carrier.vz);
-    if (!coordinate(s_carrier.vx) || !coordinate(s_carrier.vy) ||
-        !coordinate(s_carrier.vz) ||
-        s_carrier.vx * s_carrier.vx + s_carrier.vy * s_carrier.vy +
-            s_carrier.vz * s_carrier.vz >
-                CUBE_FLIGHT_SPEED_LIMIT * CUBE_FLIGHT_SPEED_LIMIT)
+    if (!valid_launch_velocity(s_carrier.vx, s_carrier.vy, s_carrier.vz))
     {
         cancel_carrier();
         s_throw_task = 0;
         return;
+    }
+    if (sudden_impact)
+    {
+        base_vx = s_carrier.vx;
+        base_vy = s_carrier.vy;
+        base_vz = s_carrier.vz;
+        float bottom = read_float(s_carrier.object, 0xc) +
+            CUBE_CARRY_LIFT * s_carrier.scale - 100.0f * s_carrier.scale;
+        float height = bottom - read_float(D_801FC60C_5B851C, 0xc);
+        float horizontal_scale =
+            sudden_impact_horizontal_scale(s_carrier.vy, height);
+        s_carrier.vx *= horizontal_scale;
+        s_carrier.vz *= horizontal_scale;
+        if (s_carrier.vy > 0.0f)
+            s_carrier.vy *= CUBE_SUDDEN_ARC_SCALE;
+        /* A strong native throw can already be near the collision sweep cap.
+         * Keep that valid throw when the extra boost would exceed the cap. */
+        if (!valid_launch_velocity(s_carrier.vx, s_carrier.vy, s_carrier.vz))
+        {
+            s_carrier.vx = base_vx;
+            s_carrier.vy = base_vy;
+            s_carrier.vz = base_vz;
+        }
     }
     /* Throw setup writes a fresh hand-height pose after the final held frame.
      * Raise this launch origin by the same amount as the carried cube. */

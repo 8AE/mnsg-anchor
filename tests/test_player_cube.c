@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -19,6 +20,7 @@ void *D_801FC604_5B8514;
 void *D_801FC60C_5B851C;
 unsigned short D_800C7AB2;
 unsigned int D_8015C604;
+unsigned int D_8015C5DC_15D1DC;
 static MockTask player, work, visual_task, visual_object, player_object;
 static int self_id, frozen, visual_active, projected, sent_count;
 static int last_op, last_target, last_carry, release_count, action_count;
@@ -197,6 +199,7 @@ static void setup(void)
     player.bytes[0xcc] = 7;
     D_800C7AB2 = 10;
     D_8015C604 = 3;
+    D_8015C5DC_15D1DC = 0;
     self_id = 1;
     visual_active = frozen = projected = sent_count = 0;
     release_count = action_count = thaw_count = shatter_count = mock_hit =
@@ -207,6 +210,130 @@ static void setup(void)
     mock_owner_half = 50.0f;
     mock_owner_height = mock_owner_depth = 100.0f;
     rotate_count = 0;
+    s_throw_task = 0;
+    s_throw_sudden_impact = 0;
+}
+
+static void assert_close(float actual, float expected)
+{
+    assert(fabsf(actual - expected) < 0.001f);
+}
+
+static void grant_cube_to_carrier(void);
+
+static void throw_cube_with_marker(unsigned int character,
+                                   unsigned char marker)
+{
+    setup();
+    grant_cube_to_carrier();
+    D_8015C5DC_15D1DC = character;
+    work.bytes[0x84] = marker;
+    *(float *)(player.bytes + 0x68) = 2.0f;
+    *(float *)(player.bytes + 0x6c) = 1.0f;
+    *(float *)(player.bytes + 0x70) = 4.0f;
+    *(unsigned short *)(player_object.bytes + 0x16) = 256;
+    *(float *)(visual_object.bytes + 0xc) = 10.0f;
+    anchor_player_cube_throw_begin(player.bytes);
+    func_801E55A0_5A14B0(player.bytes);
+    anchor_player_cube_throw_end();
+    assert(s_carrier.phase == 3 && rotate_count == 1);
+}
+
+static void test_sudden_impact_throw_gate_and_arc(void)
+{
+    float normal_vy = 6.0f;
+    float normal_height = 10.0f + CUBE_CARRY_LIFT - 100.0f;
+    float normal_time = (normal_vy + sqrtf(normal_vy * normal_vy +
+        2.0f * CUBE_GRAVITY * normal_height)) / CUBE_GRAVITY;
+    float strong_time, range_ratio;
+    int character, marker;
+
+    for (character = 0; character < 4; ++character)
+    {
+        for (marker = 0; marker <= 2; ++marker)
+        {
+            throw_cube_with_marker((unsigned int)character,
+                                   (unsigned char)marker);
+            if (character == 0 && marker == 1)
+            {
+                assert_close(s_carrier.vy / normal_vy,
+                             CUBE_SUDDEN_ARC_SCALE);
+                assert_close(s_carrier.vy * s_carrier.vy /
+                             (normal_vy * normal_vy), 1.5f);
+                assert_close(s_carrier.vx / 7.0f,
+                             s_carrier.vz / -2.0f);
+                strong_time = (s_carrier.vy + sqrtf(
+                    s_carrier.vy * s_carrier.vy +
+                    2.0f * CUBE_GRAVITY * normal_height)) / CUBE_GRAVITY;
+                range_ratio = (s_carrier.vx * strong_time) /
+                    (7.0f * normal_time);
+                assert_close(range_ratio, 2.0f);
+            }
+            else
+            {
+                assert(s_carrier.vx == 7.0f && s_carrier.vy == 6.0f &&
+                       s_carrier.vz == -2.0f);
+            }
+        }
+    }
+    /* The selected character occupies the low byte of this native word. */
+    throw_cube_with_marker(0x100u, 1);
+    assert_close(s_carrier.vy, normal_vy * CUBE_SUDDEN_ARC_SCALE);
+    throw_cube_with_marker(0x101u, 1);
+    assert(s_carrier.vy == normal_vy);
+}
+
+static void test_sudden_impact_throw_latches_form(void)
+{
+    setup();
+    grant_cube_to_carrier();
+    work.bytes[0x84] = 1;
+    anchor_player_cube_throw_begin(player.bytes);
+    work.bytes[0x84] = 2; /* Revert begins during native detach. */
+    func_801E55A0_5A14B0(player.bytes);
+    anchor_player_cube_throw_end();
+    assert(s_carrier.phase == 3 && s_carrier.vy > 5.0f * 1.2f);
+    assert(!s_throw_sudden_impact);
+
+    setup();
+    grant_cube_to_carrier();
+    anchor_player_cube_throw_begin(work.bytes); /* Unrelated native callback. */
+    anchor_player_cube_throw_end();
+    assert(s_carrier.phase == 2 && !s_throw_sudden_impact);
+    anchor_player_cube_throw_begin(player.bytes);
+    work.bytes[0x84] = 1; /* Form becomes active after throw began. */
+    func_801E55A0_5A14B0(player.bytes);
+    anchor_player_cube_throw_end();
+    assert(s_carrier.phase == 3);
+    assert(s_carrier.vx == 0.0f && s_carrier.vy == 5.0f &&
+           s_carrier.vz == 3.0f);
+}
+
+static void test_sudden_impact_throw_speed_limit(void)
+{
+    setup();
+    grant_cube_to_carrier();
+    work.bytes[0x84] = 1;
+    *(float *)(player.bytes + 0x68) = 80.0f;
+    anchor_player_cube_throw_begin(player.bytes);
+    func_801E55A0_5A14B0(player.bytes);
+    anchor_player_cube_throw_end();
+    assert(s_carrier.phase == 3 && s_carrier.task && s_carrier.object);
+    assert(s_carrier.vx == 80.0f && s_carrier.vy == 5.0f &&
+           s_carrier.vz == 3.0f && !s_throw_sudden_impact);
+    anchor_player_cube_tick();
+    assert(s_carrier.phase == 3 && s_carrier.throw_sent &&
+           last_op == ANCHOR_CUBE_THROW && last_vx100 == 8000);
+
+    setup();
+    grant_cube_to_carrier();
+    work.bytes[0x84] = 1;
+    *(float *)(player.bytes + 0x68) = 130.0f;
+    anchor_player_cube_throw_begin(player.bytes);
+    func_801E55A0_5A14B0(player.bytes);
+    anchor_player_cube_throw_end();
+    assert(s_carrier.phase == 0 && !s_carrier.task && !s_carrier.object);
+    assert(last_op == ANCHOR_CUBE_CANCEL);
 }
 
 static void grant_cube_to_carrier(void)
@@ -849,6 +976,9 @@ static void test_breakout_cancels_carry_and_flight_once(void)
 
 int main(void)
 {
+    test_sudden_impact_throw_gate_and_arc();
+    test_sudden_impact_throw_latches_form();
+    test_sudden_impact_throw_speed_limit();
     test_raised_carry_and_throw();
     test_interact_scoping();
     test_grant_native_throw();
