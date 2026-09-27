@@ -15,11 +15,12 @@
 #include "core/anchor_dialog.h"
 #include "ui/anchor_freeze_prompt.h"
 #include "platform/modding.h"
+#include "platform/recompconfig.h"
 #include "platform/recomputils.h"
 
 #define NAMEPLATE_BANKS 2u
 #define NAMEPLATE_MODEL 0x49001040u
-#define NAMEPLATE_SCALE 0.42f
+#define NAMEPLATE_SCALE 0.33f
 #define NAMEPLATE_HALF_HEIGHT 8
 #define NAMEPLATE_CLEARANCE 2.0f
 #define NAMEPLATE_COMMANDS 20u
@@ -140,6 +141,11 @@ static int low_rdram(const void *pointer)
 {
     unsigned int address = physical((unsigned int)(unsigned long)pointer);
     return address >= 0x1000u && address < 0x800000u;
+}
+
+static int nameplates_disabled(void)
+{
+    return recomp_get_config_u32("anchor_show_nameplates") == 1u;
 }
 
 static void nameplate_task_update(void *task, void *object)
@@ -351,6 +357,11 @@ void anchor_nameplates_sync(int cid, const char *name, int same_team,
     unsigned char *object;
     unsigned int i;
     int changed;
+    if (nameplates_disabled())
+    {
+        anchor_nameplates_hide(cid);
+        return;
+    }
     if (cid <= 0 || !s_banks || !task || !name || !body ||
         room != D_800C7AB2 ||
         !anchor_player_models_is_remote_pair(task, body))
@@ -568,6 +579,15 @@ void anchor_nameplates_refresh_bank(void)
 {
     unsigned int bank = (unsigned int)D_800C7A72_C8672;
     int i;
+    /* A menu change can arrive after the remote task's sync. Hide existing
+     * plate objects now; the next enabled sync may reuse the scene arena. */
+    if (nameplates_disabled())
+    {
+        for (i = 0; i < s_capacity; ++i)
+            if (s_slots[i].active)
+                hide_plate(&s_slots[i]);
+        return;
+    }
     if (!s_banks || bank >= NAMEPLATE_BANKS)
     {
 #if DEBUG_BUTTON_ENABLED
@@ -687,6 +707,13 @@ void anchor_nameplates_before_draw(void *pointer)
                       *(unsigned int *)(object + 0x2c));
     }
 #endif
+    if (nameplates_disabled())
+    {
+#if DEBUG_BUTTON_ENABLED
+        gate_reason = "config";
+#endif
+        goto skip;
+    }
     if (!current_body(&s_slots[i]))
     {
 #if DEBUG_BUTTON_ENABLED

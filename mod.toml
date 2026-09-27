@@ -134,6 +134,14 @@ options = ["Enabled", "Disabled"]
 default = "Enabled"
 
 [[manifest.config_options]]
+id = "anchor_show_nameplates"
+name = "Show Nameplates"
+description = "Show remote player names above their in-game characters."
+type = "Enum"
+options = ["Enabled", "Disabled"]
+default = "Enabled"
+
+[[manifest.config_options]]
 id = "anchor_show_notifications"
 name = "Item Notifications"
 description = "Which check notifications to show. Important shows main progress only (characters, locations, items, keys, dolls, boss defeats and quest items); All also shows cutscenes and miscellaneous flags."

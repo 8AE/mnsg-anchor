@@ -3,6 +3,8 @@
 #define GLYPH_WIDTH 8u
 #define GLYPH_HEIGHT 12u
 #define GLYPH_PAIR_BYTES 48u
+#define NAMEPLATE_BOX_PADDING 3u
+#define NAMEPLATE_BOX_IA8 0x08u
 static unsigned int glyph_width(const unsigned char *widths, unsigned char c)
 {
     unsigned int width = widths[c - 0x20u];
@@ -55,7 +57,8 @@ unsigned int anchor_nameplate_bitmap_build(
     const unsigned char *glyphs, const unsigned char *widths)
 {
     unsigned char ascii[ANCHOR_NAMEPLATE_INPUT_BYTES];
-    unsigned int count, text_width = 0, cursor, gap = 3u, i, x, y;
+    unsigned int count, text_width = 0, cursor, gap = 2u, i, x, y;
+    unsigned int box_left, box_right;
     if (!out || out_size < ANCHOR_NAMEPLATE_TEXTURE_BYTES ||
         !name || !glyphs || !widths)
         return 0;
@@ -64,15 +67,17 @@ unsigned int anchor_nameplate_bitmap_build(
     count = sanitize(name, ascii);
     for (i = 0; i < count; ++i)
         text_width += glyph_width(widths, ascii[i]);
-    /* Three empty texels leave room for both one-pixel black outlines and a
-     * transparent separator. Tighten only the gaps needed for long names;
-     * even 31 eight-pixel glyphs fit with four texels of outer margin. The
-     * final glyph contributes no trailing gap, so the bounds stay centered. */
+    /* Keep the usual names compact, then tighten gaps for long names. Three
+     * texels of box padding fit on both sides when text width stays at 250 or
+     * less; even 31 eight-pixel glyphs fit without a trailing gap. */
     while (gap && text_width + (count - 1u) * gap >
-                      ANCHOR_NAMEPLATE_TEXTURE_WIDTH - 4u)
+                      ANCHOR_NAMEPLATE_TEXTURE_WIDTH -
+                          2u * NAMEPLATE_BOX_PADDING)
         --gap;
     text_width += (count - 1u) * gap;
     cursor = (ANCHOR_NAMEPLATE_TEXTURE_WIDTH - text_width) / 2u;
+    box_left = cursor - NAMEPLATE_BOX_PADDING;
+    box_right = cursor + text_width + NAMEPLATE_BOX_PADDING;
     for (i = 0; i < count; ++i)
     {
         unsigned int width = glyph_width(widths, ascii[i]);
@@ -101,6 +106,16 @@ unsigned int anchor_nameplate_bitmap_build(
                 (out[dst - ANCHOR_NAMEPLATE_TEXTURE_WIDTH] & 0xf0u) ||
                 (out[dst + ANCHOR_NAMEPLATE_TEXTURE_WIDTH] & 0xf0u))
                 out[dst] = 0x0fu;
+        }
+    /* Fill only untouched texels so the black half-alpha rectangle stays
+     * behind the opaque game font and its black outline. It spans the strip
+     * height but only the padded bounds of this centered name. */
+    for (y = 0; y < ANCHOR_NAMEPLATE_TEXTURE_HEIGHT; ++y)
+        for (x = box_left; x < box_right; ++x)
+        {
+            unsigned int dst = y * ANCHOR_NAMEPLATE_TEXTURE_WIDTH + x;
+            if (!out[dst])
+                out[dst] = NAMEPLATE_BOX_IA8;
         }
     return text_width;
 }
