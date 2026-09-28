@@ -8,7 +8,8 @@
 int anchor_boss_invite_world_arena(void);
 unsigned int anchor_boss_invite_world_visit(void);
 
-/* The first native Impact stage of the active sequence (0x021C..0x0224), or 0.
+/* The first native Impact stage of the active sequence (0x021C..0x0223 or
+ * intro 0x0239..0x023C), or 0.
  * The invite carries it so a guest replays the Impact cutscene from its
  * beginning, even if the sender has already advanced to a later stage. */
 unsigned int anchor_boss_invite_world_stage(void);
@@ -32,8 +33,8 @@ int anchor_boss_invite_world_can_prompt(void);
 int anchor_boss_invite_world_warp(int arena);
 
 /* Request a native load of the exact Impact stage carried by an accepted
- * invitation (0x021C..0x0224), reproducing the sender's load-from-start
- * fields. Same caller preconditions as the arena warp. */
+ * invitation (0x021C..0x0223 or intro 0x0239..0x023C), reproducing the
+ * sender's load-from-start fields. Same caller preconditions as the arena warp. */
 int anchor_boss_invite_world_warp_stage(unsigned int stage, unsigned int field90,
                                         unsigned int field91);
 

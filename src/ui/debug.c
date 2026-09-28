@@ -11,7 +11,7 @@
  *
  * Usage
  * -----
- *   - A small "DBG" button is shown in the bottom-right corner of the screen.
+ *   - A small "DBG" button is shown in the bottom-right corner in the debug build.
  *   - Click it to open or close the debug panel.
  *   - Click "✕" inside the panel to close it.
  *   - The panel captures input while open so game controls are suspended.
@@ -33,6 +33,8 @@
 #include "progression/item_sync.h"
 #include "core/anchor_runtime.h"
 #include "progression/anchor_flag_catalog.h"
+#include "bosses/anchor_boss_arenas.h"
+#include "bosses/anchor_boss_invite_world.h"
 #include "ui/debug_ui.h"
 
 /* build_mod.sh produces release (0) and debug (1) variants automatically. */
@@ -964,8 +966,8 @@ static const RecompuiColor C_OVERLAY = {0, 0, 0, 145};
    UI state
    ========================================================================= */
 
-/* Shared persistent HUD context. It captures the mouse for the DBG/NET
- * controls and the online-player roster, but never captures game input. */
+/* Shared persistent HUD context. It captures the mouse for DBG/NET and the
+ * online-player roster, but never captures game input. */
 static RecompuiContext s_hud_ctx = RECOMPUI_NULL_CONTEXT;
 static RecompuiResource s_hud_root = RECOMPUI_NULL_RESOURCE;
 
@@ -983,7 +985,6 @@ static int s_modal_visible = 0; /* tracks actual shown/hidden state     */
 static RecompuiResource s_net_btn = RECOMPUI_NULL_RESOURCE;
 /* Handle to the DBG button so we can apply DEBUG_BUTTON_ENABLED at init. */
 static RecompuiResource s_dbg_btn = RECOMPUI_NULL_RESOURCE;
-
 /* Pending actions set by callbacks; consumed by the frame hook.
  * Callbacks must NEVER call show/hide/set_captures directly –
  * those are only safe outside of a callback (i.e. from the frame hook).  */
@@ -993,6 +994,7 @@ static int s_pending_transport = 0;
 static int s_pending_location_delta = 0;
 static int s_pending_location_fill = 0;
 static int s_pending_location_transport = 0;
+static unsigned short s_pending_impact_stage = 0;
 
 /* =========================================================================
    Callbacks  (flag-setters only – no context API calls here)
@@ -1104,6 +1106,14 @@ static void on_transport_location_go_clicked(RecompuiResource res,
     if (ev->type != UI_EVENT_CLICK)
         return;
     s_pending_location_transport = 1;
+}
+
+static void on_impact_intro_clicked(RecompuiResource res,
+                                    const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_impact_stage = (unsigned short)(unsigned long)ud;
 }
 
 /* =========================================================================
@@ -1237,7 +1247,7 @@ static void debug_init_ui(void)
         recompui_set_border_bottom_color(hdr, &C_BORDER);
 
         RecompuiResource title = recompui_create_label(
-            s_modal_ctx, hdr, "Debug: Force Flag", LABELSTYLE_NORMAL);
+            s_modal_ctx, hdr, "Debug Menu", LABELSTYLE_NORMAL);
         recompui_set_color(title, &C_GOLD);
         recompui_set_font_weight(title, 700);
         recompui_set_font_size(title, 22.0f, UNIT_DP);
@@ -1378,7 +1388,8 @@ static void debug_init_ui(void)
         recompui_set_tab_index(go_btn, TAB_INDEX_NONE);
         recompui_register_callback(go_btn, on_transport_location_go_clicked, 0);
 
-        /* ── Scrollable flag list ──────────────────────────────────── */
+        /* Impact controls and flag rows share one scroll area, so the
+         * cutscene buttons stay reachable at smaller window heights. */
         RecompuiResource scroll = recompui_create_element(s_modal_ctx, panel);
         recompui_set_flex_grow(scroll, 1.0f);
         recompui_set_overflow_y(scroll, OVERFLOW_SCROLL);
@@ -1390,7 +1401,49 @@ static void debug_init_ui(void)
         recompui_set_padding_right(scroll, 10.0f, UNIT_DP);
         recompui_set_gap(scroll, 4.0f, UNIT_DP);
 
-        /* Build flag rows.  Section headers are plain styled labels;
+        /* Impact intro stages use the native Impact loader, not room/XYZ
+         * transport. The first three boss cutscenes begin at 0x239..0x23B. */
+        RecompuiResource impact = recompui_create_element(s_modal_ctx, scroll);
+        recompui_set_display(impact, DISPLAY_FLEX);
+        recompui_set_flex_direction(impact, FLEX_DIRECTION_COLUMN);
+        recompui_set_min_height(impact, 110.0f, UNIT_DP);
+        recompui_set_padding_top(impact, 14.0f, UNIT_DP);
+        recompui_set_padding_bottom(impact, 14.0f, UNIT_DP);
+        recompui_set_padding_left(impact, 20.0f, UNIT_DP);
+        recompui_set_padding_right(impact, 20.0f, UNIT_DP);
+        recompui_set_background_color(impact, &C_ROW_ODD);
+        recompui_set_border_bottom_width(impact, 1.0f, UNIT_DP);
+        recompui_set_border_bottom_color(impact, &C_BORDER);
+        recompui_set_gap(impact, 12.0f, UNIT_DP);
+
+        RecompuiResource impact_title = recompui_create_label(
+            s_modal_ctx, impact, "Impact Cutscenes", LABELSTYLE_SMALL);
+        recompui_set_color(impact_title, &C_GREEN);
+        recompui_set_font_weight(impact_title, 700);
+        recompui_set_font_size(impact_title, 18.0f, UNIT_DP);
+
+        RecompuiResource impact_row = recompui_create_element(s_modal_ctx, impact);
+        recompui_set_display(impact_row, DISPLAY_FLEX);
+        recompui_set_flex_direction(impact_row, FLEX_DIRECTION_ROW);
+        recompui_set_gap(impact_row, 12.0f, UNIT_DP);
+        static const char *const impact_names[] = {
+            "Kashiwagi Intro", "Thaisamba Intro", "Balberra Intro"
+        };
+        for (i = 0; i < 3; ++i)
+        {
+            RecompuiResource impact_btn = recompui_create_button(
+                s_modal_ctx, impact_row, impact_names[i], BUTTONSTYLE_SECONDARY);
+            recompui_set_cursor(impact_btn, CURSOR_POINTER);
+            recompui_set_flex_grow(impact_btn, 1.0f);
+            recompui_set_height(impact_btn, 42.0f, UNIT_DP);
+            recompui_set_min_height(impact_btn, 42.0f, UNIT_DP);
+            recompui_set_font_size(impact_btn, 14.0f, UNIT_DP);
+            recompui_set_tab_index(impact_btn, TAB_INDEX_NONE);
+            recompui_register_callback(impact_btn, on_impact_intro_clicked,
+                (void *)(unsigned long)(ANCHOR_BOSS_IMPACT_INTRO_FIRST + i));
+        }
+
+        /* Build flag rows. Section headers are plain styled labels;
          * flag rows are flex rows with a text label and a Force button. */
         int row_parity = 0;
 
@@ -1635,6 +1688,25 @@ void debug_ui_frame_hook(void)
         else
         {
             s_pending_status = "Invalid transport input";
+        }
+    }
+
+    if (s_pending_impact_stage)
+    {
+        unsigned short stage = s_pending_impact_stage;
+        s_pending_impact_stage = 0;
+        if (anchor_boss_invite_world_warp_stage(stage, 0, 0))
+        {
+            s_pending_status = "Entering Impact cutscene";
+            if (s_modal_visible)
+            {
+                recompui_hide_context(s_modal_ctx);
+                s_modal_visible = 0;
+            }
+        }
+        else
+        {
+            s_pending_status = "Impact transport unavailable here";
         }
     }
 

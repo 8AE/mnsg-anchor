@@ -389,15 +389,19 @@ int main(void)
     assert(!anchor_boss_invite_world_warp_stage(0x0225, 0, 0));
     assert(!s_impact_calls && !s_destination_calls && !s_step_calls);
 
-    /* The guest is sent to the intro cutscene stage when the sequence began
-     * there, before the sender reached the minigame. */
-    ready(0x0130);
-    assert(anchor_boss_invite_world_warp_stage(ANCHOR_BOSS_IMPACT_INTRO_STAGE,
-                                               0, 0));
-    assert(s_impact_calls == 1 &&
-           s_impact_index == (int)(ANCHOR_BOSS_IMPACT_INTRO_STAGE -
-                                   ANCHOR_BOSS_IMPACT_STAGE_FIRST));
-    assert(s_destination_calls == 0 && s_step_calls == 1);
+    /* Each debug destination enters the matching intro through the native
+     * Impact entry with load-from-start fields cleared. */
+    for (unsigned int i = 0; i < 3; ++i) {
+        unsigned int stage = ANCHOR_BOSS_IMPACT_INTRO_FIRST + i;
+        ready(0x0130);
+        assert(anchor_boss_arena_for_impact_stage(stage) ==
+               ANCHOR_BOSS_ARENA_KASHIWAGI + (int)i);
+        assert(anchor_boss_invite_world_warp_stage(stage, 0, 0));
+        assert(s_impact_calls == 1 &&
+               s_impact_index == (int)(stage - ANCHOR_BOSS_IMPACT_STAGE_FIRST));
+        assert(s_impact_field90 == 0 && s_impact_field91 == 0);
+        assert(s_destination_calls == 0 && s_step_calls == 1);
+    }
 
     ready(0x009d); /* Gourmet Submarine is not the dragon/Control Machine room. */
     assert(anchor_boss_invite_world_arena() == 0);
