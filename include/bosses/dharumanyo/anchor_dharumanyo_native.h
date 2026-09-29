@@ -108,6 +108,8 @@ void anchor_dharumanyo_native_tick(void);
 void anchor_dharumanyo_native_reset(void);
 int anchor_dharumanyo_native_is_root(const void *task);
 void *anchor_dharumanyo_native_root_task(void);
+/* Live carrier lives for the boss HUD; unavailable after terminal starts. */
+int anchor_dharumanyo_native_hud_health(unsigned int *health);
 void anchor_dharumanyo_native_set_target(float x, float y, float z);
 void anchor_dharumanyo_native_clear_target(void);
 

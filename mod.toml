@@ -142,6 +142,14 @@ options = ["Enabled", "Disabled"]
 default = "Enabled"
 
 [[manifest.config_options]]
+id = "anchor_show_boss_health_bar"
+name = "Show Boss Health Bar"
+description = "Show native boss names and heart health bars during boss encounters."
+type = "Enum"
+options = ["Enabled", "Disabled"]
+default = "Enabled"
+
+[[manifest.config_options]]
 id = "anchor_show_notifications"
 name = "Item Notifications"
 description = "Which check notifications to show. Important shows main progress only (characters, locations, items, keys, dolls, boss defeats and quest items); All also shows cutscenes and miscellaneous flags."

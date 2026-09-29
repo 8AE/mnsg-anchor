@@ -649,6 +649,50 @@ static void scripted_pause_release_test(void)
     assert(!s_root_pause_mirror);
 }
 
+static void hud_health_lifecycle_test(void)
+{
+    Fixture *root = setup();
+    Fixture *carrier = fixture_for(s_carrier.task);
+    unsigned int health = 99u;
+    unsigned int visit = current_visit;
+    unsigned char generation;
+    void *link;
+
+    assert(carrier);
+    assert(!anchor_dharumanyo_native_hud_health(0));
+    /* An initialized carrier can be shown before the combat-ready edge. */
+    s_combat_active = 0;
+    assert(anchor_dharumanyo_native_hud_health(&health) && health == 12u);
+    U8(carrier->task_store.bytes, 0xd1) = 1;
+    assert(anchor_dharumanyo_native_hud_health(&health) && health == 1u);
+    U8(carrier->task_store.bytes, 0xd1) = 0;
+    assert(!anchor_dharumanyo_native_hud_health(&health) && health == 1u);
+    U8(carrier->task_store.bytes, 0xd1) = 13;
+    assert(!anchor_dharumanyo_native_hud_health(&health));
+    U8(carrier->task_store.bytes, 0xd1) = 12;
+
+    s_terminal_started = 1;
+    assert(!anchor_dharumanyo_native_hud_health(&health));
+    s_terminal_started = 0;
+    link = DHARUMANYO_PTR(carrier->task_store.bytes, 0xdc);
+    DHARUMANYO_PTR(carrier->task_store.bytes, 0xdc) = 0;
+    assert(!anchor_dharumanyo_native_hud_health(&health));
+    DHARUMANYO_PTR(carrier->task_store.bytes, 0xdc) = link;
+    generation = U8(carrier->task_store.bytes, 0x74);
+    U8(carrier->task_store.bytes, 0x74) = generation + 1u;
+    assert(!anchor_dharumanyo_native_hud_health(&health));
+    U8(carrier->task_store.bytes, 0x74) = generation;
+    generation = U8(root->task_store.bytes, 0x74);
+    U8(root->task_store.bytes, 0x74) = generation + 1u;
+    assert(!anchor_dharumanyo_native_hud_health(&health));
+    U8(root->task_store.bytes, 0x74) = generation;
+    current_visit++;
+    assert(!anchor_dharumanyo_native_hud_health(&health));
+    current_visit = visit;
+    D_800C7AB2 = 0;
+    assert(!anchor_dharumanyo_native_hud_health(&health));
+}
+
 int main(void)
 {
     lifecycle_and_snapshot_test();
@@ -658,6 +702,7 @@ int main(void)
     native_projectile_orientation_round_trip_test();
     projectile_capacity_cleanup_test();
     pause_tick_and_terminal_test();
+    hud_health_lifecycle_test();
     puts("Dharumanyo native snapshot, authority, projectile and terminal contracts passed");
     return 0;
 }

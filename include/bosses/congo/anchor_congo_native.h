@@ -50,6 +50,9 @@ void anchor_congo_native_tick(void);
 void anchor_congo_native_reset(void);
 int anchor_congo_native_is_root(const void *task);
 void *anchor_congo_native_root_task(void);
+/* Read the live, room-local root HP once the native intro initializes it.
+ * Returns zero outside the encounter or during its victory sequence. */
+int anchor_congo_native_hud_health(unsigned int *health);
 void anchor_congo_native_set_target(float x, float y, float z);
 void anchor_congo_native_clear_target(void);
 

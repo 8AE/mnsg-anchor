@@ -328,6 +328,19 @@ static int carrier_ready(void)
            DHARUMANYO_PTR(s_carrier.task, 0xdc) == s_root.task;
 }
 
+int anchor_dharumanyo_native_hud_health(unsigned int *health)
+{
+    unsigned int lives;
+    if (!health || !anchor_dharumanyo_native_root_task() ||
+        !carrier_ready() || s_terminal_started)
+        return 0;
+    lives = U8(s_carrier.task, 0xd1);
+    if (lives == 0u || lives > 12u)
+        return 0;
+    *health = lives;
+    return 1;
+}
+
 int anchor_dharumanyo_native_ready(void)
 {
     return s_combat_active && anchor_dharumanyo_native_root_task() &&

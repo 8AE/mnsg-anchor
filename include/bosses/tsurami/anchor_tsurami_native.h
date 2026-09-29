@@ -53,6 +53,8 @@ void anchor_tsurami_native_tick(void);
 void anchor_tsurami_native_reset(void);
 int anchor_tsurami_native_is_root(const void *task);
 void *anchor_tsurami_native_root_task(void);
+/* Live root health for the boss HUD; unavailable after terminal starts. */
+int anchor_tsurami_native_hud_health(unsigned int *health);
 void anchor_tsurami_native_set_target(float x,float y,float z);
 void anchor_tsurami_native_clear_target(void);
 /* Only mode1 projectiles whose native reflection callback is still live are

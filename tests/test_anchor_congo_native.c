@@ -549,8 +549,35 @@ static void terminal_fade_regression_test(void)
         assert(r->ai==func_080083A0_6BB640 && death_calls==before+1);
     }
 }
+static void hud_health_lifecycle_test(void)
+{
+    Fixture *r = setup();
+    unsigned int hp = 99u;
+    assert(anchor_congo_native_hud_health(&hp) && hp == 30u);
+    /* An intro callback not yet in the combat phase table still has a
+     * initialized root HP and should show the bar. */
+    r->ai = hold_noop;
+    U8(r->task, 0x8D) = 1u;
+    assert(anchor_congo_native_hud_health(&hp) && hp == 1u);
+    U8(r->task, 0x8D) = 0u;
+    assert(!anchor_congo_native_hud_health(&hp));
+    U8(r->task, 0x8D) = 31u;
+    assert(!anchor_congo_native_hud_health(&hp));
+    U8(r->task, 0x8D) = 30u;
+    D_800C7AB2 = 0x17u;
+    assert(!anchor_congo_native_hud_health(&hp));
+    D_800C7AB2 = 0x16u;
+    assert(anchor_congo_native_hud_health(&hp));
+    anchor_congo_native_victory(r->task);
+    assert(!anchor_congo_native_hud_health(&hp));
+    r = setup();
+    U8(r->task, 0x74)++;
+    assert(!anchor_congo_native_hud_health(&hp));
+    assert(!anchor_congo_native_hud_health(0));
+}
 int main(void)
 {
+    hud_health_lifecycle_test();
     terminal_fade_regression_test();
     deferred_context_test();lifecycle_test();snapshot_test();intro_and_death_test();
     intro_music_test();ray_checkpoint_test();

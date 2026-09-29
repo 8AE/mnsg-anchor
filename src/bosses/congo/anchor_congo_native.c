@@ -226,6 +226,18 @@ static CongoCallback root_ai(void)
 {
     return s_root.held?s_root.held_ai:CONGO_AI(s_root.task);
 }
+int anchor_congo_native_hud_health(unsigned int *health)
+{
+    unsigned int hp, phase;
+    if (!health || !anchor_congo_native_root_task() || s_terminal_started)
+        return 0;
+    phase = phase_of(root_ai());
+    hp = U8(s_root.task, 0x8D);
+    if (phase >= PHASE_VICTORY || hp == 0u || hp > 30u)
+        return 0;
+    *health = hp;
+    return 1;
+}
 int anchor_congo_native_ready(void)
 {
     unsigned int i;

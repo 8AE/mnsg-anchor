@@ -440,5 +440,33 @@ static void test_flash_reuse_and_foreign_alias(void){
     U8(flash_data,4)=1;U8(flash_data,5)=11;U8(flash_data,0x10)=255;
     assert(capture_flash()==0);U8(flash_data,4)=0x81;
 }
-int main(void){test_adoption_and_pause();test_hazards_and_validation();test_constructor_groups_and_cap();test_colliding_ids_recreate_native_kind();test_native_projectile_orientation_capture_and_adoption();test_native_ring_inherited_orientation();test_flash_and_terminal();test_native_flash_free_does_not_publish_opaque_blue();test_flash_reuse_and_foreign_alias();puts("Tsurami native checkpoint tests passed");return 0;}
+static void test_hud_health_lifecycle(void){
+    Fixture *r=setup();void *task=r->task_store.bytes,*backlink;
+    unsigned int health=99u,visit=current_visit;unsigned char generation;
+    assert(!anchor_tsurami_native_hud_health(0));
+    /* The initialized root health remains visible before visual/combat ready. */
+    s_visual.task=0;s_active=0;
+    assert(anchor_tsurami_native_hud_health(&health)&&health==12u);
+    U8(task,0x8d)=1;
+    assert(anchor_tsurami_native_hud_health(&health)&&health==1u);
+    U8(task,0x8d)=0;
+    assert(!anchor_tsurami_native_hud_health(&health)&&health==1u);
+    U8(task,0x8d)=13;
+    assert(!anchor_tsurami_native_hud_health(&health));
+    U8(task,0x8d)=12;
+    s_terminal_started=1;
+    assert(!anchor_tsurami_native_hud_health(&health));
+    s_terminal_started=0;
+    generation=U8(task,0x74);U8(task,0x74)=generation+1u;
+    assert(!anchor_tsurami_native_hud_health(&health));
+    U8(task,0x74)=generation;
+    backlink=TSURAMI_PTR(task,4);TSURAMI_PTR(task,4)=0;
+    assert(!anchor_tsurami_native_hud_health(&health));
+    TSURAMI_PTR(task,4)=backlink;
+    current_visit++;
+    assert(!anchor_tsurami_native_hud_health(&health));
+    current_visit=visit;D_800C7AB2=0;
+    assert(!anchor_tsurami_native_hud_health(&health));
+}
+int main(void){test_adoption_and_pause();test_hazards_and_validation();test_constructor_groups_and_cap();test_colliding_ids_recreate_native_kind();test_native_projectile_orientation_capture_and_adoption();test_native_ring_inherited_orientation();test_flash_and_terminal();test_native_flash_free_does_not_publish_opaque_blue();test_flash_reuse_and_foreign_alias();test_hud_health_lifecycle();puts("Tsurami native checkpoint tests passed");return 0;}
 #endif
