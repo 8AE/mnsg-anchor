@@ -2,13 +2,14 @@
 
 Local dialogue, camera and temporary-flag scripts remain native. This bridge
 chooses one complete visible graph per family and offers its scalar rows to the
-native render-only proxy adapter. Pointer-sized words never enter a packet.
+native quest adapter. Koryuta binds its existing physical graph; other
+families use render-only proxies. Pointer-sized words never enter a packet.
 """
 import json
 import anchor_world as world
 
 PACKET_TYPE = 'MNSG_WORLD_QUEST'
-ABI = 2
+ABI = 4
 WORDS = 64
 MAX_ROWS = 32
 ROWS_PER_PACKET = 8
@@ -18,6 +19,8 @@ STATE_BYTES = 98304
 
 FAMILY, ROLE, SELF, OWNER, SERIAL, LIFE = 1, 2, 3, 4, 5, 6
 PARENT, ORDINAL, ENTITY, MODEL, SLOT, PART = 8, 9, 10, 11, 12, 13
+DRAGON_D4, DRAGON_D8, DRAGON_DA, DRAGON_DC, DRAGON_DE = range(45,50)
+DRAGON_READY = 50
 INSTANCE, RECEIPT = 62, 63
 LIVE, CLAIM, REMOVED = 0, 1, 2
 FAMILY_ROOM = {1:(0x153,), 2:(0x155,), 3:(0x16a,0x182),
@@ -92,7 +95,7 @@ def valid(row, room):
             not 0<=row[36]<=3 or not 0<=row[37]<=65535 or
             row[38] not in (0,1) or not 0<=row[39]<=255 or
             any(not 0<=v<=255 for v in row[40:44]) or
-            row[44] not in (0,1) or any(row[45:62]) or
+            row[44] not in (0,1) or any(row[51:62]) or
             not 0<=row[INSTANCE]<=0x7fffffff or
             not 0<=row[RECEIPT]<=0x7fffffff):
         return False
@@ -107,6 +110,15 @@ def valid(row, room):
     if row[44] and role!=10:
         return False
     if not row[44] and any(row[40:44]):
+        return False
+    if role == 6:
+        if (row[14] not in range(1,6) or
+                row[DRAGON_READY] not in (0,1) or
+                any(not 0<=row[i]<=65535 for i in (DRAGON_D4,DRAGON_D8)) or
+                any(not -32768<=row[i]<=32767 for i in
+                    (DRAGON_DA,DRAGON_DC,DRAGON_DE))):
+            return False
+    elif any(row[45:51]):
         return False
     return True
 
@@ -242,15 +254,43 @@ class QuestTransport:
         for family in sorted(families):
             candidates={cid for cid,rows in sources_by_client.items()
                         if any(family_key(r)==family for r in rows.values())}
+            if family[0]==2:
+                # A File_46 source is eligible only after its local File_58
+                # controller consumed the head trigger and all native parts
+                # are present. Ineligible clients keep their native graph.
+                candidates={cid for cid in candidates if
+                    any(family_key(r)==family and r[ROLE]==6 and
+                        r[DRAGON_READY]==1 for r in
+                        sources_by_client[cid].values()) and
+                    {key(r)[1:] for r in sources_by_client[cid].values()
+                     if family_key(r)==family and r[LIFE]==LIVE} ==
+                    {(6,family[1],1,0)} |
+                    {(7,family[1],1,part) for part in range(1,12)}}
+                if not candidates:
+                    continue
             live={cid for cid in candidates if any(
                 family_key(r)==family and r[LIFE]==LIVE
                 for r in sources_by_client[cid].values())}
             # Every peer must elect from the same observed candidate set.
-            # A retained local incumbent would split the room if both peers
-            # started a family after their last exchanged empty snapshot.
             # A retired graph must not blank a still-staged graph on another
             # client. Once all copies retire, a tombstone remains selectable.
-            owner=min(live or candidates)
+            if family[0]==2:
+                claims={cid for cid in candidates if any(
+                    family_key(r)==family and r[ROLE]==6 and
+                    r[OWNER]==cid for r in
+                    sources_by_client[cid].values())}
+                # C sources carry OWNER=0. Include our retained claim so a
+                # simultaneous birth sees both claims on either peer and
+                # resolves them with the same CID order.
+                if (self.owners.get(family)==ctx['cid'] and
+                        ctx['cid'] in candidates):
+                    claims.add(ctx['cid'])
+                if claims:
+                    owner=min(claims)
+                else:
+                    owner=min(candidates)
+            else:
+                owner=min(live or candidates)
             new_owners[family]=owner
             selected.extend(list(r) for r in sources_by_client[owner].values()
                             if family_key(r)==family)
@@ -266,7 +306,11 @@ class QuestTransport:
                 selected_keys.add(k)
                 # An original scene actor is never a render proxy. Only the
                 # adapter's status rows may bind a previously offered proxy.
-                offered=self._offer(k,source,local_status.get(k))
+                # File_46 applies to its existing native task graph. Its
+                # source instances, rather than proxy status, bind the offer.
+                offered=self._offer(k,source,
+                    local.get(k) if family_key(source)[0]==2 else
+                    local_status.get(k))
                 if offered is None:
                     return {'a':[],'ready':False,'l':leader},[]
                 result.append(offered)

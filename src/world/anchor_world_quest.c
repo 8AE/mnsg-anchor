@@ -3,11 +3,9 @@
  * The four families (Gateway Viewpoint File_53, Koryuta's flight File_46,
  * Kihachi's scene File_62, Gorgeous Music Castle File_74/75) each interleave
  * portable visual scalars with a local scene handshake inside the same task
- * fields. This module keeps every local coordinator, player/dialogue script,
- * camera, fade and temporary bit untouched. It reads the visible scalars,
- * hides the original render of a tracked actor only while a reconstructed
- * proxy is active, and writes the same scalars back onto a render-only proxy
- * that binds native models and resources with a pure initializer.
+ * fields. Local dialogue, camera, fade and temporary bits remain native.
+ * Koryuta's complete owner checkpoint drives the placed root and eleven
+ * native parts directly; other families use render-only proxies.
  *
  * The row schema, the ABI enumeration and the API contract live in
  * include/world/anchor_world_quest.h. JSON transport is owned by the parent. */
@@ -48,6 +46,14 @@ extern void *D_801FC604_5B8514;
 extern void *D_8016DAB4_16E6B4;
 extern void func_08001BD0_70FC80(void *, void *);
 extern void func_08001E60_70FF10(void *, void *);
+extern void func_080013C8_7024C8(void *);
+extern void func_0800125C_70235C(void *);
+extern void func_080019AC_702AAC(void *, void *);
+extern void func_080018E4_7029E4(void *, void *);
+extern void func_08001868_702968(void *, void *);
+extern void func_080017D4_7028D4(void *, void *);
+extern void func_08001770_702870(void *, void *);
+extern float D_8015CDC4, D_8015CDC8;
 
 /* The native render-hide contract: object+0x64 bit 0 short-circuits the model
  * draw path func_80016C44_17844 (lbu $t6,0x64($a0) / andi $t7,$t6,0x1 /
@@ -65,6 +71,19 @@ extern void func_08001E60_70FF10(void *, void *);
  * belongs to the local scene, so a peer row must never overwrite it. */
 #define QUEST_LOCAL_FLAGS 0x08000000u
 #define QUEST_EMPTY_RECEIPT 0u
+#ifdef WORLD_QUEST_HOST_TEST
+/* Host function addresses may already contain the native marker bit. */
+#define QUEST_CALLBACK_DISABLED 0x4000000000000000ul
+#define QUEST_NATIVE_PTR_STRIDE sizeof(void *)
+extern void *world_quest_test_dragon_array(void *);
+#define QUEST_DRAGON_ARRAY(root) world_quest_test_dragon_array(root)
+#else
+#define QUEST_CALLBACK_DISABLED 0x00800000ul
+#define QUEST_NATIVE_PTR_STRIDE 4u
+#define QUEST_DRAGON_ARRAY(root) QP(root, 0xd0)
+#endif
+
+typedef void (*QuestCallback)(void *, void *);
 
 typedef struct {
   void *actor, *object;
@@ -74,6 +93,8 @@ typedef struct {
   unsigned char generation, ready, proxy, hidden, saved;
   unsigned char saved64, mesh_constructed;
   unsigned char scheduled, primed, retired;
+  unsigned char dragon_following, dragon_phase;
+  QuestCallback dragon_native;
   int offered[WORLD_QUEST_WORDS];
 } QuestNode;
 
@@ -93,11 +114,79 @@ static unsigned int q_hidden;
 static int q_active;
 static void *q_scope_actor;
 static void *volatile q_native_fade;
+/* One return record per native pose-builder call, including rejected calls.
+ * The native function has one epilogue; a bounded stack also keeps nested
+ * unrelated calls from restoring an outer root early. */
+#define QUEST_DRAGON_HOOK_DEPTH 4
+typedef struct {
+  void *actor, *object;
+  unsigned int instance;
+  unsigned short amplitude;
+  short tilt;
+} QuestDragonHook;
+static QuestDragonHook q_dragon_hook[QUEST_DRAGON_HOOK_DEPTH];
+static unsigned int q_dragon_hook_depth, q_dragon_hook_overflow;
+typedef struct {
+  void *task, *private_state;
+  unsigned char generation, ready;
+} QuestDragonJoin;
+static QuestDragonJoin q_dragon_join;
+/* The bridge can briefly return empty while peers exchange a snapshot.
+ * Main world update calls us once per active 30 Hz game tick. */
+#define QUEST_DRAGON_BRIDGE_GRACE_FRAMES 60u
+static unsigned int q_dragon_missing_frames;
+static void q_dragon_release(QuestNode *n);
+static void q_dragon_tick(void);
+static int q_root_live(unsigned int family);
+static int q_live(QuestNode *n);
+
+static void q_dragon_idle(void *actor, void *object) {
+  (void)actor;
+  (void)object;
+}
+
+static QuestCallback q_dragon_callback(unsigned int phase) {
+  switch (phase) {
+    case 1: return func_080019AC_702AAC;
+    case 2: return func_080018E4_7029E4;
+    case 3: return func_08001868_702968;
+    case 4: return func_080017D4_7028D4;
+    case 5: return func_08001770_702870;
+  }
+  return 0;
+}
+
+static int q_dragon_callback_matches(QuestCallback current,
+                                     QuestCallback expected) {
+  unsigned long value = (unsigned long)current;
+  return value == (unsigned long)expected ||
+         (value & ~QUEST_CALLBACK_DISABLED) == (unsigned long)expected;
+}
+
+static unsigned long q_dragon_disabled(QuestCallback current,
+                                       QuestCallback expected) {
+  return (unsigned long)current == (unsigned long)expected ? 0 :
+      (unsigned long)current & QUEST_CALLBACK_DISABLED;
+}
+
+static unsigned int q_dragon_phase(QuestCallback callback) {
+  unsigned int phase;
+  for (phase = 1; phase <= 5; ++phase)
+    if (q_dragon_callback_matches(callback, q_dragon_callback(phase)))
+      return phase;
+  return 0;
+}
 
 static void q_clear(void *p, unsigned int size) {
   unsigned int i;
   for (i = 0; i < size; ++i)
     ((volatile unsigned char *)p)[i] = 0;
+}
+
+static int q_dragon_local_ready(void) {
+  return q_dragon_join.ready &&
+         D_800C7AB2 == WORLD_QUEST_ROOM_KORYUTA &&
+         q_room == WORLD_QUEST_ROOM_KORYUTA;
 }
 
 /* ---- recipes ----------------------------------------------------------- */
@@ -393,6 +482,7 @@ static QuestNode *q_alloc(void *actor) {
      * never authorize a replacement in the new scene. */
     if (n->hidden && q_hidden)
       --q_hidden;
+    q_dragon_release(n);
     q_clear(n, sizeof(*n));
     n = 0;
   }
@@ -431,8 +521,13 @@ static QuestNode *q_alloc(void *actor) {
 static void q_unbind(QuestNode *n) {
   if (!n)
     return;
+  if (n->dragon_following && n->dragon_phase >= 4 && q_live(n) &&
+      D_800C7AB2 == WORLD_QUEST_ROOM_KORYUTA &&
+      func_800240DC_24CDC(0xc2))
+    return;
   if (n->hidden && q_hidden)
     --q_hidden;
+  q_dragon_release(n);
   q_clear(n, sizeof(*n));
 }
 
@@ -444,6 +539,41 @@ static int q_live(QuestNode *n) {
          QP(n->actor, 0x18) == n->object &&
          QB(n->actor, 0x74) == n->generation &&
          !(QW(n->actor, 0x68) & QUEST_DELETED_BIT);
+}
+
+/* The root's scheduler callback is the only native flight driver we replace.
+ * On authority loss, resume at the last allowlisted phase and bounded typed
+ * counters. A local scene callback that replaced our inert callback wins. */
+static void q_dragon_release(QuestNode *n) {
+  QuestCallback resume;
+  unsigned long current;
+  if (!n || !n->dragon_following)
+    return;
+  current = n->actor ? (unsigned long)QP(n->actor, 0xc) : 0;
+  if (D_800C7AB2 != WORLD_QUEST_ROOM_KORYUTA || !q_live(n) ||
+      !q_dragon_callback_matches((QuestCallback)current, q_dragon_idle)) {
+    n->dragon_following = 0;
+    n->dragon_native = 0;
+    return;
+  }
+  /* Phases 4/5 advance the return event and save state. On authority loss,
+   * let the local cruise callback wait for its own battle child to reach
+   * global state 3 and perform the native 0140C transition. */
+  if (n->dragon_phase >= 4) {
+    if (func_800240DC_24CDC(0xc2))
+      return;
+    n->dragon_phase = 2;
+    QS(n->actor, 0x8a) = 0;
+  }
+  resume = q_dragon_callback(n->dragon_phase);
+  if (!resume)
+    resume = n->dragon_native;
+  if (q_dragon_phase(resume))
+    QP(n->actor, 0xc) = (void *)((unsigned long)resume |
+                                q_dragon_disabled((QuestCallback)current,
+                                                  q_dragon_idle));
+  n->dragon_following = 0;
+  n->dragon_native = 0;
 }
 
 /* ---- render hide ------------------------------------------------------- */
@@ -533,12 +663,16 @@ static void q_release_all(void) {
     q_root_gen[i] = 0;
   }
   q_clear(q_activation, sizeof(q_activation));
+  q_clear(&q_dragon_join, sizeof(q_dragon_join));
+  q_dragon_missing_frames = 0;
 }
 
 static void q_drop_proxies(void) {
   unsigned int i;
   for (i = 0; i < WORLD_QUEST_MAX; ++i) {
     QuestNode *n = &q_nodes[i];
+    if (n->family == WQ_FAMILY_KORYUTA)
+      q_dragon_release(n);
     if (n->actor && !n->proxy && !n->retired && n->hidden && q_live(n))
       anchor_world_quest_hide(n->actor, 0);
   }
@@ -552,6 +686,8 @@ static void q_drop_proxies(void) {
 static void q_new_scope(void) {
   unsigned int i;
   q_drop_proxies();
+  q_clear(&q_dragon_join, sizeof(q_dragon_join));
+  q_dragon_missing_frames = 0;
   q_row_count = 0;
   for (i = 0; i < WORLD_QUEST_MAX; ++i) {
     QuestNode *n = &q_nodes[i];
@@ -585,6 +721,20 @@ void anchor_world_quest_reset(int room_changed) {
   if (!room_changed) {
     q_drop_proxies();
     return;
+  }
+  if (q_room == WORLD_QUEST_ROOM_KORYUTA &&
+      D_800C7AB2 == WORLD_QUEST_ROOM_KORYUTA &&
+      q_root_live(WQ_FAMILY_KORYUTA) &&
+      func_800240DC_24CDC(0xc2)) {
+    QuestNode *root = q_lookup(q_roots[WQ_FAMILY_KORYUTA]);
+    if (root && root->dragon_following && root->dragon_phase >= 4) {
+      q_drop_proxies();
+      q_clear(&q_dragon_join, sizeof(q_dragon_join));
+      q_dragon_missing_frames = 0;
+      q_active = 0;
+      q_row_count = 0;
+      return;
+    }
   }
   q_release_all();
   q_room = 0xffffu;
@@ -683,6 +833,20 @@ static int q_capture_common(QuestNode *n, unsigned int role,
      * fields. Reading +0xD0 as a byte would publish phase zero forever. */
     row[WQ_PHASE] = (int)QW(a, 0xd0);
     row[WQ_TIMER] = (int)QW(a, 0xd4);
+  }
+  if (role == WQ_ROLE_KORYUTA_BODY) {
+    unsigned int phase = n->dragon_following ? n->dragon_phase :
+        q_dragon_phase((QuestCallback)QP(a, 0xc));
+    if (!phase)
+      return 0;
+    row[WQ_PHASE] = (int)phase;
+    row[WQ_TIMER] = (int)QS(a, 0x8a);
+    row[WQ_DRAGON_D4] = (int)QH(a, 0xd4);
+    row[WQ_DRAGON_D8] = (int)QH(a, 0xd8);
+    row[WQ_DRAGON_DA] = (int)QS(a, 0xda);
+    row[WQ_DRAGON_DC] = (int)QS(a, 0xdc);
+    row[WQ_DRAGON_DE] = (int)QS(a, 0xde);
+    row[WQ_DRAGON_READY] = q_dragon_local_ready();
   }
   row[WQ_ALPHA] = 0;
   if (!q_quantize(QF(o, 8), 100.0f, -3276800, 3276700, &row[WQ_X]) ||
@@ -930,6 +1094,7 @@ void anchor_world_quest_frame(unsigned int room, unsigned int signature,
                               unsigned int visit, int active) {
   unsigned int i;
   if (!active) {
+    q_dragon_missing_frames = 0;
     /* The bridge passes room=0 while disconnected. That is not a native room
      * transition: constructor-only children (notably Koryuta's eleven parts)
      * must remain registered for a reconnect in the same loaded room. Use
@@ -958,6 +1123,8 @@ void anchor_world_quest_frame(unsigned int room, unsigned int signature,
   q_active = 1;
   q_visit = visit;
   q_row_count = 0;
+  if (room == WORLD_QUEST_ROOM_KORYUTA)
+    q_dragon_tick();
   for (i = 0; i < WORLD_QUEST_MAX && q_row_count < WORLD_QUEST_MAX; ++i) {
     QuestNode *n = &q_nodes[i];
     if (!n->actor || n->proxy || !n->role || !n->self)
@@ -1269,6 +1436,8 @@ static void q_reconcile_originals(
   for (family = WQ_FAMILY_GATEWAY; family <= WQ_FAMILY_GMC75; ++family) {
     unsigned int owner = 0;
     int ready = 1;
+    if (family == WQ_FAMILY_KORYUTA)
+      continue;
     for (i = 0; i < count; ++i) {
       const int *row = rows[i];
       QuestNode *p;
@@ -1304,6 +1473,256 @@ static void q_reconcile_originals(
   }
 }
 
+/* Ease each new 5 Hz target over local render frames. The first complete
+ * checkpoint snaps the graph onto the owner's cycle; subsequent ticks use
+ * only scalar pose/animation data, with the verified rider and camera updates
+ * following each physical part move. No native phase callback is replayed. */
+static void q_dragon_pose(QuestNode *n, const int *r, int snap,
+                          int new_sample) {
+  void *o = n->object;
+  unsigned int j;
+  if (n->part)
+    func_080013C8_7024C8(n->actor);
+  if (n->clip != (unsigned int)r[WQ_CLIP] ||
+      n->anim != (unsigned int)r[WQ_ANIM])
+    func_8021664C_5D1B1C(n->actor, (unsigned int)r[WQ_CLIP],
+                          (float)r[WQ_RATE] / 256.0f,
+                          (unsigned int)r[WQ_ANIM]);
+  for (j = 0; j < 3; ++j) {
+    unsigned int offset = 8u + 4u * j;
+    float target = (float)r[WQ_X + (int)j] / 100.0f;
+    float current = QF(o, offset);
+    QF(o, offset) = snap ? target : current + (target - current) * 0.35f;
+  }
+  for (j = 0; j < 3; ++j) {
+    unsigned int offset = 0x14u + 2u * j;
+    int target = r[WQ_PITCH + (int)j];
+    int current = (int)(QH(o, offset) & 1023u);
+    int delta = ((target - current + 512) & 1023) - 512;
+    int step = (int)((float)delta * 0.35f);
+    if (delta && !step)
+      step = delta > 0 ? 1 : -1;
+    QH(o, offset) = (unsigned short)((snap ? target :
+        current + step) & 1023);
+  }
+  for (j = 0; j < 3; ++j) {
+    unsigned int offset = 0x1cu + 4u * j;
+    float target = (float)r[WQ_SX + (int)j] / 100.0f;
+    float current = QF(o, offset);
+    QF(o, offset) = snap ? target : current + (target - current) * 0.35f;
+  }
+  if (new_sample)
+    QF(o, 0x28) = (float)r[WQ_FRAME] / 100.0f;
+  QH(o, 0x7e) = (unsigned short)r[WQ_RATE];
+  n->clip = (unsigned int)r[WQ_CLIP];
+  n->anim = (unsigned int)r[WQ_ANIM];
+  n->rate = (unsigned int)r[WQ_RATE];
+  if (n->part) {
+    func_0800125C_70235C(n->actor);
+    if (QB(n->actor, 0x6c) == 5) {
+      D_8015CDC4 = QF(o, 8);
+      D_8015CDC8 = QF(o, 0x10);
+    }
+  }
+}
+
+static void q_dragon_tick(void) {
+  QuestNode *root;
+  void *array;
+  unsigned int i;
+  if (!q_dragon_local_ready() || !q_root_live(WQ_FAMILY_KORYUTA))
+    return;
+  root = q_lookup(q_roots[WQ_FAMILY_KORYUTA]);
+  if (!root || !root->dragon_following || !q_live(root) ||
+      !q_dragon_callback_matches((QuestCallback)QP(root->actor, 0xc),
+                                 q_dragon_idle))
+    return;
+  array = QUEST_DRAGON_ARRAY(root->actor);
+  if (!array || QP(array, 0) != root->actor)
+    return;
+  for (i = 0; i < WORLD_QUEST_MAX; ++i) {
+    QuestNode *n = &q_nodes[i];
+    if (n->family == WQ_FAMILY_KORYUTA && n->receipt && q_live(n) &&
+        n->part <= WORLD_QUEST_KORYUTA_PARTS &&
+        QP(array, n->part * QUEST_NATIVE_PTR_STRIDE) == n->actor &&
+        n->offered[WQ_ABI] == WORLD_QUEST_ABI)
+      q_dragon_pose(n, n->offered, 0, 0);
+  }
+}
+
+/* File_46's placed root and eleven native children are the complete dragon.
+ * Bind every offered part to its local task and to the root's native pointer
+ * array before changing a callback or a pose. Incomplete offers leave the
+ * original graph running and visible. */
+static unsigned int q_dragon_receive(
+    const int rows[][WORLD_QUEST_WORDS], unsigned int count,
+    unsigned int self_id) {
+  const int *part_rows[WORLD_QUEST_KORYUTA_PARTS + 1];
+  QuestNode *parts[WORLD_QUEST_KORYUTA_PARTS + 1];
+  void *root, *array;
+  unsigned int i, part, found = 0, owner = 0;
+  int complete = 1, initial;
+  if (!q_dragon_local_ready()) {
+    for (i = 0; i < WORLD_QUEST_MAX; ++i)
+      if (q_nodes[i].family == WQ_FAMILY_KORYUTA) {
+        q_dragon_release(&q_nodes[i]);
+        q_nodes[i].owner = 0;
+      }
+    return 0;
+  }
+  q_clear(part_rows, sizeof(part_rows));
+  q_clear(parts, sizeof(parts));
+  for (i = 0; i < count; ++i) {
+    const int *r = rows[i];
+    if (r[WQ_FAMILY] != WQ_FAMILY_KORYUTA)
+      continue;
+    ++found;
+    part = (unsigned int)r[WQ_PART];
+    if ((part == 0 && r[WQ_ROLE] != WQ_ROLE_KORYUTA_BODY) ||
+        (part && r[WQ_ROLE] != WQ_ROLE_KORYUTA_PART) ||
+        part > WORLD_QUEST_KORYUTA_PARTS || part_rows[part] ||
+        r[WQ_ORDINAL] != 1 || r[WQ_LIFE] != WQ_LIVE ||
+        r[WQ_OWNER] <= 0 || r[WQ_OWNER] == (int)self_id ||
+        r[WQ_SELF] != r[WQ_OWNER] || r[WQ_RECEIPT] <= 0 ||
+        r[WQ_INSTANCE] <= 0 ||
+        (owner && owner != (unsigned int)r[WQ_OWNER])) {
+      complete = 0;
+      continue;
+    }
+    owner = (unsigned int)r[WQ_OWNER];
+    part_rows[part] = r;
+  }
+  if (found != WORLD_QUEST_KORYUTA_PARTS + 1u)
+    complete = 0;
+  if (!part_rows[0] || part_rows[0][WQ_DRAGON_READY] != 1)
+    complete = 0;
+  root = q_roots[WQ_FAMILY_KORYUTA];
+  array = complete && q_root_live(WQ_FAMILY_KORYUTA) ? QUEST_DRAGON_ARRAY(root) : 0;
+  if (!array || QP(array, 0) != root)
+    complete = 0;
+  if (complete)
+    for (part = 0; part <= WORLD_QUEST_KORYUTA_PARTS; ++part) {
+      const int *r = part_rows[part];
+      unsigned int j;
+      if (!r) {
+        complete = 0;
+        break;
+      }
+      for (j = 0; j < WORLD_QUEST_MAX; ++j) {
+        QuestNode *n = &q_nodes[j];
+        if (n->actor && !n->proxy && q_live(n) &&
+            n->family == WQ_FAMILY_KORYUTA && n->part == part &&
+            n->role == (part ? WQ_ROLE_KORYUTA_PART : WQ_ROLE_KORYUTA_BODY) &&
+            n->ordinal == 1 && n->instance == (unsigned int)r[WQ_INSTANCE] &&
+            QH(n->actor, 0x5c) == (unsigned int)r[WQ_ENTITY] &&
+            QH(n->actor, 0x5e) == (unsigned int)r[WQ_MODEL] &&
+            QP(array, part * QUEST_NATIVE_PTR_STRIDE) == n->actor) {
+          parts[part] = n;
+          break;
+        }
+      }
+      if (!parts[part] ||
+          (parts[part]->owner == owner && parts[part]->receipt &&
+           parts[part]->offered[WQ_SERIAL] == r[WQ_SERIAL] &&
+           parts[part]->receipt != (unsigned int)r[WQ_RECEIPT]) ||
+          !clip_resident((unsigned int)r[WQ_MODEL],
+                         (unsigned int)r[WQ_CLIP])) {
+        complete = 0;
+        break;
+      }
+    }
+  if (complete && !parts[0]->dragon_following &&
+      !q_dragon_phase((QuestCallback)QP(root, 0xc)))
+    complete = 0;
+  if (complete && parts[0]->dragon_following &&
+      !q_dragon_callback_matches((QuestCallback)QP(root, 0xc),
+                                 q_dragon_idle))
+    complete = 0;
+  if (!complete) {
+    for (i = 0; i < WORLD_QUEST_MAX; ++i)
+      if (q_nodes[i].family == WQ_FAMILY_KORYUTA) {
+        q_dragon_release(&q_nodes[i]);
+        q_nodes[i].owner = 0;
+      }
+    return 0;
+  }
+  initial = !parts[0]->dragon_following;
+  if (initial) {
+    QuestCallback native = (QuestCallback)QP(root, 0xc);
+    unsigned long disabled = q_dragon_disabled(native,
+        q_dragon_callback(q_dragon_phase(native)));
+    parts[0]->dragon_native = native;
+    parts[0]->dragon_following = 1;
+    QP(root, 0xc) = (void *)((unsigned long)q_dragon_idle | disabled);
+  }
+  parts[0]->dragon_phase = (unsigned char)part_rows[0][WQ_PHASE];
+  QS(root, 0x8a) = (short)part_rows[0][WQ_TIMER];
+  QH(root, 0xd4) = (unsigned short)part_rows[0][WQ_DRAGON_D4];
+  QH(root, 0xd8) = (unsigned short)part_rows[0][WQ_DRAGON_D8];
+  QS(root, 0xda) = (short)part_rows[0][WQ_DRAGON_DA];
+  QS(root, 0xdc) = (short)part_rows[0][WQ_DRAGON_DC];
+  QS(root, 0xde) = (short)part_rows[0][WQ_DRAGON_DE];
+  for (part = 0; part <= WORLD_QUEST_KORYUTA_PARTS; ++part) {
+    QuestNode *n = parts[part];
+    const int *r = part_rows[part];
+    unsigned int j;
+    int new_pose = initial;
+    for (j = WQ_X; j <= WQ_ANIM; ++j)
+      if (n->offered[j] != r[j]) {
+        new_pose = 1;
+        break;
+      }
+    for (j = 0; j < WORLD_QUEST_WORDS; ++j)
+      n->offered[j] = r[j];
+    n->owner = owner;
+    n->receipt = (unsigned int)r[WQ_RECEIPT];
+    if (new_pose)
+      q_dragon_pose(n, r, initial, 1);
+  }
+  return WORLD_QUEST_KORYUTA_PARTS + 1u;
+}
+
+static void q_dragon_withdraw(void) {
+  QuestNode *root;
+  unsigned int i;
+  if (q_room != WORLD_QUEST_ROOM_KORYUTA ||
+      !q_roots[WQ_FAMILY_KORYUTA])
+    return;
+  root = q_lookup(q_roots[WQ_FAMILY_KORYUTA]);
+  if (!root || !root->dragon_following)
+    return;
+  q_dragon_release(root);
+  /* A durable terminal phase intentionally retains its inert callback.
+   * Clear receipts so its last owner pose can no longer tick. */
+  for (i = 0; i < WORLD_QUEST_MAX; ++i)
+    if (q_nodes[i].family == WQ_FAMILY_KORYUTA) {
+      q_nodes[i].owner = 0;
+      q_nodes[i].receipt = 0;
+    }
+}
+
+void anchor_world_quest_note_valid_reply(void) {
+  q_dragon_missing_frames = 0;
+}
+
+void anchor_world_quest_note_missing_reply(void) {
+  QuestNode *root;
+  if (q_room != WORLD_QUEST_ROOM_KORYUTA || !q_active ||
+      !q_roots[WQ_FAMILY_KORYUTA]) {
+    q_dragon_missing_frames = 0;
+    return;
+  }
+  root = q_lookup(q_roots[WQ_FAMILY_KORYUTA]);
+  if (!root || !root->dragon_following || !root->receipt) {
+    q_dragon_missing_frames = 0;
+    return;
+  }
+  if (++q_dragon_missing_frames >= QUEST_DRAGON_BRIDGE_GRACE_FRAMES) {
+    q_dragon_withdraw();
+    q_dragon_missing_frames = 0;
+  }
+}
+
 unsigned int anchor_world_quest_receive(
     const int rows[][WORLD_QUEST_WORDS], unsigned int count,
     unsigned int self_id) {
@@ -1324,12 +1743,16 @@ unsigned int anchor_world_quest_receive(
       if (q_same_key(rows[i], rows[j]))
         return 0;
   }
+  q_dragon_missing_frames = 0;
   anchor_world_quest_set_self(self_id);
+  applied += q_dragon_receive(rows, count, self_id);
   for (i = 0; i < count; ++i) {
     const int *row = rows[i];
     QuestNode *n;
     unsigned int file;
     void *resource, *actor;
+    if (row[WQ_FAMILY] == WQ_FAMILY_KORYUTA)
+      continue;
     n = q_find_proxy(row);
     if (row[WQ_LIFE] == WQ_REMOVED ||
         row[WQ_OWNER] == (int)self_id) {
@@ -1554,10 +1977,116 @@ void quest_koryuta_body(void) {
   q_set_root(WQ_FAMILY_KORYUTA, root);
   q_source(root, WQ_ROLE_KORYUTA_BODY, 1, 0);
 }
+
+/* File_58 consumes the local head-proximity flag in phase 8, performs its
+ * local camera/player transition in phase 7, then waits in phase 6. The
+ * callback itself identifies this controller;
+ * placement metadata is not stored in its task entity/model fields. Latch
+ * only after observing that native local transition. */
+RECOMP_HOOK("func_08000000_71A510")
+void quest_koryuta_controller_construct(void *task) {
+  unsigned int i;
+  if (!task || D_800C7AB2 != WORLD_QUEST_ROOM_KORYUTA)
+    return;
+  /* The new constructor runs before its first phase callback. Clear the old
+   * room-local latch now so no capture or receive frame can use it meanwhile. */
+  q_clear(&q_dragon_join, sizeof(q_dragon_join));
+  q_dragon_join.task = task;
+  q_dragon_join.generation = QB(task, 0x74);
+  /* A new local entrance invalidates the previous follower session even if
+   * no further network receipt arrives. Resume the live native root now. */
+  for (i = 0; i < WORLD_QUEST_MAX; ++i)
+    if (q_nodes[i].family == WQ_FAMILY_KORYUTA) {
+      q_dragon_release(&q_nodes[i]);
+      q_nodes[i].owner = 0;
+    }
+}
+
+RECOMP_HOOK("func_080004F8_71AA08")
+void quest_koryuta_controller_join(void *task, void *unused) {
+  void *private_state;
+  unsigned char generation, phase;
+  (void)unused;
+  if (!task || D_800C7AB2 != WORLD_QUEST_ROOM_KORYUTA ||
+      (QW(task, 0x68) & QUEST_DELETED_BIT))
+    return;
+  private_state = QP(task, 0xd0);
+  if (!private_state)
+    return;
+  generation = QB(task, 0x74);
+  if (q_dragon_join.task != task ||
+      q_dragon_join.private_state != private_state ||
+      q_dragon_join.generation != generation) {
+    q_dragon_join.task = task;
+    q_dragon_join.private_state = private_state;
+    q_dragon_join.generation = generation;
+    q_dragon_join.ready = 0;
+  }
+  phase = QB(private_state, 0);
+  if (phase == 6)
+    q_dragon_join.ready = 1;
+}
 RECOMP_HOOK("func_080011FC_7022FC")
 void quest_koryuta_part(void *part, int index) {
   if (index >= 1 && index <= WORLD_QUEST_KORYUTA_PARTS)
     q_source(part, WQ_ROLE_KORYUTA_PART, 1, (unsigned int)index);
+}
+
+/* File_46's native builder owns its cache, rider attachment and camera target.
+ * Only remove the two articulation inputs for this invocation. Its root
+ * phase, timers, collision and local scene state continue unchanged. */
+RECOMP_HOOK("func_08001460_702560")
+void quest_koryuta_straight_begin(void *root) {
+  QuestDragonHook *saved;
+  QuestNode *n;
+  if (q_dragon_hook_depth == QUEST_DRAGON_HOOK_DEPTH) {
+    ++q_dragon_hook_overflow;
+    return;
+  }
+  saved = &q_dragon_hook[q_dragon_hook_depth++];
+  saved->actor = 0;
+  if (!q_active || !q_self || D_800C7AB2 != WORLD_QUEST_ROOM_KORYUTA ||
+      q_room != WORLD_QUEST_ROOM_KORYUTA ||
+      !q_root_live(WQ_FAMILY_KORYUTA) ||
+      root != q_roots[WQ_FAMILY_KORYUTA])
+    return;
+  n = q_lookup(root);
+  if (!n || !q_live(n) || n->family != WQ_FAMILY_KORYUTA ||
+      n->role != WQ_ROLE_KORYUTA_BODY || n->part || n->dragon_following ||
+      QH(root, 0x5c) != 0x1b0 || QH(root, 0x5e) != 0x1b0 ||
+      q_dragon_callback_matches((QuestCallback)QP(root, 0xc),
+                                 q_dragon_idle))
+    return;
+  saved->actor = root;
+  saved->object = n->object;
+  saved->instance = n->instance;
+  saved->amplitude = QH(root, 0xd8);
+  saved->tilt = QS(root, 0xda);
+  QH(root, 0xd8) = 0;
+  QS(root, 0xda) = 0;
+}
+
+RECOMP_HOOK_RETURN("func_08001460_702560")
+void quest_koryuta_straight_end(void) {
+  QuestDragonHook *saved;
+  QuestNode *n;
+  if (q_dragon_hook_overflow) {
+    --q_dragon_hook_overflow;
+    return;
+  }
+  if (!q_dragon_hook_depth)
+    return;
+  saved = &q_dragon_hook[--q_dragon_hook_depth];
+  if (!saved->actor || D_800C7AB2 != WORLD_QUEST_ROOM_KORYUTA ||
+      q_room != WORLD_QUEST_ROOM_KORYUTA)
+    return;
+  n = q_lookup(saved->actor);
+  if (n && q_live(n) && n->instance == saved->instance &&
+      n->object == saved->object) {
+    QH(saved->actor, 0xd8) = saved->amplitude;
+    QS(saved->actor, 0xda) = saved->tilt;
+  }
+  saved->actor = 0;
 }
 
 RECOMP_HOOK_RETURN("func_08001C20_723240")
@@ -1636,6 +2165,10 @@ Q_GMC74_HOOK("func_080036F8_737E88", quest_gmc_36f8)
 static void q_retire(void *actor) {
   QuestNode *n = q_lookup(actor);
   unsigned int i;
+  if (q_dragon_join.task == actor) {
+    q_dragon_join.task = 0;
+    q_dragon_join.private_state = 0;
+  }
   if (!n)
     return;
   if (n->hidden && n->object) {
@@ -1701,6 +2234,14 @@ static int q_role_row_ok(const int *r) {
   if (r[WQ_GEN] || r[WQ_COLOUR] ||
       (r[WQ_COLOUR_MODE] && role != WQ_ROLE_KIHACHI_COLOUR))
     return 0;
+  if (role == WQ_ROLE_KORYUTA_BODY) {
+    if (!q_dragon_callback((unsigned int)r[WQ_PHASE]) ||
+        r[WQ_DRAGON_READY] < 0 || r[WQ_DRAGON_READY] > 1)
+      return 0;
+  } else if (r[WQ_DRAGON_D4] || r[WQ_DRAGON_D8] ||
+             r[WQ_DRAGON_DA] || r[WQ_DRAGON_DC] || r[WQ_DRAGON_DE] ||
+             r[WQ_DRAGON_READY])
+    return 0;
   if (role == WQ_ROLE_GATEWAY_MESH) {
     if (r[WQ_MESH_FLAGS] != 0 && r[WQ_MESH_FLAGS] != (int)QUEST_MESH_FLAGS_WORD)
       return 0;
@@ -1755,6 +2296,12 @@ int anchor_world_quest_row_valid(const int *r) {
   for (i = WQ_RED; i <= WQ_COLOUR_ALPHA; ++i)
     if (r[i] < 0 || r[i] > 255 || (!r[WQ_COLOUR_MODE] && r[i]))
       return 0;
+  if (r[WQ_DRAGON_D4] < 0 || r[WQ_DRAGON_D4] > 65535 ||
+      r[WQ_DRAGON_D8] < 0 || r[WQ_DRAGON_D8] > 65535 ||
+      r[WQ_DRAGON_DA] < -32768 || r[WQ_DRAGON_DA] > 32767 ||
+      r[WQ_DRAGON_DC] < -32768 || r[WQ_DRAGON_DC] > 32767 ||
+      r[WQ_DRAGON_DE] < -32768 || r[WQ_DRAGON_DE] > 32767)
+    return 0;
   for (i = WQ_FREE0; i < WQ_INSTANCE; ++i)
     if (r[i])
       return 0;

@@ -40,20 +40,28 @@ static void world_quest_frame(unsigned int room, unsigned int signature,
   anchor_world_quest_frame(room, signature, visit, 1);
   count = anchor_world_quest_row_count();
   status_count = anchor_world_quest_status(quest_status_rows, WORLD_QUEST_MAX);
-  if (count > WORLD_QUEST_MAX || status_count > WORLD_QUEST_MAX)
+  if (count > WORLD_QUEST_MAX || status_count > WORLD_QUEST_MAX) {
+    anchor_world_quest_note_missing_reply();
     return;
+  }
   rows = (const int (*)[WORLD_QUEST_WORDS])anchor_world_quest_rows();
   if (!anchor_world_quest_encode(rows, count, quest_sources_json,
                                   sizeof(quest_sources_json)) ||
       !anchor_world_quest_encode((const int (*)[WORLD_QUEST_WORDS])quest_status_rows,
                                   status_count, quest_status_json,
-                                  sizeof(quest_status_json)))
+                                  sizeof(quest_status_json))) {
+    anchor_world_quest_note_missing_reply();
     return;
+  }
   reply = anchor_update_world_quest(quest_sources_json, quest_status_json);
   if (reply && reply[0] &&
-      anchor_world_quest_decode(reply, quest_incoming_rows, &received))
+      anchor_world_quest_decode(reply, quest_incoming_rows, &received)) {
+    anchor_world_quest_note_valid_reply();
     anchor_world_quest_receive((const int (*)[WORLD_QUEST_WORDS])quest_incoming_rows,
                                received, anchor_get_client_id());
+  }
+  else
+    anchor_world_quest_note_missing_reply();
   if (reply)
     recomp_free(reply);
 }

@@ -12,12 +12,13 @@
  * Every one of these graphs mixes portable visual scalars with a LOCAL
  * handshake inside the same task fields: the coordinator, the player/dialogue
  * script, the camera, the full-screen fade and the temporary-bit bank are all
- * local scene control and are never shared. This module therefore never
- * patches a native phase, timer or temporary bit. It captures the visible
- * scalar state, hides the original render of a tracked actor only while a
+ * local scene control and are never shared. Koryuta's owner-elected flight
+ * cycle is the sole native phase exception. It captures the visible
+ * scalar state, hides the original render of other tracked actors only while a
  * valid reconstructed proxy is active, and re-applies the same scalars to a
  * render-only proxy that binds native models and resources with a pure
- * initializer.
+ * initializer. Koryuta applies complete owner checkpoints to its placed
+ * root and eleven native parts instead of constructing render proxies.
  *
  * Wire format: WORLD_QUEST_WORDS signed 32-bit words per record, at most
  * WORLD_QUEST_MAX records. No task, object, resource, script or callback
@@ -35,9 +36,9 @@
 #define WORLD_QUEST_JSON 98304
 
 /* Row ABI. Increment on any field, range or role change. */
-#define WORLD_QUEST_ABI 2
+#define WORLD_QUEST_ABI 4
 
-/* Field order of one record. 45..61 are reserved and must stay zero. */
+/* Field order of one record. 51..61 are reserved and must stay zero. */
 enum {
   WQ_ABI = 0,     /* WORLD_QUEST_ABI */
   WQ_FAMILY,      /* WQ_FAMILY_* */
@@ -84,7 +85,14 @@ enum {
   WQ_BLUE = 42,
   WQ_COLOUR_ALPHA = 43,
   WQ_COLOUR_MODE = 44, /* 0=none, 1=typed RGBA */
-  WQ_FREE0 = 45,
+  /* File_46 root only: typed flight-cycle counters. */
+  WQ_DRAGON_D4 = 45, /* actor+0xD4 u16 */
+  WQ_DRAGON_D8 = 46, /* actor+0xD8 u16 */
+  WQ_DRAGON_DA = 47, /* actor+0xDA s16 */
+  WQ_DRAGON_DC = 48, /* actor+0xDC s16 */
+  WQ_DRAGON_DE = 49, /* actor+0xDE s16 */
+  WQ_DRAGON_READY = 50, /* root only: local File_58 phase 6 observed */
+  WQ_FREE0 = 51,
   WQ_INSTANCE = 62, /* local task-incarnation id; zero on wire */
   WQ_RECEIPT = 63   /* locally echoed offer token; zero on wire */
 };
@@ -183,12 +191,19 @@ void anchor_world_quest_set_self(unsigned int self_id);
 
 /* Accept selected peer rows for this room. The call may schedule native
  * child creation, so it returns the number fully applied now; retry pending
- * rows on subsequent frames. Only module-owned render proxies are applied.
+ * rows on subsequent frames. Koryuta binds its complete local native graph;
+ * other families apply only module-owned render proxies.
  * A row with INSTANCE=0 may start a missing proxy. A nonzero INSTANCE must
  * match the local task incarnation. RECEIPT must be nonzero. */
 unsigned int anchor_world_quest_receive(
     const int rows[][WORLD_QUEST_WORDS], unsigned int count,
     unsigned int self_id);
+
+/* Missing/invalid bridge replies withdraw only an active Koryuta follower
+ * after 60 consecutive active game frames (roughly two seconds at 30 Hz).
+ * A valid decoded reply resets the grace period. Other families are untouched. */
+void anchor_world_quest_note_missing_reply(void);
+void anchor_world_quest_note_valid_reply(void);
 
 /* Expose local proxy instances and acknowledged receipts to the transport.
  * Each returned row is pointer-free and obeys the same ABI. */

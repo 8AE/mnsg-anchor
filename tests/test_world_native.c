@@ -78,6 +78,8 @@ void func_8000F420_10020(unsigned short id, void *state, void *source,
   ++world_sound_calls;
 }
 void anchor_world_quest_set_self(unsigned int self) { (void)self; }
+void anchor_world_quest_note_missing_reply(void) {}
+void anchor_world_quest_note_valid_reply(void) {}
 void anchor_world_quest_frame(unsigned int r,unsigned int s,unsigned int v,int a) {
   (void)r;(void)s;(void)v;(void)a;
 }
