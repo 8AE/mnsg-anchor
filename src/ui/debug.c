@@ -118,6 +118,7 @@ typedef struct
 static const char *s_pending_status = 0;
 static char s_transport_status[96];
 static char s_boss_status[64];
+static char s_minigame_status[96];
 
 typedef struct
 {
@@ -139,6 +140,26 @@ static const DebugBossDestination s_boss_destinations[] = {
 };
 #define DEBUG_BOSS_DESTINATION_COUNT \
     (sizeof(s_boss_destinations) / sizeof(s_boss_destinations[0]))
+
+typedef struct
+{
+    const char *name;
+    unsigned short room;
+    short x;
+    short y;
+    short z;
+} DebugMinigameDestination;
+
+static const DebugMinigameDestination s_minigame_destinations[] = {
+    {"Goemon: Sudden Impact", 0x01E0, 0, 25, 0},
+    /* 0x1E2 is Sasuke's separate High Jump minigame. */
+    {"Sasuke: Jetpack Training", 0x01D0, 79, -50, 169},
+    /* Mermaid training starts through the Waterfall of Kegon interaction. */
+    {"Yae: Mermaid Training (Kegon)", 0x0154, 29, -320, -544},
+    {"Ebisumaru: Mini Ebisumaru", 0x01E1, 0, 0, 0}
+};
+#define DEBUG_MINIGAME_DESTINATION_COUNT \
+    (sizeof(s_minigame_destinations) / sizeof(s_minigame_destinations[0]))
 
 /* Transport form fields and selected shared race-location entry. These are
  * declared before the transport helpers because helper code updates the UI
@@ -1018,6 +1039,7 @@ static int s_pending_location_fill = 0;
 static int s_pending_location_transport = 0;
 static unsigned short s_pending_impact_stage = 0;
 static unsigned long s_pending_boss_destination = 0;
+static unsigned long s_pending_minigame_destination = 0;
 
 /* =========================================================================
    Callbacks  (flag-setters only – no context API calls here)
@@ -1145,6 +1167,14 @@ static void on_boss_teleport_clicked(RecompuiResource res,
     (void)res;
     if (ev->type == UI_EVENT_CLICK)
         s_pending_boss_destination = (unsigned long)ud;
+}
+
+static void on_minigame_teleport_clicked(RecompuiResource res,
+                                         const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_minigame_destination = (unsigned long)ud;
 }
 
 /* =========================================================================
@@ -1435,7 +1465,7 @@ static void debug_init_ui(void)
         recompui_set_tab_index(go_btn, TAB_INDEX_NONE);
         recompui_register_callback(go_btn, on_transport_location_go_clicked, 0);
 
-        /* Boss controls, Impact intros and flag rows share one scroll area. */
+        /* Boss and minigame controls, Impact intros and flag rows share one scroll area. */
         RecompuiResource scroll = recompui_create_element(s_modal_ctx, panel);
         recompui_set_flex_grow(scroll, 1.0f);
         recompui_set_min_height(scroll, 0.0f, UNIT_DP);
@@ -1499,6 +1529,60 @@ static void debug_init_ui(void)
             recompui_set_min_height(boss_btn, 42.0f, UNIT_DP);
             recompui_set_tab_index(boss_btn, TAB_INDEX_NONE);
             recompui_register_callback(boss_btn, on_boss_teleport_clicked,
+                                       (void *)(unsigned long)(i + 1));
+        }
+
+        RecompuiResource minigames = recompui_create_element(s_modal_ctx, scroll);
+        recompui_set_display(minigames, DISPLAY_FLEX);
+        recompui_set_flex_direction(minigames, FLEX_DIRECTION_COLUMN);
+        recompui_set_flex_shrink(minigames, 0.0f);
+        recompui_set_min_height(minigames, 174.0f, UNIT_DP);
+        recompui_set_padding_top(minigames, 14.0f, UNIT_DP);
+        recompui_set_padding_bottom(minigames, 14.0f, UNIT_DP);
+        recompui_set_padding_left(minigames, 20.0f, UNIT_DP);
+        recompui_set_padding_right(minigames, 20.0f, UNIT_DP);
+        recompui_set_background_color(minigames, &C_ROW_ODD);
+        recompui_set_border_bottom_width(minigames, 1.0f, UNIT_DP);
+        recompui_set_border_bottom_color(minigames, &C_BORDER);
+        recompui_set_gap(minigames, 10.0f, UNIT_DP);
+
+        RecompuiResource minigames_title = recompui_create_label(
+            s_modal_ctx, minigames, "Minigame Teleports", LABELSTYLE_SMALL);
+        recompui_set_color(minigames_title, &C_GREEN);
+        recompui_set_font_weight(minigames_title, 700);
+        recompui_set_font_size(minigames_title, 18.0f, UNIT_DP);
+
+        RecompuiResource minigames_hint = recompui_create_label(
+            s_modal_ctx, minigames,
+            "Yae lands at Waterfall of Kegon; start Mermaid training there.",
+            LABELSTYLE_ANNOTATION);
+        recompui_set_color(minigames_hint, &C_DIM);
+        recompui_set_font_size(minigames_hint, 14.0f, UNIT_DP);
+
+        RecompuiResource minigame_row = RECOMPUI_NULL_RESOURCE;
+        for (i = 0; i < (int)DEBUG_MINIGAME_DESTINATION_COUNT; ++i)
+        {
+            if (i % 2 == 0)
+            {
+                minigame_row = recompui_create_element(s_modal_ctx, minigames);
+                recompui_set_display(minigame_row, DISPLAY_FLEX);
+                recompui_set_flex_direction(minigame_row, FLEX_DIRECTION_ROW);
+                recompui_set_flex_shrink(minigame_row, 0.0f);
+                recompui_set_min_height(minigame_row, 42.0f, UNIT_DP);
+                recompui_set_gap(minigame_row, 12.0f, UNIT_DP);
+            }
+            RecompuiResource minigame_btn = recompui_create_button(
+                s_modal_ctx, minigame_row, s_minigame_destinations[i].name,
+                BUTTONSTYLE_SECONDARY);
+            recompui_set_cursor(minigame_btn, CURSOR_POINTER);
+            debug_compact_button(minigame_btn, 14.0f, 9.0f, 10.0f);
+            recompui_set_flex_basis(minigame_btn, 0.0f, UNIT_DP);
+            recompui_set_flex_grow(minigame_btn, 1.0f);
+            recompui_set_min_width(minigame_btn, 0.0f, UNIT_DP);
+            recompui_set_height(minigame_btn, 42.0f, UNIT_DP);
+            recompui_set_min_height(minigame_btn, 42.0f, UNIT_DP);
+            recompui_set_tab_index(minigame_btn, TAB_INDEX_NONE);
+            recompui_register_callback(minigame_btn, on_minigame_teleport_clicked,
                                        (void *)(unsigned long)(i + 1));
         }
 
@@ -1847,6 +1931,46 @@ void debug_ui_frame_hook(void)
         }
     }
     s_pending_boss_destination = 0;
+
+    if (s_pending_minigame_destination && !transition_started)
+    {
+        unsigned long id = s_pending_minigame_destination;
+        if (id > DEBUG_MINIGAME_DESTINATION_COUNT)
+        {
+            s_pending_status = "Unknown minigame destination";
+        }
+        else
+        {
+            const DebugMinigameDestination *destination =
+                &s_minigame_destinations[id - 1];
+            if (anchor_boss_invite_world_transfer_to(destination->room,
+                                                     destination->x,
+                                                     destination->y,
+                                                     destination->z))
+            {
+                int pos = 0;
+                debug_append_text(s_minigame_status, &pos,
+                                  (int)sizeof(s_minigame_status), "Teleporting to ");
+                debug_append_text(s_minigame_status, &pos,
+                                  (int)sizeof(s_minigame_status), destination->name);
+                s_minigame_status[pos] = '\0';
+                s_pending_status = s_minigame_status;
+                recomp_printf("[Debug] Minigame teleport: %s\n", destination->name);
+                if (s_modal_visible)
+                {
+                    recompui_hide_context(s_modal_ctx);
+                    s_modal_visible = 0;
+                }
+                s_pending_open = 0;
+                transition_started = 1;
+            }
+            else
+            {
+                s_pending_status = "Minigame teleport unavailable here";
+            }
+        }
+    }
+    s_pending_minigame_destination = 0;
 
     if (s_pending_impact_stage && !transition_started)
     {
