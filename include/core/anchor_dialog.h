@@ -12,12 +12,14 @@ typedef enum AnchorDialogResult {
 typedef enum AnchorDialogOwner {
     ANCHOR_DIALOG_OWNER_NONE = 0,
     ANCHOR_DIALOG_OWNER_BOSS_INVITE,
-    ANCHOR_DIALOG_OWNER_CASTLE_RETURN
+    ANCHOR_DIALOG_OWNER_CASTLE_RETURN,
+    ANCHOR_DIALOG_OWNER_MINIGAME_INVITE
 } AnchorDialogOwner;
 
 /* Begin only while the caller's world/room is safe for a prompt. Returns zero
  * while another native scenario/window owns the UI or resources are absent. */
 int anchor_dialog_begin(const char *player_name, const char *arena_name);
+int anchor_dialog_begin_minigame(const char *player_name, const char *game_name);
 /* Offer the local player a return trip to Ugo Stone Circle from the castle
  * sign. Uses the same single native scenario/window owner and result API. */
 int anchor_dialog_begin_castle_return(void);

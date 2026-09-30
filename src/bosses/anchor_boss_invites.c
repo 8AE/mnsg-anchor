@@ -21,6 +21,7 @@ extern unsigned short D_800C7AB2;
 #include "progression/item_sync.h"
 #include "utils/json_utils.h"
 #include "world/anchor_castle_return_sign.h"
+#include "world/anchor_minigame_invites.h"
 
 typedef struct
 {
@@ -158,6 +159,7 @@ void anchor_boss_invites_update(void)
     }
 
     if (!anchor_boss_invite_world_can_prompt() || anchor_dialog_busy() ||
+        anchor_minigame_invites_active() ||
         anchor_castle_return_sign_pending())
         return;
     json = anchor_get_boss_invitation_json();

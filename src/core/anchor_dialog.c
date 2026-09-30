@@ -243,6 +243,11 @@ int anchor_dialog_begin(const char *name, const char *arena)
     return begin_dialog(ANCHOR_DIALOG_OWNER_BOSS_INVITE, name, arena);
 }
 
+int anchor_dialog_begin_minigame(const char *name, const char *game)
+{
+    return begin_dialog(ANCHOR_DIALOG_OWNER_MINIGAME_INVITE, name, game);
+}
+
 int anchor_dialog_begin_castle_return(void)
 {
     return begin_dialog(ANCHOR_DIALOG_OWNER_CASTLE_RETURN, 0, 0);

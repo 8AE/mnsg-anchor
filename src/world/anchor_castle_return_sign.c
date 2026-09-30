@@ -3,6 +3,7 @@
 #include "core/anchor_dialog.h"
 #include "bosses/anchor_boss_invite_world.h"
 #include "world/anchor_castle_return_sign.h"
+#include "world/anchor_minigame_invites.h"
 #ifndef ANCHOR_CASTLE_RETURN_SIGN_HOST_TEST
 #include "platform/modding.h"
 #include "platform/recomputils.h"
@@ -221,7 +222,8 @@ RECOMP_PATCH void func_80221338_5DC808(void *task, void *object)
          * Even a failed private begin must reach native cleanup. */
         if (player == D_801FC604_5B8514 &&
             !anchor_castle_return_sign_pending() &&
-            !anchor_boss_invites_active()) {
+            !anchor_boss_invites_active() &&
+            !anchor_minigame_invites_active()) {
             began = anchor_dialog_begin_castle_return();
             if (began) {
                 s_prompt_active = 1;

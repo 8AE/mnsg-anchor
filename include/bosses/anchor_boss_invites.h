@@ -3,5 +3,6 @@
 
 /* Frame coordinator for transient team arena events and native Yes/No UI. */
 void anchor_boss_invites_update(void);
+int anchor_boss_invites_active(void);
 
 #endif

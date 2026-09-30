@@ -1,7 +1,14 @@
+#ifdef ANCHOR_CHARACTER_CYCLER_HOST_TEST
+#define RECOMP_PATCH
+#define RECOMP_HOOK_RETURN(name)
+extern int recomp_printf(const char *format, ...);
+#else
 #include "platform/modding.h"
 #include "platform/recomputils.h"
+#endif
 #include "core/anchor_dialog.h"
 #include "player/alternative_ebisumaru/anchor_player_skin.h"
+#include "world/anchor_minigame_invites.h"
 
 /* Save-data base. The character unlock fields live at +0x94..+0xa0, and
  * hp_max lives before the base at -0x28. func_8000B640 initializes this block
@@ -17,6 +24,7 @@ extern unsigned int D_8015C5D8_15D1D8[];
  * writes arg0+0x60 and D_8015C5DC, clears movement/action fields, marks the
  * actor's character-change flag, and switches the player state callback. */
 extern void func_801DD5C0_5994D0(void *arg0, unsigned char value);
+extern void *D_801FC604_5B8514;
 
 #define SAVE_READ32(off) (*(signed int *)((char *)D_8015C608_15D208 + (off)))
 #define SAVE_WRITE32(off, val) (*(signed int *)((char *)D_8015C608_15D208 + (off)) = (signed int)(val))
@@ -60,6 +68,11 @@ void anchor_set_current_character_if_needed(void)
     int current = D_8015C5D8_15D1D8[1] & 0xff;
     int replacement;
 
+    /* Minigames temporarily select their own playable character, including
+     * one the save has not recruited. Leave unlock and spawn-save words alone. */
+    if (anchor_minigame_invites_required_character() >= 0)
+        return;
+
     if (character_is_enabled(current))
         return;
 
@@ -80,6 +93,10 @@ RECOMP_PATCH int func_801DD50C_59941C(void *arg0)
     unsigned char current = *(unsigned char *)((char *)arg0 + 0x60);
     int step = 1;
     int selected = -1;
+
+    if (arg0 == D_801FC604_5B8514 &&
+        anchor_minigame_invites_required_character() >= 0)
+        return 1;
 
     do
     {

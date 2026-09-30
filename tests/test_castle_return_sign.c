@@ -21,7 +21,7 @@ static unsigned char other_player[0xe0];
 static int wave_ready, owner_ready, allocation_ready, reenter;
 static int wave_checks, owner_calls, allocation_calls, initialize_calls;
 static int prompt_ready, prompt_active, prompt_begins, prompt_cancels;
-static int warp_ready, warp_calls, boss_invite_active;
+static int warp_ready, warp_calls, boss_invite_active, minigame_invite_active;
 static int scripted_input;
 static void (*scheduled_callback)(void *, void *);
 static int callback_sets;
@@ -39,6 +39,7 @@ int anchor_boss_invite_world_can_prompt(void)
     return prompt_ready && !scripted_input;
 }
 int anchor_boss_invites_active(void) { return boss_invite_active; }
+int anchor_minigame_invites_active(void) { return minigame_invite_active; }
 int anchor_dialog_begin_castle_return(void)
 {
     if (!prompt_ready || prompt_active)
@@ -305,6 +306,12 @@ int main(void)
     scheduled_callback(task_storage, object_storage);
     release_native_player(player_storage);
     boss_invite_active = 0;
+    minigame_invite_active = 1;
+    accepted_talk(player_storage);
+    assert(!prompt_begins);
+    scheduled_callback(task_storage, object_storage);
+    release_native_player(player_storage);
+    minigame_invite_active = 0;
     accepted_talk(player_storage);
     assert(prompt_begins == 1 && prompt_active);
     scheduled_callback(task_storage, object_storage); /* Wait for VM close. */

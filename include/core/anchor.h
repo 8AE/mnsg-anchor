@@ -156,6 +156,11 @@ extern "C"
     * @return 1 if a packet was sent, 0 otherwise.
     */
    int anchor_set_local_room(unsigned int room_id);
+   /* Publish room and selected character in one UPDATE_CLIENT_STATE packet.
+    * Returns true when already current or successfully sent; failed sends
+    * remain pending for a later call. */
+   int anchor_set_local_room_character(unsigned int room_id,
+                                       const char *char_name);
 
    /**
     * @brief Publish the local dead-enemy bitmap for one raw game room.
@@ -227,6 +232,12 @@ extern "C"
    char *anchor_get_boss_invitation_json(void);
    int anchor_boss_invitation_is_current(int cid, int session, int sequence);
    void anchor_dismiss_boss_invitation(int cid, int session, int sequence);
+
+   /* Transient team invitation for loaded character minigame rooms. */
+   int anchor_update_minigame_active(int game, int visit);
+   char *anchor_get_minigame_invitation_json(void);
+   int anchor_minigame_invitation_is_current(int cid, int session, int sequence);
+   void anchor_dismiss_minigame_invitation(int cid, int session, int sequence);
 
    /* One batched bridge exchange per frame. Python owns election, checkpoint
     * caching, deduplication and the shared packet budget. Free the result. */

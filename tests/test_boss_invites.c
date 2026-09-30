@@ -18,6 +18,7 @@ static char shown_name[257], shown_arena[64];
 static AnchorDialogResult choice = ANCHOR_DIALOG_PENDING;
 static AnchorDialogOwner dialog_owner = ANCHOR_DIALOG_OWNER_NONE;
 static int sign_pending;
+static int minigame_invite_active;
 static const char invite[] = "{\"cid\":2,\"session\":123,\"seq\":7,\"arena\":1,\"name\":\"Ahmad\"}";
 
 int anchor_is_connected(void) { return connected; }
@@ -40,6 +41,7 @@ unsigned int anchor_boss_invite_world_field90(void) { return 0; }
 unsigned int anchor_boss_invite_world_field91(void) { return 0; }
 int anchor_boss_invite_world_can_prompt(void) { return prompt_safe; }
 int anchor_castle_return_sign_pending(void) { return sign_pending; }
+int anchor_minigame_invites_active(void) { return minigame_invite_active; }
 int anchor_boss_invite_world_warp(int arena)
 {
     assert(!modal); /* no transition while native text owns input */
@@ -141,6 +143,11 @@ int main(void)
     anchor_boss_invites_update();
     assert(starts == 0 && peeks == 0);
     sign_pending = 0;
+    /* A minigame Yes remains owned while its transfer retries after close. */
+    minigame_invite_active = 1;
+    anchor_boss_invites_update();
+    assert(starts == 0 && peeks == 0 && packet);
+    minigame_invite_active = 0;
     dialog_available = 0;
     anchor_boss_invites_update();
     assert(starts == 0 && packet && frees == 1);

@@ -7,6 +7,10 @@
  * dialogue. Reception/teleport readiness is deliberately a separate check. */
 int anchor_boss_invite_world_arena(void);
 unsigned int anchor_boss_invite_world_visit(void);
+/* Loaded ordinary world and live local player, without UI/control gates. */
+int anchor_boss_invite_world_loaded_player_active(void);
+/* Includes the native +0x69=1, action 0xBA character-rebind interval. */
+int anchor_boss_invite_world_loaded_player_present(void);
 
 /* The first native Impact stage of the active sequence (0x021C..0x0223 or
  * intro 0x0239..0x023C), or 0.

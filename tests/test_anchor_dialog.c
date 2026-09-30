@@ -294,6 +294,25 @@ int main(void)
     check_result(0, 1, 1, ANCHOR_DIALOG_NO);
     check_result(0, 2, 0, ANCHOR_DIALOG_NO);
 
+    {
+        static const char *games[] = {
+            "Sudden Impact Training", "Mini Ebisumaru", "Sasuke High Jump"
+        };
+        for (unsigned int i = 0; i < sizeof(games) / sizeof(games[0]); ++i) {
+            reset_test();
+            assert(anchor_dialog_begin_minigame("Ahmad", games[i]));
+            to_choice();
+            assert(strstr(rendered, games[i]));
+            assert(anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_BOSS_INVITE) ==
+                   ANCHOR_DIALOG_IDLE);
+            anchor_dialog_cancel_for(ANCHOR_DIALOG_OWNER_CASTLE_RETURN);
+            assert(anchor_dialog_busy());
+            anchor_dialog_cancel_for(ANCHOR_DIALOG_OWNER_MINIGAME_INVITE);
+            assert(anchor_dialog_poll_for(ANCHOR_DIALOG_OWNER_MINIGAME_INVITE) ==
+                   ANCHOR_DIALOG_CANCELLED);
+        }
+    }
+
     reset_test();
     assert(anchor_dialog_begin_castle_return());
     to_choice();

@@ -126,6 +126,7 @@ _rx_thread: "threading.Thread | None" = None
 # Last room ID sent to the server (avoids redundant state updates).
 _local_room_id: int = -1
 _local_character: str = ""
+_local_room_character_pending: bool = False
 _local_save_loaded: bool = False
 _local_enemy_room: int = -1
 _local_enemy_sig: int = 0
@@ -190,6 +191,13 @@ _arena_events: dict = {}
 _arena_seen: dict = {}
 _arena_retired_sessions: "dict[int, set[int]]" = {}
 _arena_confirmed_sessions: "dict[int, int]" = {}
+# Transient minigame entry events are separate from boss arenas and save state.
+_minigame_local_state: "tuple[str, int, int]" = ("", 0, 0)
+_minigame_sequence: int = 0
+_minigame_events: dict = {}
+_minigame_seen: dict = {}
+_minigame_retired_sessions: "dict[int, set[int]]" = {}
+_minigame_confirmed_sessions: "dict[int, int]" = {}
 _congo = anchor_congo.CongoTransport()
 _control_machine = anchor_control_machine.ControlMachineTransport()
 _dharumanyo = anchor_dharumanyo.DharumanyoTransport()
@@ -229,6 +237,7 @@ MAP_COORD_MAX: int = 0x7fffffff
 MOVEMENT_MIN_INTERVAL_MS: int = 50
 ANCHOR_MAX_PACKET_BYTES: int = 8 * 1024 * 1024
 HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
+    "MNSG_MINIGAME_INVITE": 256,
     "MNSG_PLAYER_POS": 640,
     "MNSG_PLAYER_HIT": 512,
     "MNSG_PLAYER_CUBE_CTRL": 512,
@@ -324,6 +333,12 @@ BOSS_ARENA_ROOMS: "dict[int, int]" = {
     DETOILE_ARENA: 0x223,  # D'Etoile
 }
 ARENA_METADATA_WAIT_MS: int = 5000
+MINIGAME_ROOMS: "dict[int, int]" = {
+    1: 0x01E0,  # Goemon Sudden Impact
+    2: 0x01E1,  # Mini Ebisumaru sweets
+    3: 0x01E2,  # Sasuke High Jump
+}
+MINIGAME_METADATA_WAIT_MS: int = 5000
 ANIMATION_RESTART_DELTA_100: int = 50
 ENEMY_BITMAP_HEX_MAX: int = 64
 APPEARANCE_SUDDEN_IMPACT: int = 1 << 0
@@ -779,6 +794,7 @@ def _merge_client_state(
     _impact.observe(context)
     _impact_players.observe(context)
     _invalidate_confirmed_boss_invitation(cid)
+    _invalidate_confirmed_minigame_invitation(cid)
     _prune_projectile_spawns(now_ms)
     return True
 
@@ -937,6 +953,8 @@ def _replace_all_client_states(states: list) -> None:
         _impact_players.observe(context)
         for cid in list(_arena_events):
             _invalidate_confirmed_boss_invitation(cid)
+        for cid in list(_minigame_events):
+            _invalidate_confirmed_minigame_invitation(cid)
         now_ms = int(time.monotonic() * 1000)
         _prune_projectile_spawns(now_ms)
         _prune_player_sounds(now_ms)
@@ -1241,6 +1259,10 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_boss_arena(packet)
                     continue
 
+                if ptype == "MNSG_MINIGAME_INVITE":
+                    _receive_minigame_invite(packet)
+                    continue
+
                 if ptype == anchor_world_dynamic.PACKET_TYPE:
                     with _player_states_lock:
                         _world_actors.receive(_boss_context(), packet, time.monotonic())
@@ -1342,6 +1364,7 @@ def _recv_loop(sock: socket.socket) -> None:
 def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     """Close the socket and mark as disconnected (idempotent)."""
     global _sock, _connected, _local_room_id, _local_character, _local_save_loaded
+    global _local_room_character_pending
     global _local_enemy_room, _local_enemy_sig, _local_enemy_bits
     global _last_position_sent, _last_position_sent_ms, _last_position_room_id
     global _last_position_action, _last_position_frame_100
@@ -1362,6 +1385,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
 
     _local_room_id = -1
     _local_character = ""
+    _local_room_character_pending = False
     _local_save_loaded = False
     _local_enemy_room = -1
     _local_enemy_sig = 0
@@ -1401,6 +1425,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _player_movement_order.clear()
         _reset_projectile_spawns()
         _reset_boss_invitations()
+        _reset_minigame_invitations()
         _congo.reset()
         _control_machine.reset()
         _dharumanyo.reset()
@@ -1440,7 +1465,7 @@ def connect(
     """
     global _sock, _connected, _client_id, _room_id, _team_id, _player_name
     global _last_position_sent, _last_position_sent_ms, _last_position_room_id
-    global _position_seq, _local_character
+    global _position_seq, _local_character, _local_room_character_pending
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
     global _last_position_drive, _last_position_epoch, _local_map_snapshot
@@ -1487,6 +1512,7 @@ def connect(
     _player_ice_break_seq = 0
     _position_seq = 0
     _local_character = ""
+    _local_room_character_pending = False
     _local_save_loaded = False
     _local_enemy_room = -1
     _local_enemy_sig = 0
@@ -1503,6 +1529,7 @@ def connect(
         _player_movement_order.clear()
         _reset_projectile_spawns()
         _reset_boss_invitations()
+        _reset_minigame_invitations()
         _congo.reset()
         _control_machine.reset()
         _dharumanyo.reset()
@@ -3576,6 +3603,164 @@ def dismiss_boss_invitation(cid: int, session: int, sequence: int) -> None:
             _arena_events.pop(cid, None)
 
 
+def _reset_minigame_invitations() -> None:
+    """Called with the roster lock during connection teardown/setup."""
+    global _minigame_local_state, _minigame_sequence
+    _minigame_local_state = ("", 0, 0)
+    _minigame_sequence = 0
+    _minigame_events.clear()
+    _minigame_seen.clear()
+    _minigame_retired_sessions.clear()
+    _minigame_confirmed_sessions.clear()
+
+
+def _invalidate_confirmed_minigame_invitation(cid: int) -> None:
+    event = _minigame_events.get(cid)
+    if (event and event["confirmed"] and
+            not _minigame_invitation_is_current(event, int(time.monotonic() * 1000))):
+        _minigame_events.pop(cid, None)
+
+
+def set_minigame_active(game: int, visit: int = 0) -> bool:
+    """Publish a native challenge entry or exit edge without durable state."""
+    global _minigame_local_state, _minigame_sequence
+    if (type(game) is not int or (game != 0 and game not in MINIGAME_ROOMS) or
+            type(visit) is not int or not 0 <= visit <= _POSITION_SEQUENCE_MASK or
+            not _connected or _client_id <= 0 or _interaction_session <= 0):
+        return False
+    if game and (not visit or not _local_save_loaded or
+                 _local_room_character_pending or
+                 _local_room_id != MINIGAME_ROOMS[game]):
+        return False
+    next_state = (_team_id, game, visit if game else 0)
+    if next_state == _minigame_local_state:
+        return True
+    if game == 0 and _minigame_local_state[1] == 0:
+        _minigame_local_state = next_state
+        return True
+    sequence = _minigame_sequence + 1
+    if sequence > _POSITION_SEQUENCE_MASK:
+        return False
+    packet = {"type": "MNSG_MINIGAME_INVITE", "clientId": _client_id,
+              "targetTeamId": _team_id, "game": game or _minigame_local_state[1],
+              "entered": game != 0, "session": _interaction_session,
+              "seq": sequence}
+    if not _send_raw(packet):
+        return False
+    _minigame_sequence = sequence
+    _minigame_local_state = next_state
+    return True
+
+
+def _receive_minigame_invite(packet: dict) -> bool:
+    if (not isinstance(packet, dict) or
+            packet.get("type") != "MNSG_MINIGAME_INVITE" or
+            "targetClientId" in packet or "addToQueue" in packet or
+            not _connected or _client_id <= 0 or not _local_save_loaded or
+            packet.get("targetTeamId") != _team_id or
+            type(packet.get("game")) is not int or
+            packet["game"] not in MINIGAME_ROOMS or
+            type(packet.get("entered")) is not bool):
+        return False
+    for key in ("clientId", "session", "seq"):
+        if type(packet.get(key)) is not int or not 0 < packet[key] <= _POSITION_SEQUENCE_MASK:
+            return False
+    cid, session, sequence = (packet[key] for key in ("clientId", "session", "seq"))
+    if cid == _client_id:
+        return False
+    with _player_states_lock:
+        peer = _player_states.get(cid)
+        if peer and (not peer.get("online", False) or
+                     (peer.get("teamId") and peer["teamId"] != _team_id)):
+            return False
+        if (session in _retired_interaction_sessions.get(cid, ()) or
+                session in _minigame_retired_sessions.get(cid, ())):
+            return False
+        key = (cid, session)
+        if sequence <= _minigame_seen.get(key, 0):
+            return False
+        event = _minigame_events.get(cid)
+        if event and event["session"] != session and key in _minigame_seen:
+            if (event["confirmed"] or int(time.monotonic() * 1000) -
+                    event["received"] <= MINIGAME_METADATA_WAIT_MS):
+                return False
+            _minigame_events.pop(cid, None)
+        _minigame_seen[key] = sequence
+        if not packet["entered"]:
+            event = _minigame_events.get(cid)
+            if event and event["session"] == session:
+                _minigame_events.pop(cid, None)
+            return True
+        _minigame_events[cid] = {
+            "cid": cid, "session": session, "seq": sequence,
+            "game": packet["game"], "team": _team_id, "entered": True,
+            "consumed": False, "confirmed": False,
+            "received": int(time.monotonic() * 1000),
+        }
+    return True
+
+
+def _minigame_invitation_is_current(event: dict, now: int) -> bool:
+    if (not _connected or not _local_save_loaded or event["team"] != _team_id or
+            not event["entered"] or event["consumed"] or
+            _local_room_id == MINIGAME_ROOMS[event["game"]] or
+            _minigame_local_state[:2] == (_team_id, event["game"])):
+        event["consumed"] = True
+        return False
+    cid, session = event["cid"], event["session"]
+    peer = _player_states.get(cid, {})
+    known_session = (peer.get("interactionSession") or
+                     _player_movement_order.get(cid, {}).get("interactionSession", 0))
+    eligible = (peer.get("online", False) and peer.get("isSaveLoaded", False) and
+                peer.get("teamId") == _team_id and
+                peer.get("roomId") == MINIGAME_ROOMS[event["game"]] and
+                known_session == session and
+                session not in _retired_interaction_sessions.get(cid, ()))
+    if eligible:
+        previous_session = _minigame_confirmed_sessions.get(cid, 0)
+        if previous_session and previous_session != session:
+            _minigame_retired_sessions.setdefault(cid, set()).add(previous_session)
+        _minigame_confirmed_sessions[cid] = session
+        event["confirmed"] = True
+        return True
+    if event["confirmed"] or now - event["received"] > MINIGAME_METADATA_WAIT_MS:
+        event["consumed"] = True
+    return False
+
+
+def get_minigame_invitation_json() -> str:
+    now = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        for event in sorted(_minigame_events.values(), key=lambda e: e["received"]):
+            if _minigame_invitation_is_current(event, now):
+                name = _player_states[event["cid"]].get("name") or f'Player{event["cid"]}'
+                return json.dumps({"cid": event["cid"], "session": event["session"],
+                                   "seq": event["seq"], "game": event["game"],
+                                   "name": str(name)[:64]},
+                                  separators=(",", ":"), ensure_ascii=False)
+            if event["consumed"]:
+                _minigame_events.pop(event["cid"], None)
+    return ""
+
+
+def minigame_invitation_is_current(cid: int, session: int, sequence: int) -> bool:
+    with _player_states_lock:
+        event = _minigame_events.get(cid)
+        if not event or event["session"] != session or event["seq"] != sequence:
+            return False
+        current = _minigame_invitation_is_current(event, int(time.monotonic() * 1000))
+        if event["consumed"]:
+            _minigame_events.pop(cid, None)
+        return current
+
+
+def dismiss_minigame_invitation(cid: int, session: int, sequence: int) -> None:
+    with _player_states_lock:
+        event = _minigame_events.get(cid)
+        if event and event["session"] == session and event["seq"] == sequence:
+            _minigame_events.pop(cid, None)
+
+
 def set_save_loaded(is_loaded: bool) -> bool:
     """
     Convenience wrapper: set isSaveLoaded flag, making yourself eligible
@@ -3585,8 +3770,10 @@ def set_save_loaded(is_loaded: bool) -> bool:
     _local_save_loaded = bool(is_loaded)
     if not _local_save_loaded:
         set_boss_arena(0)
+        set_minigame_active(0)
         with _player_states_lock:
             _arena_events.clear()
+            _minigame_events.clear()
             if _congo.local[0] or _congo.e:
                 _congo.update(
                     _boss_context(), False, 0, False, None, time.monotonic()
@@ -4034,7 +4221,7 @@ def set_character(char_name: str) -> bool:
     return sent
 
 
-def set_local_room(room_id: int) -> bool:
+def set_local_room(room_id: int, char_name: str = "") -> bool:
     """
     Report this client's current room ID to the Anchor server.
 
@@ -4050,11 +4237,25 @@ def set_local_room(room_id: int) -> bool:
 
     Returns True if a packet was sent, False otherwise.
     """
-    global _local_room_id, _local_map_snapshot, _local_map_snapshot_explicit
+    global _local_room_id, _local_character, _local_room_character_pending
+    global _local_map_snapshot, _local_map_snapshot_explicit
     if not _connected:
         return False
-    if room_id == _local_room_id:
+    combined = bool(char_name)
+    if combined and char_name not in ("Goemon", "Ebisumaru", "Sasuke", "Yae"):
         return False
+    if room_id == _local_room_id:
+        if not combined:
+            return False
+        if char_name == _local_character and not _local_room_character_pending:
+            return True
+        _local_character = char_name
+        sent = update_client_state(json.dumps({
+            "currentRoom": _ROOM_NAMES.get(room_id, ""),
+            "currentRoomId": room_id, "currentCharacter": char_name,
+        }))
+        _local_room_character_pending = not sent
+        return sent
     previous_room = _local_room_id
     if (room_id == WORLD_MAP_ROOM_ID and
             _valid_map_room_id(previous_room) and
@@ -4080,6 +4281,8 @@ def set_local_room(room_id: int) -> bool:
         # tracking successful hot gameplay positions after leaving the map.
         _local_map_snapshot_explicit = False
     _local_room_id = room_id
+    if combined:
+        _local_character = char_name
     area_name = _ROOM_NAMES.get(room_id, "")
     # Update our own local entry immediately – the server won't echo us back.
     with _player_states_lock:
@@ -4114,7 +4317,17 @@ def set_local_room(room_id: int) -> bool:
             _tsurami.update(
                 _boss_context(), False, 0, False, None, time.monotonic()
             )
-    return update_client_state(json.dumps({"currentRoom": area_name, "currentRoomId": room_id}))
+    state = {"currentRoom": area_name, "currentRoomId": room_id}
+    if combined:
+        state["currentCharacter"] = char_name
+    sent = update_client_state(json.dumps(state))
+    _local_room_character_pending = combined and not sent
+    return sent
+
+
+def set_local_room_character(room_id: int, char_name: str) -> bool:
+    """Atomically publish a room/character edge; retry failed sends."""
+    return set_local_room(room_id, char_name)
 
 
 def set_world_map_location(room_id: int, x: float, z: float) -> bool:

@@ -245,6 +245,19 @@ int anchor_set_local_room(unsigned int room_id)
     return result;
 }
 
+int anchor_set_local_room_character(unsigned int room_id, const char *char_name)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_U32("room_id", room_id);
+    REPY_FN_SET_STR("char_name", char_name);
+    REPY_FN_EXEC_CACHE(anchor_set_local_room_character_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.set_local_room_character(room_id, char_name)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 int anchor_set_enemy_room_state(unsigned int room_id, unsigned int signature,
                                 const char *bits)
 {
@@ -354,6 +367,56 @@ void anchor_dismiss_boss_invitation(int cid, int session, int sequence)
     REPY_FN_EXEC_CACHE(anchor_dismiss_boss_invitation_code,
                       "import anchor_mnsg\n"
                       "anchor_mnsg.dismiss_boss_invitation(cid, session, sequence)\n");
+    REPY_FN_CLEANUP;
+}
+
+int anchor_update_minigame_active(int game, int visit)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("game", game);
+    REPY_FN_SET_S32("visit", visit);
+    REPY_FN_EXEC_CACHE(anchor_update_minigame_active_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.set_minigame_active(game, visit)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+char *anchor_get_minigame_invitation_json(void)
+{
+    REPY_FN_SETUP;
+    REPY_FN_EXEC_CACHE(anchor_get_minigame_invitation_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.get_minigame_invitation_json()\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_minigame_invitation_is_current(int cid, int session, int sequence)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("cid", cid);
+    REPY_FN_SET_S32("session", session);
+    REPY_FN_SET_S32("sequence", sequence);
+    REPY_FN_EXEC_CACHE(anchor_minigame_invitation_current_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.minigame_invitation_is_current(cid, session, sequence)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+void anchor_dismiss_minigame_invitation(int cid, int session, int sequence)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("cid", cid);
+    REPY_FN_SET_S32("session", session);
+    REPY_FN_SET_S32("sequence", sequence);
+    REPY_FN_EXEC_CACHE(anchor_dismiss_minigame_invitation_code,
+                      "import anchor_mnsg\n"
+                      "anchor_mnsg.dismiss_minigame_invitation(cid, session, sequence)\n");
     REPY_FN_CLEANUP;
 }
 

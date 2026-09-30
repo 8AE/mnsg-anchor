@@ -30,6 +30,7 @@
 #include "platform/recomputils.h"
 #include "platform/recompui.h"
 #include "core/anchor.h"
+#include "core/anchor_dialog.h"
 #include "progression/item_sync.h"
 #include "core/anchor_runtime.h"
 #include "progression/anchor_flag_catalog.h"
@@ -77,7 +78,13 @@ extern unsigned char D_8015C608_15D208[];
 extern signed short D_8006B780_6C380[];
 extern unsigned char D_800BCCC0_BD8C0[];
 extern unsigned char *D_8015C5C8_15D1C8;
+extern unsigned short D_800C7AB2;
+extern unsigned int D_8015C5DC_15D1DC;
+extern void *D_8016DAB4_16E6B4;
+extern void *D_801FC604_5B8514;
 extern void func_80003728_4328(unsigned char step);
+extern int func_8003F1D8_3FDD8(void);
+extern void func_80221F70_5DD440(void);
 
 /* Save block offsets consumed by func_8000B2A0_BEA0. These are kept in the
  * same x/y/z order exposed by the debug UI and by race start locations. */
@@ -152,14 +159,17 @@ typedef struct
 
 static const DebugMinigameDestination s_minigame_destinations[] = {
     {"Goemon: Sudden Impact", 0x01E0, 0, 25, 0},
-    /* 0x1E2 is Sasuke's separate High Jump minigame. */
-    {"Sasuke: Jetpack Training", 0x01D0, 79, -50, 169},
+    /* 0x1D0 is separate Jetpack Training. */
+    {"Sasuke: High Jump Minigame", 0x01E2, -213, 0, -357},
     /* Mermaid training starts through the Waterfall of Kegon interaction. */
     {"Yae: Mermaid Training (Kegon)", 0x0154, 29, -320, -544},
     {"Ebisumaru: Mini Ebisumaru", 0x01E1, 0, 0, 0}
 };
 #define DEBUG_MINIGAME_DESTINATION_COUNT \
     (sizeof(s_minigame_destinations) / sizeof(s_minigame_destinations[0]))
+#define DEBUG_YAE_MINIGAME_ID 3u
+#define DEBUG_YAE_ROOM 0x0154u
+#define DEBUG_YAE_WAIT_FRAMES 600u
 
 /* Transport form fields and selected shared race-location entry. These are
  * declared before the transport helpers because helper code updates the UI
@@ -1040,6 +1050,10 @@ static int s_pending_location_transport = 0;
 static unsigned short s_pending_impact_stage = 0;
 static unsigned long s_pending_boss_destination = 0;
 static unsigned long s_pending_minigame_destination = 0;
+static int s_yae_launch_pending = 0;
+static unsigned int s_yae_source_visit = 0;
+static unsigned int s_yae_target_visit = 0;
+static unsigned int s_yae_wait_frames = 0;
 
 /* =========================================================================
    Callbacks  (flag-setters only – no context API calls here)
@@ -1175,6 +1189,76 @@ static void on_minigame_teleport_clicked(RecompuiResource res,
     (void)res;
     if (ev->type == UI_EVENT_CLICK)
         s_pending_minigame_destination = (unsigned long)ud;
+}
+
+static int debug_native_pointer_valid(const void *pointer)
+{
+    unsigned int address = (unsigned int)(unsigned long)pointer;
+    return address >= 0x80001000u && address < 0x80800000u;
+}
+
+static void debug_cancel_yae_launch(const char *status)
+{
+    s_yae_launch_pending = 0;
+    s_yae_target_visit = 0;
+    s_yae_wait_frames = 0;
+    if (status)
+        s_pending_status = status;
+}
+
+/* File 69's Mermaid actor owns the camera, player placement and scenario. */
+RECOMP_HOOK_RETURN("func_080014E8_72CD38")
+void debug_yae_minigame_actor_return(void)
+{
+    /* Return hooks cannot rely on the original argument registers. */
+    void *task = D_8016DAB4_16E6B4;
+    unsigned char *actor = (unsigned char *)task;
+    unsigned char *player = (unsigned char *)D_801FC604_5B8514;
+    unsigned char *local;
+    unsigned int visit;
+    unsigned int flags;
+
+    if (!s_yae_launch_pending || s_modal_visible || s_pending_open ||
+        D_800C7AB2 != DEBUG_YAE_ROOM)
+        return;
+    visit = anchor_boss_invite_world_visit();
+    if (visit == s_yae_source_visit)
+        return;
+    if (s_yae_target_visit && visit != s_yae_target_visit)
+    {
+        debug_cancel_yae_launch("Mermaid training load changed");
+        return;
+    }
+    s_yae_target_visit = visit;
+
+    if (!debug_native_pointer_valid(task) ||
+        !debug_native_pointer_valid(player) ||
+        *(unsigned short *)(actor + 0x5E) != 0x033Au ||
+        (*(unsigned int *)(actor + 0x68) & 2u))
+        return;
+    local = *(unsigned char **)(actor + 0xD0);
+    if (!debug_native_pointer_valid(local) || local[0] != 1u)
+        return;
+    if (D_8015C5DC_15D1DC != 3u)
+    {
+        debug_cancel_yae_launch("Select Yae for Mermaid training");
+        return;
+    }
+    if (player[0xCD] != 0 ||
+        !anchor_boss_invite_world_can_prompt() || anchor_dialog_busy() ||
+        func_8003F1D8_3FDD8())
+        return;
+
+    /* State 4 runs the native camera, placement and scenario 0x177 timers. */
+    debug_cancel_yae_launch(0);
+    player[0xCD] = 4;
+    func_80221F70_5DD440();
+    flags = *(unsigned int *)(actor + 0x68);
+    *(unsigned int *)(actor + 0x68) = (flags & ~0x100u) | 0x4400u;
+    *(short *)(local + 4) = 0;
+    local[0] = 4;
+    s_pending_status = "Starting Yae Mermaid training";
+    recomp_printf("[Debug] Mermaid actor entered native training state\n");
 }
 
 /* =========================================================================
@@ -1554,7 +1638,7 @@ static void debug_init_ui(void)
 
         RecompuiResource minigames_hint = recompui_create_label(
             s_modal_ctx, minigames,
-            "Yae lands at Waterfall of Kegon; start Mermaid training there.",
+            "Select Yae; Mermaid training starts after Waterfall of Kegon loads.",
             LABELSTYLE_ANNOTATION);
         recompui_set_color(minigames_hint, &C_DIM);
         recompui_set_font_size(minigames_hint, 14.0f, UNIT_DP);
@@ -1757,6 +1841,22 @@ void debug_ui_frame_hook(void)
         return;
     }
 
+    if (s_yae_launch_pending)
+    {
+        unsigned int visit = anchor_boss_invite_world_visit();
+        if (visit != s_yae_source_visit)
+        {
+            if (D_800C7AB2 != DEBUG_YAE_ROOM ||
+                (s_yae_target_visit && visit != s_yae_target_visit))
+                debug_cancel_yae_launch("Mermaid training load changed");
+            else
+                s_yae_target_visit = visit;
+        }
+        if (s_yae_launch_pending &&
+            ++s_yae_wait_frames > DEBUG_YAE_WAIT_FRAMES)
+            debug_cancel_yae_launch("Mermaid training actor unavailable");
+    }
+
     /* Show the shared HUD once after the startup menu is finished. */
     if (!s_hud_visible)
     {
@@ -1949,6 +2049,13 @@ void debug_ui_frame_hook(void)
                                                      destination->z))
             {
                 int pos = 0;
+                if (id == DEBUG_YAE_MINIGAME_ID)
+                {
+                    s_yae_launch_pending = 1;
+                    s_yae_source_visit = anchor_boss_invite_world_visit();
+                    s_yae_target_visit = 0;
+                    s_yae_wait_frames = 0;
+                }
                 debug_append_text(s_minigame_status, &pos,
                                   (int)sizeof(s_minigame_status), "Teleporting to ");
                 debug_append_text(s_minigame_status, &pos,
@@ -1996,6 +2103,8 @@ void debug_ui_frame_hook(void)
     if (s_pending_open)
     {
         s_pending_open = 0;
+        if (s_yae_launch_pending)
+            debug_cancel_yae_launch("Mermaid training cancelled");
         if (!s_modal_visible)
         {
             recompui_show_context(s_modal_ctx);

@@ -15,6 +15,7 @@
 #include "ui/anchor_nameplates.h"
 #include "core/anchor_dialog.h"
 #include "player/anchor_player_models.h"
+#include "world/anchor_minigame_invites.h"
 #include "player/alternative_ebisumaru/anchor_player_skin.h"
 #include "combat/anchor_projectile_models.h"
 #include "combat/anchor_player_freeze.h"
@@ -594,6 +595,7 @@ static void publish_local_state(PlayerObject *local_obj)
 {
     unsigned int char_idx;
     unsigned int room;
+    int report_character;
     int x;
     int y;
     int z;
@@ -647,11 +649,41 @@ static void publish_local_state(PlayerObject *local_obj)
         s_last_sent_action = -2;
         reset_frame_motion_baseline();
     }
-    anchor_set_local_room(room);
-    /* Read only the selected-character id so peers select the matching
-     * immutable render assets; no playable constructor or behavior is run. */
-    char_idx = *CURRENT_CHAR_PTR & 3;
-    anchor_set_character(s_char_names[char_idx]);
+    report_character = anchor_minigame_invites_reporting_character(
+        (unsigned short)room);
+    if (report_character == -2)
+    {
+        /* Do not pair a newly loaded minigame room with the previous model
+         * while the native character transition is still binding. */
+        s_have_sent_position = 0;
+        reset_frame_motion_baseline();
+        return;
+    }
+    if (report_character >= 0)
+    {
+        char_idx = (unsigned int)report_character;
+        if (!anchor_set_local_room_character(room, s_char_names[char_idx]))
+        {
+            s_have_sent_position = 0;
+            reset_frame_motion_baseline();
+            return;
+        }
+        anchor_minigame_invites_character_published((unsigned short)room);
+    }
+    else
+    {
+        anchor_set_local_room(room);
+        /* Read only the selected-character id so peers select the matching
+         * immutable render assets; no playable constructor or behavior is run. */
+        char_idx = *CURRENT_CHAR_PTR & 3;
+        anchor_set_character(s_char_names[char_idx]);
+    }
+    if (!anchor_minigame_invites_character_motion_ready((unsigned short)room))
+    {
+        s_have_sent_position = 0;
+        reset_frame_motion_baseline();
+        return;
+    }
     if (s_state_send_timer > 0)
         s_state_send_timer--;
     if (s_position_keepalive_timer > 0)

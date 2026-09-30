@@ -88,7 +88,7 @@ static void *native_pointer_at(const void *base, unsigned int offset)
 #endif
 }
 
-static int player_is_alive(void)
+static int player_is_present(int allow_character_change)
 {
     unsigned char *task = D_801FC604_5B8514;
     unsigned char *work;
@@ -102,7 +102,14 @@ static int player_is_alive(void)
         native_pointer_at(task, 0x18) != D_801FC60C_5B851C)
         return 0;
     work = native_pointer_at(task, 0x5c);
-    return native_pointer_valid(work) && work[0x69] == 0;
+    return native_pointer_valid(work) &&
+           (work[0x69] == 0 ||
+            (allow_character_change && work[0x69] == 1 && task[0xcc] == 0xba));
+}
+
+static int player_is_alive(void)
+{
+    return player_is_present(0);
 }
 
 /* Stage resources are rebuilt before player/actor setup. Clear the previous
@@ -201,6 +208,16 @@ static int room_is_current(void)
     return system && room_loaded_matches() &&
            system[SYS_STEP] == STEP_WORLD &&
            system[SYS_WORLD_SUBSTATE] == 1u;
+}
+
+int anchor_boss_invite_world_loaded_player_active(void)
+{
+    return room_is_current() && player_is_alive();
+}
+
+int anchor_boss_invite_world_loaded_player_present(void)
+{
+    return room_is_current() && player_is_present(1);
 }
 
 /* Some Impact stages may not pass through the ordinary stage loader, so a

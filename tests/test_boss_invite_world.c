@@ -204,6 +204,16 @@ int main(void)
     ready(0x130); s_work[0x69] = 1;
     assert(!anchor_boss_invite_world_can_prompt());
     check_transfer_blocked();
+    /* Native character rebinding remains a present player for minigame
+     * entry observation, while the stricter boss transfer gate stays shut. */
+    ready(0x130); s_work[0x69] = 1; s_task[0xcc] = 0xba;
+    assert(anchor_boss_invite_world_loaded_player_present());
+    assert(!anchor_boss_invite_world_loaded_player_active());
+    check_transfer_blocked();
+    ready(0x130); s_work[0x69] = 1; s_task[0xcc] = 0;
+    assert(!anchor_boss_invite_world_loaded_player_present());
+    ready(0x130); s_health = 0;
+    assert(!anchor_boss_invite_world_loaded_player_present());
     ready(0x130); s_backlink = 0;
     assert(!anchor_boss_invite_world_can_prompt());
     check_transfer_blocked();
