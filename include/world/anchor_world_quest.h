@@ -214,6 +214,15 @@ const int *anchor_world_quest_rows(void);
 unsigned int anchor_world_quest_row_count(void);
 unsigned int anchor_world_quest_room_id(void);
 
+/* Local File_58 phase 6 was observed in the current Koryuta room. This is a
+ * scene-readiness gate; it does not establish that the whole dragon graph or
+ * the File_46 combat child is ready. */
+int anchor_world_quest_koryuta_local_ready(void);
+void *anchor_world_quest_koryuta_controller_task(void);
+/* Return the locally ready dragon to native departure after an accepted
+ * Control Machine terminal checkpoint. This visit cannot resume following. */
+int anchor_world_quest_koryuta_release_terminal(void);
+
 /* ---- capture / apply --------------------------------------------------- */
 
 /* Register one local actor with its role recipe before capture/apply/mesh

@@ -80,7 +80,7 @@ static int death_callback(ControlMachineCallback callback)
                   ~CM_CALLBACK_DISABLED);
 }
 
-static int battle_child_live(void)
+static int battle_child_bound(void)
 {
     return D_800C7AB2 == CM_ROOM && s_visit &&
            s_visit == anchor_boss_invite_world_visit() &&
@@ -88,8 +88,7 @@ static int battle_child_live(void)
            CM_U16(s_root.task, 0x5c) == CM_ENTITY &&
            CM_U16(s_root.task, 0x5e) == CM_ENTITY &&
            CM_U16(s_child.task, 0x5e) == CM_ENTITY &&
-           CM_PTR(s_child.task, 0xd0) == s_root.task &&
-           !death_callback(CM_AI(s_child.task));
+           CM_PTR(s_child.task, 0xd0) == s_root.task;
 }
 
 /* The File_46 initializer is scheduled after its owner has stored the placed
@@ -121,10 +120,20 @@ void anchor_control_machine_hud_bind(void)
     s_visit = anchor_boss_invite_world_visit();
 }
 
+void *anchor_control_machine_bound_task(void)
+{
+    return battle_child_bound() ? s_child.task : 0;
+}
+
+void *anchor_control_machine_bound_root(void)
+{
+    return battle_child_bound() ? s_root.task : 0;
+}
+
 void *anchor_control_machine_hud_task(void)
 {
     unsigned int hp;
-    if (!battle_child_live())
+    if (!battle_child_bound() || death_callback(CM_AI(s_child.task)))
         return 0;
     hp = CM_U8(s_child.task, 0x8d);
     return hp >= 1u && hp <= 5u ? s_child.task : 0;

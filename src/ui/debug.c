@@ -117,6 +117,28 @@ typedef struct
 /* Pending status-label text update (also deferred to frame hook). */
 static const char *s_pending_status = 0;
 static char s_transport_status[96];
+static char s_boss_status[64];
+
+typedef struct
+{
+    const char *name;
+    int arena;
+} DebugBossDestination;
+
+/* Benkei uses the curated bridge start below; zero is not a wire arena ID. */
+static const DebugBossDestination s_boss_destinations[] = {
+    {"Congo", ANCHOR_BOSS_ARENA_CONGO},
+    {"Dharumanyo", ANCHOR_BOSS_ARENA_DHARUMANYO},
+    {"Tsurami", ANCHOR_BOSS_ARENA_TSURAMI},
+    {"Control Machine", ANCHOR_BOSS_ARENA_CONTROL_MACHINE},
+    {"Benkei (Bridge)", 0},
+    {"Kashiwagi", ANCHOR_BOSS_ARENA_KASHIWAGI},
+    {"Thaisamba", ANCHOR_BOSS_ARENA_THAISAMBA},
+    {"Balberra", ANCHOR_BOSS_ARENA_BALBERRA},
+    {"D'Etoile", ANCHOR_BOSS_ARENA_DETOILE}
+};
+#define DEBUG_BOSS_DESTINATION_COUNT \
+    (sizeof(s_boss_destinations) / sizeof(s_boss_destinations[0]))
 
 /* Transport form fields and selected shared race-location entry. These are
  * declared before the transport helpers because helper code updates the UI
@@ -995,6 +1017,7 @@ static int s_pending_location_delta = 0;
 static int s_pending_location_fill = 0;
 static int s_pending_location_transport = 0;
 static unsigned short s_pending_impact_stage = 0;
+static unsigned long s_pending_boss_destination = 0;
 
 /* =========================================================================
    Callbacks  (flag-setters only – no context API calls here)
@@ -1116,6 +1139,14 @@ static void on_impact_intro_clicked(RecompuiResource res,
         s_pending_impact_stage = (unsigned short)(unsigned long)ud;
 }
 
+static void on_boss_teleport_clicked(RecompuiResource res,
+                                     const RecompuiEventData *ev, void *ud)
+{
+    (void)res;
+    if (ev->type == UI_EVENT_CLICK)
+        s_pending_boss_destination = (unsigned long)ud;
+}
+
 /* =========================================================================
    UI construction (called once from the frame hook)
    ========================================================================= */
@@ -1123,6 +1154,21 @@ static void on_impact_intro_clicked(RecompuiResource res,
 #define ROW_H 68.0f     /* height of each flag row                      */
 #define HDR_BAR_H 64.0f /* header bar height                            */
 #define STATUS_H 48.0f  /* status bar height                            */
+
+/* Native RecompUI buttons start with 23 dp padding and 28 dp line height.
+ * These controls have fixed border-box heights, so replace both defaults. */
+static void debug_compact_button(RecompuiResource button, float font_size,
+                                 float vertical_padding, float horizontal_padding)
+{
+    recompui_set_font_size(button, font_size, UNIT_DP);
+    recompui_set_line_height(button, font_size + 4.0f, UNIT_DP);
+    recompui_set_letter_spacing(button, 0.0f, UNIT_DP);
+    recompui_set_text_align(button, TEXT_ALIGN_CENTER);
+    recompui_set_padding_top(button, vertical_padding, UNIT_DP);
+    recompui_set_padding_bottom(button, vertical_padding, UNIT_DP);
+    recompui_set_padding_left(button, horizontal_padding, UNIT_DP);
+    recompui_set_padding_right(button, horizontal_padding, UNIT_DP);
+}
 
 static void make_transport_field(RecompuiContext ctx, RecompuiResource parent,
                                  const char *label_text, const char *default_text,
@@ -1292,6 +1338,7 @@ static void debug_init_ui(void)
         RecompuiResource transport = recompui_create_element(s_modal_ctx, panel);
         recompui_set_display(transport, DISPLAY_FLEX);
         recompui_set_flex_direction(transport, FLEX_DIRECTION_COLUMN);
+        recompui_set_flex_shrink(transport, 0.0f);
         recompui_set_min_height(transport, 228.0f, UNIT_DP);
         recompui_set_padding_top(transport, 18.0f, UNIT_DP);
         recompui_set_padding_bottom(transport, 18.0f, UNIT_DP);
@@ -1312,6 +1359,7 @@ static void debug_init_ui(void)
         recompui_set_display(transport_row, DISPLAY_FLEX);
         recompui_set_flex_direction(transport_row, FLEX_DIRECTION_ROW);
         recompui_set_align_items(transport_row, ALIGN_ITEMS_FLEX_END);
+        recompui_set_flex_shrink(transport_row, 0.0f);
         recompui_set_min_height(transport_row, 68.0f, UNIT_DP);
         recompui_set_gap(transport_row, 14.0f, UNIT_DP);
 
@@ -1323,13 +1371,11 @@ static void debug_init_ui(void)
         RecompuiResource transport_btn = recompui_create_button(
             s_modal_ctx, transport_row, "Transport", BUTTONSTYLE_PRIMARY);
         recompui_set_cursor(transport_btn, CURSOR_POINTER);
-        recompui_set_font_size(transport_btn, 14.0f, UNIT_DP);
+        debug_compact_button(transport_btn, 14.0f, 9.0f, 12.0f);
         recompui_set_width(transport_btn, 150.0f, UNIT_DP);
         recompui_set_height(transport_btn, 42.0f, UNIT_DP);
         recompui_set_min_height(transport_btn, 42.0f, UNIT_DP);
         recompui_set_margin_left(transport_btn, 6.0f, UNIT_DP);
-        recompui_set_padding_left(transport_btn, 18.0f, UNIT_DP);
-        recompui_set_padding_right(transport_btn, 18.0f, UNIT_DP);
         recompui_set_tab_index(transport_btn, TAB_INDEX_NONE);
         recompui_register_callback(transport_btn, on_transport_clicked, 0);
 
@@ -1337,6 +1383,7 @@ static void debug_init_ui(void)
         recompui_set_display(location_row, DISPLAY_FLEX);
         recompui_set_flex_direction(location_row, FLEX_DIRECTION_ROW);
         recompui_set_align_items(location_row, ALIGN_ITEMS_CENTER);
+        recompui_set_flex_shrink(location_row, 0.0f);
         recompui_set_min_height(location_row, 44.0f, UNIT_DP);
         recompui_set_margin_top(location_row, 4.0f, UNIT_DP);
         recompui_set_gap(location_row, 8.0f, UNIT_DP);
@@ -1344,7 +1391,7 @@ static void debug_init_ui(void)
         RecompuiResource prev_btn = recompui_create_button(
             s_modal_ctx, location_row, "Prev", BUTTONSTYLE_SECONDARY);
         recompui_set_cursor(prev_btn, CURSOR_POINTER);
-        recompui_set_font_size(prev_btn, 13.0f, UNIT_DP);
+        debug_compact_button(prev_btn, 13.0f, 7.0f, 8.0f);
         recompui_set_width(prev_btn, 72.0f, UNIT_DP);
         recompui_set_height(prev_btn, 36.0f, UNIT_DP);
         recompui_set_min_height(prev_btn, 36.0f, UNIT_DP);
@@ -1361,7 +1408,7 @@ static void debug_init_ui(void)
         RecompuiResource next_btn = recompui_create_button(
             s_modal_ctx, location_row, "Next", BUTTONSTYLE_SECONDARY);
         recompui_set_cursor(next_btn, CURSOR_POINTER);
-        recompui_set_font_size(next_btn, 13.0f, UNIT_DP);
+        debug_compact_button(next_btn, 13.0f, 7.0f, 8.0f);
         recompui_set_width(next_btn, 72.0f, UNIT_DP);
         recompui_set_height(next_btn, 36.0f, UNIT_DP);
         recompui_set_min_height(next_btn, 36.0f, UNIT_DP);
@@ -1371,7 +1418,7 @@ static void debug_init_ui(void)
         RecompuiResource fill_btn = recompui_create_button(
             s_modal_ctx, location_row, "Use", BUTTONSTYLE_SECONDARY);
         recompui_set_cursor(fill_btn, CURSOR_POINTER);
-        recompui_set_font_size(fill_btn, 13.0f, UNIT_DP);
+        debug_compact_button(fill_btn, 13.0f, 7.0f, 8.0f);
         recompui_set_width(fill_btn, 66.0f, UNIT_DP);
         recompui_set_height(fill_btn, 36.0f, UNIT_DP);
         recompui_set_min_height(fill_btn, 36.0f, UNIT_DP);
@@ -1381,31 +1428,86 @@ static void debug_init_ui(void)
         RecompuiResource go_btn = recompui_create_button(
             s_modal_ctx, location_row, "Go", BUTTONSTYLE_PRIMARY);
         recompui_set_cursor(go_btn, CURSOR_POINTER);
-        recompui_set_font_size(go_btn, 13.0f, UNIT_DP);
+        debug_compact_button(go_btn, 13.0f, 7.0f, 8.0f);
         recompui_set_width(go_btn, 66.0f, UNIT_DP);
         recompui_set_height(go_btn, 36.0f, UNIT_DP);
         recompui_set_min_height(go_btn, 36.0f, UNIT_DP);
         recompui_set_tab_index(go_btn, TAB_INDEX_NONE);
         recompui_register_callback(go_btn, on_transport_location_go_clicked, 0);
 
-        /* Impact controls and flag rows share one scroll area, so the
-         * cutscene buttons stay reachable at smaller window heights. */
+        /* Boss controls, Impact intros and flag rows share one scroll area. */
         RecompuiResource scroll = recompui_create_element(s_modal_ctx, panel);
         recompui_set_flex_grow(scroll, 1.0f);
+        recompui_set_min_height(scroll, 0.0f, UNIT_DP);
         recompui_set_overflow_y(scroll, OVERFLOW_SCROLL);
         recompui_set_display(scroll, DISPLAY_FLEX);
         recompui_set_flex_direction(scroll, FLEX_DIRECTION_COLUMN);
         recompui_set_padding_top(scroll, 14.0f, UNIT_DP);
-        recompui_set_padding_bottom(scroll, 10.0f, UNIT_DP);
+        recompui_set_padding_bottom(scroll, 24.0f, UNIT_DP);
         recompui_set_padding_left(scroll, 10.0f, UNIT_DP);
         recompui_set_padding_right(scroll, 10.0f, UNIT_DP);
         recompui_set_gap(scroll, 4.0f, UNIT_DP);
+
+        RecompuiResource bosses = recompui_create_element(s_modal_ctx, scroll);
+        recompui_set_display(bosses, DISPLAY_FLEX);
+        recompui_set_flex_direction(bosses, FLEX_DIRECTION_COLUMN);
+        recompui_set_flex_shrink(bosses, 0.0f);
+        recompui_set_min_height(bosses, 258.0f, UNIT_DP);
+        recompui_set_padding_top(bosses, 14.0f, UNIT_DP);
+        recompui_set_padding_bottom(bosses, 14.0f, UNIT_DP);
+        recompui_set_padding_left(bosses, 20.0f, UNIT_DP);
+        recompui_set_padding_right(bosses, 20.0f, UNIT_DP);
+        recompui_set_background_color(bosses, &C_ROW_EVEN);
+        recompui_set_border_bottom_width(bosses, 1.0f, UNIT_DP);
+        recompui_set_border_bottom_color(bosses, &C_BORDER);
+        recompui_set_gap(bosses, 10.0f, UNIT_DP);
+
+        RecompuiResource bosses_title = recompui_create_label(
+            s_modal_ctx, bosses, "Boss Teleports", LABELSTYLE_SMALL);
+        recompui_set_color(bosses_title, &C_GREEN);
+        recompui_set_font_weight(bosses_title, 700);
+        recompui_set_font_size(bosses_title, 18.0f, UNIT_DP);
+
+        RecompuiResource bosses_hint = recompui_create_label(
+            s_modal_ctx, bosses,
+            "Uses normal entrances; defeated bosses follow save progress.",
+            LABELSTYLE_ANNOTATION);
+        recompui_set_color(bosses_hint, &C_DIM);
+        recompui_set_font_size(bosses_hint, 14.0f, UNIT_DP);
+
+        RecompuiResource boss_row = RECOMPUI_NULL_RESOURCE;
+        for (i = 0; i < (int)DEBUG_BOSS_DESTINATION_COUNT; ++i)
+        {
+            if (i % 3 == 0)
+            {
+                boss_row = recompui_create_element(s_modal_ctx, bosses);
+                recompui_set_display(boss_row, DISPLAY_FLEX);
+                recompui_set_flex_direction(boss_row, FLEX_DIRECTION_ROW);
+                recompui_set_flex_shrink(boss_row, 0.0f);
+                recompui_set_min_height(boss_row, 42.0f, UNIT_DP);
+                recompui_set_gap(boss_row, 12.0f, UNIT_DP);
+            }
+            RecompuiResource boss_btn = recompui_create_button(
+                s_modal_ctx, boss_row, s_boss_destinations[i].name,
+                BUTTONSTYLE_SECONDARY);
+            recompui_set_cursor(boss_btn, CURSOR_POINTER);
+            debug_compact_button(boss_btn, 14.0f, 9.0f, 10.0f);
+            recompui_set_flex_basis(boss_btn, 0.0f, UNIT_DP);
+            recompui_set_flex_grow(boss_btn, 1.0f);
+            recompui_set_min_width(boss_btn, 0.0f, UNIT_DP);
+            recompui_set_height(boss_btn, 42.0f, UNIT_DP);
+            recompui_set_min_height(boss_btn, 42.0f, UNIT_DP);
+            recompui_set_tab_index(boss_btn, TAB_INDEX_NONE);
+            recompui_register_callback(boss_btn, on_boss_teleport_clicked,
+                                       (void *)(unsigned long)(i + 1));
+        }
 
         /* Impact intro stages use the native Impact loader, not room/XYZ
          * transport. The first three boss cutscenes begin at 0x239..0x23B. */
         RecompuiResource impact = recompui_create_element(s_modal_ctx, scroll);
         recompui_set_display(impact, DISPLAY_FLEX);
         recompui_set_flex_direction(impact, FLEX_DIRECTION_COLUMN);
+        recompui_set_flex_shrink(impact, 0.0f);
         recompui_set_min_height(impact, 110.0f, UNIT_DP);
         recompui_set_padding_top(impact, 14.0f, UNIT_DP);
         recompui_set_padding_bottom(impact, 14.0f, UNIT_DP);
@@ -1425,6 +1527,8 @@ static void debug_init_ui(void)
         RecompuiResource impact_row = recompui_create_element(s_modal_ctx, impact);
         recompui_set_display(impact_row, DISPLAY_FLEX);
         recompui_set_flex_direction(impact_row, FLEX_DIRECTION_ROW);
+        recompui_set_flex_shrink(impact_row, 0.0f);
+        recompui_set_min_height(impact_row, 42.0f, UNIT_DP);
         recompui_set_gap(impact_row, 12.0f, UNIT_DP);
         static const char *const impact_names[] = {
             "Kashiwagi Intro", "Thaisamba Intro", "Balberra Intro"
@@ -1434,10 +1538,12 @@ static void debug_init_ui(void)
             RecompuiResource impact_btn = recompui_create_button(
                 s_modal_ctx, impact_row, impact_names[i], BUTTONSTYLE_SECONDARY);
             recompui_set_cursor(impact_btn, CURSOR_POINTER);
+            debug_compact_button(impact_btn, 14.0f, 9.0f, 10.0f);
+            recompui_set_flex_basis(impact_btn, 0.0f, UNIT_DP);
             recompui_set_flex_grow(impact_btn, 1.0f);
+            recompui_set_min_width(impact_btn, 0.0f, UNIT_DP);
             recompui_set_height(impact_btn, 42.0f, UNIT_DP);
             recompui_set_min_height(impact_btn, 42.0f, UNIT_DP);
-            recompui_set_font_size(impact_btn, 14.0f, UNIT_DP);
             recompui_set_tab_index(impact_btn, TAB_INDEX_NONE);
             recompui_register_callback(impact_btn, on_impact_intro_clicked,
                 (void *)(unsigned long)(ANCHOR_BOSS_IMPACT_INTRO_FIRST + i));
@@ -1585,6 +1691,10 @@ void debug_ui_frame_hook(void)
         recompui_close_context(s_hud_ctx);
     }
 
+    /* Several callbacks may fire before this hook. Start at most one native
+     * transition, then discard other pending transition clicks this frame. */
+    int transition_started = 0;
+
     /* Process pending location-selector actions from the transport section. */
     if (s_pending_location_delta || s_pending_location_fill || s_pending_location_transport)
     {
@@ -1613,7 +1723,7 @@ void debug_ui_frame_hook(void)
                 debug_fill_transport_fields_from_location();
             recompui_close_context(s_modal_ctx);
 
-            if (s_pending_location_transport &&
+            if (s_pending_location_transport && !transition_started &&
                 debug_get_selected_location(&room, &x, &y, &z, &name))
             {
                 debug_set_transport_status(room, x, y, z);
@@ -1625,6 +1735,7 @@ void debug_ui_frame_hook(void)
                     s_modal_visible = 0;
                 }
                 debug_apply_transport(room, x, y, z);
+                transition_started = 1;
             }
         }
         else
@@ -1638,7 +1749,7 @@ void debug_ui_frame_hook(void)
     }
 
     /* Process pending transport action from the modal button. */
-    if (s_pending_transport)
+    if (s_pending_transport && !transition_started)
     {
         char *room_str;
         char *x_str;
@@ -1684,17 +1795,62 @@ void debug_ui_frame_hook(void)
                 s_modal_visible = 0;
             }
             debug_apply_transport(room, x, y, z);
+            transition_started = 1;
         }
         else
         {
             s_pending_status = "Invalid transport input";
         }
     }
+    s_pending_transport = 0;
 
-    if (s_pending_impact_stage)
+    if (s_pending_boss_destination && !transition_started)
+    {
+        unsigned long id = s_pending_boss_destination;
+        if (id > DEBUG_BOSS_DESTINATION_COUNT)
+        {
+            s_pending_status = "Unknown boss destination";
+        }
+        else
+        {
+            const DebugBossDestination *destination = &s_boss_destinations[id - 1];
+            int ok = destination->arena
+                ? anchor_boss_invite_world_warp(destination->arena)
+                : anchor_boss_invite_world_transfer_to(0x0171, 102, 7, 0);
+            if (ok)
+            {
+                int pos = 0;
+                debug_append_text(s_boss_status, &pos, (int)sizeof(s_boss_status),
+                                  "Teleporting to ");
+                debug_append_text(s_boss_status, &pos, (int)sizeof(s_boss_status),
+                                  destination->name);
+                s_boss_status[pos] = '\0';
+                s_pending_status = s_boss_status;
+                recomp_printf("[Debug] Boss teleport: %s\n", destination->name);
+                if (s_modal_visible)
+                {
+                    recompui_hide_context(s_modal_ctx);
+                    s_modal_visible = 0;
+                }
+                s_pending_open = 0;
+                transition_started = 1;
+            }
+            else if (destination->arena &&
+                     anchor_boss_invite_world_arena() == destination->arena)
+            {
+                s_pending_status = "Already in this arena";
+            }
+            else
+            {
+                s_pending_status = "Boss teleport unavailable here";
+            }
+        }
+    }
+    s_pending_boss_destination = 0;
+
+    if (s_pending_impact_stage && !transition_started)
     {
         unsigned short stage = s_pending_impact_stage;
-        s_pending_impact_stage = 0;
         if (anchor_boss_invite_world_warp_stage(stage, 0, 0))
         {
             s_pending_status = "Entering Impact cutscene";
@@ -1703,12 +1859,14 @@ void debug_ui_frame_hook(void)
                 recompui_hide_context(s_modal_ctx);
                 s_modal_visible = 0;
             }
+            transition_started = 1;
         }
         else
         {
             s_pending_status = "Impact transport unavailable here";
         }
     }
+    s_pending_impact_stage = 0;
 
     /* Process pending open/close actions from callbacks. */
     if (s_pending_open)

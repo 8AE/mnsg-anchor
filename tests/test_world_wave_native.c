@@ -268,5 +268,37 @@ void wave_lifecycle_test(void) {
   assert(bee->claimed && bee->row[WD_LIFE]==WD_CLAIM);
   assert(capture(root) && root->row[WW_STOP]);
   D_8015CDC0=0;wave_offer(root,1,9);
-  assert(apply(root) && D_8015CDC0==1);
+  assert(apply(root) && D_8015CDC0==0);
+
+  /* A remote stop is shared wave state, not the local native boss/camera flag.
+   * A missing receipt cannot establish the stop, and unchanged checkpoints
+   * must continue suppressing births and claiming this producer's children. */
+  wave_prepare();
+  a=func_802171A8_5D2678(actors[6],func_0800370C_70480C,WW_ROOT_CATEGORY);
+  H(a,0x5c)=H(a,0x5e)=WW_ENTITY;H(a,0x28)=WW_FILE_CODE;
+  world_dynamic_child(actors[6],a);world_dynamic_wave_root(a);
+  root=lookup(a);D_8016DAB4_16E6B4=a;
+  func_0800370C_70480C(a,DPTR(a,0x18));world_dynamic_post(a);
+  S(a,0x8a)=0;wave_offer(root,2,1);tick(root);tick(root);
+  bee=lookup(actors[1]);assert(bee && bee->parent==root->parent);
+  D_8016DAB4_16E6B4=bee->actor;
+  world_dynamic_wave_child_12d(bee->actor);
+  func_08003B4C_704C4C(bee->actor,DPTR(bee->actor,0x18));
+  world_dynamic_post(bee->actor);wave_offer(bee,2,2);
+  wave_offer(root,1,3);root->net[WW_STOP]=1;
+  root->net[WW_RECEIPT]=0;root->dirty=1;
+  assert(!apply(root) && !root->row[WW_STOP] && !D_8015CDC0);
+  tick(bee);assert(!bee->claimed);
+  root->net[WW_RECEIPT]=3;root->dirty=1;
+  assert(apply(root) && root->row[WW_STOP] && !D_8015CDC0);
+  root->net[WW_STOP]=0;root->dirty=1;
+  assert(apply(root) && root->row[WW_STOP] && !D_8015CDC0);
+  root->net[WD_OWNER]=2;root->owner=2;root->dirty=1;
+  before=wave_births;tick(root);tick(root);
+  assert(wave_births==before && root->row[WW_STOP] && !D_8015CDC0);
+  bee->parent=(unsigned short)(root->parent+1);
+  tick(bee);assert(!bee->claimed);
+  bee->parent=root->parent;
+  tick(bee);
+  assert(bee->claimed && bee->row[WD_LIFE]==WD_CLAIM && !D_8015CDC0);
 }

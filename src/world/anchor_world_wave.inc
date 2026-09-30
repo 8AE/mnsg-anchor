@@ -21,9 +21,9 @@ extern void func_08004034_705134(void *, void *);
 extern void func_80212088_5CD558(void *, void *);
 extern int func_08003A30_704B30(void *);
 extern void func_80219E08_5D52D8(void *, float);
-/* Both are u16 in the shipped tables: the live-wave census and the encounter
- * stop latch. The census is local and is refreshed from the tracked family; the
- * stop latch is the one producer word that is shared between clients. */
+/* Both are u16 in the shipped tables: the live-wave census and the native
+ * encounter stop latch. Both remain local; WW_STOP is the shared producer
+ * state, without writing the native latch that also drives dragon/camera AI. */
 extern unsigned short D_8015CDB4, D_8015CDC0;
 extern void *D_801FC60C_5B851C;
 
@@ -63,6 +63,13 @@ static DynamicActor *wave_root_for(unsigned int parent) {
   return 0;
 }
 static DynamicActor *wave_root(void) { return wave_root_for(WW_ROOT_PARENT); }
+
+/* Only an accepted producer row can stop its typed children remotely. Native
+ * proximity can still stop the local waves before the next producer capture. */
+static int wave_stopped(const DynamicActor *d) {
+  const DynamicActor *p=d->row[WW_ROLE] ? wave_root_for(d->parent) : d;
+  return D_8015CDC0 || (p && p->row[WW_STOP]);
+}
 
 /* Role selector for a freshly allocated wave child. Zero means the callback is
  * not one of the two File_46 wave initializers. */
@@ -224,7 +231,7 @@ static void wave_claim(DynamicActor *d) {
   if (!d || d->kind!=WD_WAVE || !d->row[WW_ROLE] || d->claimed ||
       d->row[WD_LIFE]==WD_REMOVED || !alive(d)) return;
   a=d->actor;status=W(a,0x68);
-  if (!D_8015CDC0 && !(status&0x40080u)) return;
+  if (!wave_stopped(d) && !(status&0x40080u)) return;
   d->claimed=1;d->row[WD_LANDED]=1;
   W(a,0x68)=(status&~0x40080u)|1u;
   B(a,0x8c)=60;
@@ -268,9 +275,8 @@ static int wave_capture(DynamicActor *d) {
     r[WD_AUX_LO]=r[WD_AUX_HI]=0;
     r[WD_SPHERE]=0;
     r[WW_TARGET_X]=r[WW_TARGET_Y]=r[WW_TARGET_Z]=0;
-    /* The encounter stop is a shared latch: once any client has reached the
-     * body the encounter is over for everyone, so the published value is
-     * monotone and the apply side ORs it into the local global. */
+    /* Publish local proximity as shared producer state. The native latch stays
+     * local because File_46 also reads it for dragon/camera progression. */
     r[WW_STOP]=(D_8015CDC0!=0)||r[WW_STOP];
     wave_root_anchor(d);
     return anchor_world_wave_scope(r,D_800C7AB2);
@@ -384,7 +390,7 @@ static void wave_native(void *a, void *o) {
   }
   if (!d->row[WW_ROLE]) {
     /* Only the owner may run the emitter; a replica root never rolls. */
-    if (d->owner!=d_self) return;
+    if (d->owner!=d_self || wave_stopped(d)) return;
     DynamicCallback real=wave_phase(d->row[WD_PHASE]);
     DPTR(a,0xc)=(void *)real;
     real(a,o);
@@ -395,6 +401,8 @@ static void wave_native(void *a, void *o) {
     }
     return;
   }
+  wave_claim(d);
+  if (d->claimed) return;
   if (d->owner!=d_self) { wave_step(a,d->net);return; }
   {
     DynamicCallback real=wave_phase(d->row[WD_PHASE]);
@@ -507,7 +515,8 @@ static int wave_callback(DynamicActor *d, void *a, void *o) {
     /* The invisible producer only ever rolls on the owning client. The native
      * max-8 gate is a local counter, so refresh it from the shared census
      * before the emitter reads it. */
-    if (d->owner!=d_self || d->row[WD_ORDINAL]>=0x7fffffff) return 1;
+    if (d->owner!=d_self || d->row[WD_ORDINAL]>=0x7fffffff ||
+        wave_stopped(d)) return 1;
     if (d->row[WD_PHASE]==WW_PRODUCER) D_8015CDB4=wave_live_count();
   } else {
     /* A copy we own after a handoff re-binds an absent inherited pursuit target
@@ -621,6 +630,7 @@ static void wave_apply(DynamicActor *d) {
   int *r=d->net;
   void *a=d->actor;
   unsigned int j;
+  int stopped=d->row[WW_STOP];
   d->row[WD_COMMITTER]=r[WD_COMMITTER];
   for (j=WW_ROLE;j<=WW_PRESENT;++j) d->row[j]=r[j];
   d->row[WD_PHASE]=r[WD_PHASE];d->row[WD_ORDINAL]=r[WD_ORDINAL];
@@ -628,10 +638,9 @@ static void wave_apply(DynamicActor *d) {
   d->row[WD_TIMER]=r[WD_TIMER];
   d->row[WW_RECEIPT]=r[WW_RECEIPT];d->row[WW_PRESENT]=1;
   if (!r[WW_ROLE]) {
-    /* The producer's only shared state beyond its ordinal is the stop latch,
-     * transported through the body's parent identity and OR'd across players
-     * so an encounter that ended for one client ends for all. */
-    if (r[WW_STOP]) D_8015CDC0=1;
+    /* Keep the accepted producer stop monotone, including when an older or
+     * duplicate checkpoint follows it. The native stop latch stays local. */
+    d->row[WW_STOP]|=stopped;
     wave_root_anchor(d);
   }
   W(a,0x60)=(((unsigned int)r[WD_FLAGS_LO] |

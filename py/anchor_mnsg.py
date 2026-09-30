@@ -81,6 +81,7 @@ import math
 import secrets
 from collections import deque
 import anchor_congo
+import anchor_control_machine
 import anchor_dharumanyo
 import anchor_tsurami
 import anchor_impact
@@ -190,6 +191,7 @@ _arena_seen: dict = {}
 _arena_retired_sessions: "dict[int, set[int]]" = {}
 _arena_confirmed_sessions: "dict[int, int]" = {}
 _congo = anchor_congo.CongoTransport()
+_control_machine = anchor_control_machine.ControlMachineTransport()
 _dharumanyo = anchor_dharumanyo.DharumanyoTransport()
 _tsurami = anchor_tsurami.TsuramiTransport()
 _impact = anchor_impact.ImpactTransport()
@@ -237,6 +239,7 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     "MNSG_ENEMY_LIVE": 3072,
     "MNSG_ENEMY_HIT": 256,
     anchor_congo.PACKET_TYPE: 8 * 1024,
+    anchor_control_machine.PACKET_TYPE: 8 * 1024,
     anchor_dharumanyo.PACKET_TYPE: 8 * 1024,
     anchor_tsurami.PACKET_TYPE: 8 * 1024,
     anchor_impact.PACKET_TYPE: 8 * 1024,
@@ -730,6 +733,14 @@ def _merge_client_state(
         )
         if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
             state[anchor_congo.METADATA_KEY] = value
+    if anchor_control_machine.METADATA_KEY in payload:
+        value = anchor_control_machine.merge_metadata(
+            state.get(anchor_control_machine.METADATA_KEY),
+            payload[anchor_control_machine.METADATA_KEY],
+            state.get("interactionSession"),
+        )
+        if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
+            state[anchor_control_machine.METADATA_KEY] = value
     if anchor_dharumanyo.METADATA_KEY in payload:
         value = anchor_dharumanyo.merge_metadata(
             state.get(anchor_dharumanyo.METADATA_KEY),
@@ -762,6 +773,7 @@ def _merge_client_state(
         state["_positionReceivedMs"] = now_ms
     context = _boss_context()
     _congo.observe(context)
+    _control_machine.observe(context)
     _dharumanyo.observe(context)
     _tsurami.observe(context)
     _impact.observe(context)
@@ -849,6 +861,14 @@ def _replace_all_client_states(states: list) -> None:
             )
             if congo and congo[5] not in _retired_interaction_sessions.get(cid, ()):
                 merged[anchor_congo.METADATA_KEY] = congo
+            control_machine = anchor_control_machine.merge_metadata(
+                previous.get(anchor_control_machine.METADATA_KEY),
+                client_state.get(anchor_control_machine.METADATA_KEY),
+                merged.get("interactionSession"),
+            )
+            if (control_machine and control_machine[5] not in
+                    _retired_interaction_sessions.get(cid, ())):
+                merged[anchor_control_machine.METADATA_KEY] = control_machine
             dharumanyo = anchor_dharumanyo.merge_metadata(
                 previous.get(anchor_dharumanyo.METADATA_KEY),
                 client_state.get(anchor_dharumanyo.METADATA_KEY),
@@ -910,6 +930,7 @@ def _replace_all_client_states(states: list) -> None:
         _player_states.update(new_players)
         context = _boss_context()
         _congo.observe(context)
+        _control_machine.observe(context)
         _dharumanyo.observe(context)
         _tsurami.observe(context)
         _impact.observe(context)
@@ -1238,6 +1259,13 @@ def _recv_loop(sock: socket.socket) -> None:
                         _congo.receive(_boss_context(), packet, time.monotonic())
                     continue
 
+                if ptype == anchor_control_machine.PACKET_TYPE:
+                    with _player_states_lock:
+                        _control_machine.receive(
+                            _boss_context(), packet, time.monotonic()
+                        )
+                    continue
+
                 if ptype == anchor_dharumanyo.PACKET_TYPE:
                     with _player_states_lock:
                         _dharumanyo.receive(
@@ -1374,6 +1402,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _reset_projectile_spawns()
         _reset_boss_invitations()
         _congo.reset()
+        _control_machine.reset()
         _dharumanyo.reset()
         _tsurami.reset()
         _impact.reset()
@@ -1475,6 +1504,7 @@ def connect(
         _reset_projectile_spawns()
         _reset_boss_invitations()
         _congo.reset()
+        _control_machine.reset()
         _dharumanyo.reset()
         _tsurami.reset()
         _impact.reset()
@@ -1525,6 +1555,8 @@ def connect(
             "eb": _local_enemy_bits,
             **_local_map_metadata(),
             anchor_congo.METADATA_KEY: _congo.advertisement(_boss_context()),
+            anchor_control_machine.METADATA_KEY:
+                _control_machine.advertisement(_boss_context()),
             anchor_dharumanyo.METADATA_KEY: _dharumanyo.advertisement(
                 _boss_context()
             ),
@@ -2934,6 +2966,9 @@ def update_client_state(state_json: str) -> bool:
     with _player_states_lock:
         context = _boss_context()
         state[anchor_congo.METADATA_KEY] = _congo.advertisement(context)
+        state[anchor_control_machine.METADATA_KEY] = (
+            _control_machine.advertisement(context)
+        )
         state[anchor_dharumanyo.METADATA_KEY] = (
             _dharumanyo.advertisement(context)
         )
@@ -3071,6 +3106,11 @@ def _congo_context() -> dict:
     return _boss_context()
 
 
+def _control_machine_context() -> dict:
+    """Compatibility helper for callers inspecting Control Machine state."""
+    return _boss_context()
+
+
 def _dharumanyo_context() -> dict:
     """Compatibility helper for callers inspecting Dharumanyo state."""
     return _boss_context()
@@ -3120,6 +3160,15 @@ def update_congo(ready: int, visit: int, paused: int,
     )
 
 
+def update_control_machine(ready: int, visit: int, paused: int,
+                           state_json: str = "") -> str:
+    """Publish the previous-frame Control Machine checkpoint and receive work."""
+    return _update_boss(
+        _control_machine, anchor_control_machine, ready, visit, paused,
+        state_json,
+    )
+
+
 def update_dharumanyo(ready: int, visit: int, paused: int,
                       state_json: str = "") -> str:
     """Publish previous-frame Dharumanyo state and return checkpoint/hit work."""
@@ -3141,6 +3190,14 @@ def send_congo_hit(sequence: int, amount: int) -> bool:
     with _player_states_lock:
         return _congo.send_hit(
             _boss_context(), sequence, amount, time.monotonic()
+        )
+
+
+def send_control_machine_hit(sequence: int) -> bool:
+    """Queue one Control Machine hit for the current elected authority."""
+    with _player_states_lock:
+        return _control_machine.send_hit(
+            _boss_context(), sequence, 1, time.monotonic()
         )
 
 
@@ -3532,6 +3589,11 @@ def set_save_loaded(is_loaded: bool) -> bool:
             _arena_events.clear()
             if _congo.local[0] or _congo.e:
                 _congo.update(
+                    _boss_context(), False, 0, False, None, time.monotonic()
+                )
+            if (_control_machine.local[0] or _control_machine.e or
+                    _control_machine.observing_visit):
+                _control_machine.update(
                     _boss_context(), False, 0, False, None, time.monotonic()
                 )
             if _dharumanyo.local[0] or _dharumanyo.e:
@@ -4034,6 +4096,12 @@ def set_local_room(room_id: int) -> bool:
             _player_states[_client_id]["roomId"] = room_id
         if room_id != anchor_congo.ROOM and (_congo.local[0] or _congo.e):
             _congo.update(
+                _boss_context(), False, 0, False, None, time.monotonic()
+            )
+        if (room_id != anchor_control_machine.ROOM and
+                (_control_machine.local[0] or _control_machine.e or
+                 _control_machine.observing_visit)):
+            _control_machine.update(
                 _boss_context(), False, 0, False, None, time.monotonic()
             )
         if (room_id != anchor_dharumanyo.ROOM and
@@ -4717,7 +4785,20 @@ def update_world_quest(sources_json: str, status_json: str) -> str:
         return ''
     now = time.monotonic()
     with _player_states_lock:
-        result, packets = _world_quest.update(_boss_context(), sources, status, now)
+        context = _boss_context()
+        preferred_koryuta_owner = (
+            _control_machine.owner
+            if (context["room"] == anchor_control_machine.ROOM and
+                _control_machine.local[0] and
+                _control_machine.role in (1, 2) and
+                _control_machine.e is not None and
+                _control_machine.state is not None and
+                _control_machine.owner > 0)
+            else 0
+        )
+        result, packets = _world_quest.update(
+            context, sources, status, now, preferred_koryuta_owner
+        )
     success = True
     for packet in packets:
         if not _send_raw(packet):

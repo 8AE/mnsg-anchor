@@ -212,7 +212,7 @@ class QuestTransport:
         row[RECEIPT]=entry['receipt']
         return row
 
-    def update(self,ctx,sources,status,now):
+    def update(self,ctx,sources,status,now,preferred_koryuta_owner=0):
         if self.scope!=self.placed.scope:
             self.reset();self.scope=self.placed.scope
         if not self.scope:
@@ -285,7 +285,13 @@ class QuestTransport:
                 if (self.owners.get(family)==ctx['cid'] and
                         ctx['cid'] in candidates):
                     claims.add(ctx['cid'])
-                if claims:
+                if (type(preferred_koryuta_owner) is int and
+                        preferred_koryuta_owner in candidates):
+                    # An active Control Machine encounter owns its visual
+                    # dragon too, but only a complete native-ready 12-part
+                    # graph may be selected for that client.
+                    owner=preferred_koryuta_owner
+                elif claims:
                     owner=min(claims)
                 else:
                     owner=min(candidates)

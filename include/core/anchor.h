@@ -236,6 +236,9 @@ extern "C"
    char *anchor_tsurami_update(int ready, unsigned int visit, int paused,
                                const char *state_json);
    int anchor_send_tsurami_hit(int sequence, int amount, unsigned int target);
+   char *anchor_control_machine_update(int ready, unsigned int visit, int paused,
+                                       const char *state_json);
+   int anchor_send_control_machine_hit(int sequence);
    char *anchor_dharumanyo_update(int ready, unsigned int visit, int paused,
                                   const char *state_json);
    int anchor_send_dharumanyo_hit(int sequence);

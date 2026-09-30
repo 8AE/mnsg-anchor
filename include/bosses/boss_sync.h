@@ -36,6 +36,10 @@ int boss_sync_send_local_progress(const char *flag_name, int value,
 int boss_sync_queue_darumanyo_shared_terminal(void);
 /* Tsurami's HP-one reaction starts the native destruction sequence. */
 int boss_sync_queue_tsurami_shared_terminal(void);
+/* Accepted remote Koryuta completion stays deferred until the local File_46
+ * departure cue. A ready orphaned encounter may take one native final hit. */
+int boss_sync_control_machine_remote_pending(void);
+void boss_sync_control_machine_native_complete(void);
 /* File73 has released pickup controls and requested the native room exit. */
 void boss_sync_finish_tsurami_reward_scene(void);
 void boss_sync_reset(void);

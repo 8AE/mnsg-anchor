@@ -128,7 +128,7 @@ static QuestDragonHook q_dragon_hook[QUEST_DRAGON_HOOK_DEPTH];
 static unsigned int q_dragon_hook_depth, q_dragon_hook_overflow;
 typedef struct {
   void *task, *private_state;
-  unsigned char generation, ready;
+  unsigned char generation, ready, terminal;
 } QuestDragonJoin;
 static QuestDragonJoin q_dragon_join;
 /* The bridge can briefly return empty while peers exchange a snapshot.
@@ -184,9 +184,24 @@ static void q_clear(void *p, unsigned int size) {
 }
 
 static int q_dragon_local_ready(void) {
-  return q_dragon_join.ready &&
+  return q_dragon_join.ready && !q_dragon_join.terminal &&
          D_800C7AB2 == WORLD_QUEST_ROOM_KORYUTA &&
          q_room == WORLD_QUEST_ROOM_KORYUTA;
+}
+
+int anchor_world_quest_koryuta_local_ready(void) {
+  return q_dragon_local_ready();
+}
+
+void *anchor_world_quest_koryuta_controller_task(void) {
+  void *task = q_dragon_join.task;
+  if (!task || D_800C7AB2 != WORLD_QUEST_ROOM_KORYUTA ||
+      q_room != WORLD_QUEST_ROOM_KORYUTA ||
+      QB(task, 0x74) != q_dragon_join.generation ||
+      QP(task, 0xd0) != q_dragon_join.private_state ||
+      (QW(task, 0x68) & QUEST_DELETED_BIT))
+    return 0;
+  return task;
 }
 
 /* ---- recipes ----------------------------------------------------------- */
@@ -574,6 +589,21 @@ static void q_dragon_release(QuestNode *n) {
                                                   q_dragon_idle));
   n->dragon_following = 0;
   n->dragon_native = 0;
+}
+
+int anchor_world_quest_koryuta_release_terminal(void) {
+  unsigned int i;
+  if (q_dragon_join.terminal)
+    return 1;
+  if (!q_dragon_local_ready() || !q_root_live(WQ_FAMILY_KORYUTA))
+    return 0;
+  for (i = 0; i < WORLD_QUEST_MAX; ++i)
+    if (q_nodes[i].family == WQ_FAMILY_KORYUTA) {
+      q_dragon_release(&q_nodes[i]);
+      q_nodes[i].owner = 0;
+    }
+  q_dragon_join.terminal = 1;
+  return 1;
 }
 
 /* ---- render hide ------------------------------------------------------- */
@@ -1483,8 +1513,12 @@ static void q_dragon_pose(QuestNode *n, const int *r, int snap,
   unsigned int j;
   if (n->part)
     func_080013C8_7024C8(n->actor);
-  if (n->clip != (unsigned int)r[WQ_CLIP] ||
-      n->anim != (unsigned int)r[WQ_ANIM])
+  /* Native binds only the root and head with the animated clip selector.
+   * Parts 1-4 and 6-11 use static slots; selecting a clip on those parts
+   * overwrites their object+0x2c static mesh binding. */
+  if ((n->part == 0 || n->part == 5) &&
+      (n->clip != (unsigned int)r[WQ_CLIP] ||
+       n->anim != (unsigned int)r[WQ_ANIM]))
     func_8021664C_5D1B1C(n->actor, (unsigned int)r[WQ_CLIP],
                           (float)r[WQ_RATE] / 256.0f,
                           (unsigned int)r[WQ_ANIM]);
@@ -2021,6 +2055,7 @@ void quest_koryuta_controller_join(void *task, void *unused) {
     q_dragon_join.private_state = private_state;
     q_dragon_join.generation = generation;
     q_dragon_join.ready = 0;
+    q_dragon_join.terminal = 0;
   }
   phase = QB(private_state, 0);
   if (phase == 6)

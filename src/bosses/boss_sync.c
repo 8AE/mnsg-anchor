@@ -26,6 +26,7 @@
 #include "progression/anchor_miracle_star.h"
 #include "bosses/boss_sync.h"
 #include "progression/item_sync.h"
+#include "world/anchor_world_quest.h"
 #include "utils/json_utils.h"
 #include "utils/string_utils.h"
 
@@ -82,6 +83,9 @@ extern void func_80034EF8_35AF8(void *actor);
 #define CONGO_REWARD_FLAG 0x12Du
 #define DARUMANYO_ROOM 0x049u
 #define TSURAMI_ROOM 0x071u
+#define CONTROL_MACHINE_ROOM 0x155u
+#define CONTROL_MACHINE_NATIVE_COMPLETE_FLAG 0x0c2u
+#define CONTROL_MACHINE_SAVE_FLAG 0x014u
 #define BENKEI_ROOM 0x171u
 #define DARUMANYO_NATIVE_DEATH_FLAG 0x16Bu
 #define DARUMANYO_NATIVE_COMPLETE_FLAG 0x16Du
@@ -130,6 +134,8 @@ static unsigned short s_congo_remote_defeat_room;
 static unsigned int s_congo_remote_defeat_needs_rearm;
 static unsigned int s_congo_victory_complete;
 static unsigned int s_congo_local_defeat_started;
+static unsigned int s_control_machine_remote_pending;
+static unsigned int s_control_machine_controller_seen;
 
 static void reset_native_boss_state(NativeBossState *state)
 {
@@ -154,7 +160,8 @@ void boss_sync_reset(void)
         (s_congo_remote_defeat_in_progress ||
          s_tsurami_state.remote_defeat_in_progress ||
          s_darumanyo_state.remote_defeat_in_progress ||
-         s_benkei_state.remote_defeat_in_progress))
+         s_benkei_state.remote_defeat_in_progress ||
+         s_control_machine_remote_pending))
     {
         /* Item sync is not polling encounter state while disconnected.  Make
          * Congo retry on its next authoritative health update so leaving and
@@ -188,6 +195,8 @@ void boss_sync_reset(void)
     s_benkei_setup_actor_changed = 0;
     s_benkei_update_actor = 0;
     s_congo_lethal_hit_pending = 0;
+    s_control_machine_remote_pending = 0;
+    s_control_machine_controller_seen = 0;
     s_congo_lethal_hit_armed = 0;
     s_congo_lethal_hit_room = 0;
     s_congo_remote_defeat_in_progress = 0;
@@ -302,7 +311,8 @@ int boss_sync_is_completion_flag(const char *flag_name)
            mnsg_string_equal(flag_name, "fl_thaisamba") ||
            mnsg_string_equal(flag_name, "fl_tsurami") ||
            mnsg_string_equal(flag_name, "fl_benkei") ||
-           mnsg_string_equal(flag_name, "fl_congo_killed");
+           mnsg_string_equal(flag_name, "fl_congo_killed") ||
+           mnsg_string_equal(flag_name, "fl_koryuta");
 }
 
 int boss_sync_should_defer_flag(const char *flag_name)
@@ -312,9 +322,52 @@ int boss_sync_should_defer_flag(const char *flag_name)
     return boss_sync_is_completion_flag(flag_name) || mnsg_string_equal(flag_name, "fl_congo");
 }
 
+int boss_sync_control_machine_remote_pending(void)
+{
+    return s_control_machine_remote_pending &&
+           D_800C7AB2 == CONTROL_MACHINE_ROOM &&
+           !func_800240DC_24CDC(CONTROL_MACHINE_NATIVE_COMPLETE_FLAG) &&
+           !func_800240DC_24CDC(CONTROL_MACHINE_SAVE_FLAG);
+}
+
+void boss_sync_control_machine_native_complete(void)
+{
+    if (!s_control_machine_remote_pending)
+        return;
+    /* Item sync may commit the deferred durable flag after room exit. Once
+     * the local save contains it, this encounter no longer needs deferral. */
+    if (func_800240DC_24CDC(CONTROL_MACHINE_SAVE_FLAG)) {
+        s_control_machine_remote_pending = 0;
+        s_control_machine_controller_seen = 0;
+        return;
+    }
+    if (D_800C7AB2 != CONTROL_MACHINE_ROOM) {
+        s_control_machine_controller_seen = 0;
+        return;
+    }
+    if (anchor_world_quest_koryuta_controller_task()) {
+        s_control_machine_controller_seen = 1;
+        return;
+    }
+    /* C2 rises before the File_58 final camera/warp cleanup. Require the
+     * controller observed in this local encounter to finish and disappear. */
+    if (!s_control_machine_controller_seen ||
+        !func_800240DC_24CDC(CONTROL_MACHINE_NATIVE_COMPLETE_FLAG))
+        return;
+    item_sync_commit_boss_completion("fl_koryuta");
+    s_control_machine_remote_pending = 0;
+    s_control_machine_controller_seen = 0;
+}
+
 int boss_sync_has_active_encounter(const char *flag_name)
 {
     TrackedBoss *boss = boss_for_flag(flag_name);
+
+    if (mnsg_string_equal(flag_name, "fl_koryuta"))
+        return D_800C7AB2 == CONTROL_MACHINE_ROOM &&
+               (!func_800240DC_24CDC(CONTROL_MACHINE_NATIVE_COMPLETE_FLAG) ||
+                anchor_world_quest_koryuta_controller_task()) &&
+               !func_800240DC_24CDC(CONTROL_MACHINE_SAVE_FLAG);
 
     /* Shared Congo checkpoints own HP zero and the native victory handoff.
      * Hold progression through the frame between those two native states,
@@ -361,6 +414,11 @@ int boss_sync_has_active_encounter(const char *flag_name)
 int boss_sync_has_local_encounter(const char *flag_name)
 {
     TrackedBoss *boss = boss_for_flag(flag_name);
+
+    if (mnsg_string_equal(flag_name, "fl_koryuta"))
+        return s_control_machine_remote_pending &&
+               D_800C7AB2 == CONTROL_MACHINE_ROOM &&
+               anchor_world_quest_koryuta_controller_task() != 0;
 
     if (boss == &s_congo && anchor_congo_damage_is_shared() &&
         !s_congo_victory_complete)
@@ -524,6 +582,17 @@ int boss_sync_apply_remote_defeat(const char *flag_name)
     NativeBossState *state;
     TrackedBoss *boss;
     unsigned int flag_id;
+
+    if (mnsg_string_equal(flag_name, "fl_koryuta"))
+    {
+        if (D_800C7AB2 != CONTROL_MACHINE_ROOM ||
+            (func_800240DC_24CDC(CONTROL_MACHINE_NATIVE_COMPLETE_FLAG) &&
+             !anchor_world_quest_koryuta_controller_task()) ||
+            func_800240DC_24CDC(CONTROL_MACHINE_SAVE_FLAG))
+            return 0;
+        s_control_machine_remote_pending = 1;
+        return 1;
+    }
 
     if (mnsg_string_equal(flag_name, "fl_dharmanyo"))
     {

@@ -18,6 +18,7 @@ void *D_801FC604_5B8514;
 void *D_8016DAB4_16E6B4;
 float D_8015CDC4, D_8015CDC8;
 static unsigned int dragon_cache_calls, dragon_attach_calls, dragon_allocations;
+static unsigned int dragon_clip_selects;
 static int dragon_durable;
 void func_080013C8_7024C8(void *a) {
   void *o = QP(a, 0x18);
@@ -74,8 +75,41 @@ void func_8021664C_5D1B1C(void *a, unsigned int clip, float rate,
                             unsigned int flags) {
   void *o = QP(a, 0x18);
   (void)clip;
+  ++dragon_clip_selects;
+  QW(o, 0x2c) = 0x10000000u | clip;
   QB(o, 0x7c) = (unsigned char)flags;
   QH(o, 0x7e) = (unsigned short)(rate * 256.0f);
+}
+
+static void test_static_dragon_binding(void) {
+  unsigned char actor[512] = {0}, object[512] = {0};
+  int row[WORLD_QUEST_WORDS] = {0};
+  QuestNode n = {0};
+  unsigned int part, before;
+  QP(actor, 0x18) = object;
+  n.actor = actor;
+  n.object = object;
+  row[WQ_SX] = row[WQ_SY] = row[WQ_SZ] = 100;
+  row[WQ_RATE] = 64;
+  row[WQ_ANIM] = 1;
+  before = dragon_clip_selects;
+  for (part = 1; part < 12; ++part) {
+    if (part == 5) continue;
+    n.part = (unsigned char)part;
+    n.clip = n.anim = 0;
+    QW(object, 0x2c) = 0x40000000u | part;
+    q_dragon_pose(&n, row, 1, 1);
+    assert(QW(object, 0x2c) == (0x40000000u | part));
+    assert(dragon_clip_selects == before);
+  }
+  n.part = 5;
+  n.clip = n.anim = 0;
+  row[WQ_CLIP] = 2;
+  q_dragon_pose(&n, row, 1, 1);
+  assert(dragon_clip_selects == before + 1u);
+  assert(QW(object, 0x2c) == (0x10000000u | 2u));
+  dragon_cache_calls = dragon_attach_calls = 0;
+  D_8015CDC4 = D_8015CDC8 = 0.0f;
 }
 void func_80216E1C_5D22EC(void *a, int slot) {
   void *o = QP(a, 0x18);
@@ -151,6 +185,7 @@ static void test_dragon_native_graph(void) {
   static unsigned char controller_task[512], controller_private[16];
   static unsigned char controller_new[512], controller_new_private[16];
   static int offers[12][WORLD_QUEST_WORDS];
+  static int terminal_offers[12][WORLD_QUEST_WORDS];
   unsigned int i, j, before;
   QuestNode *root_node;
   anchor_world_quest_reset(1);
@@ -397,6 +432,7 @@ static void test_dragon_native_graph(void) {
   offers[1][WQ_RECEIPT]--;
   assert(anchor_world_quest_receive((const int (*)[WORLD_QUEST_WORDS])offers,
                                     12, 7) == 12);
+  memcpy(terminal_offers, offers, sizeof(terminal_offers));
   for (i = 1; i < 12; ++i) {
     memcpy(offers[i], offers[0], sizeof(offers[i]));
     offers[i][WQ_ROLE] = WQ_ROLE_KORYUTA_PART;
@@ -414,6 +450,19 @@ static void test_dragon_native_graph(void) {
   assert(!anchor_world_quest_row_valid(offers[0]));
   q_retire(controller_new);
   assert(q_dragon_local_ready());
+  dragon_durable = 0;
+  assert(anchor_world_quest_koryuta_release_terminal());
+  assert(anchor_world_quest_koryuta_release_terminal());
+  assert(!q_dragon_local_ready() && !root_node->dragon_following);
+  assert(QP(actors[0], 0xc) ==
+         (void *)((unsigned long)func_080018E4_7029E4 |
+                  QUEST_CALLBACK_DISABLED));
+  /* A repeated valid owner graph cannot freeze native departure again. */
+  assert(anchor_world_quest_receive(
+             (const int (*)[WORLD_QUEST_WORDS])terminal_offers, 12, 7) == 0);
+  assert(QP(actors[0], 0xc) ==
+         (void *)((unsigned long)func_080018E4_7029E4 |
+                  QUEST_CALLBACK_DISABLED));
   D_800C7AB2 = WORLD_QUEST_ROOM_GATEWAY;
   anchor_world_quest_reset(1);
   assert(!q_dragon_join.ready);
@@ -425,6 +474,8 @@ int main(void) {
   int parts[2][WORLD_QUEST_WORDS];
   unsigned int count, i;
   char json[WORLD_QUEST_JSON];
+
+  test_static_dragon_binding();
 
   D_800C7AB2 = WORLD_QUEST_ROOM_GATEWAY;
   D_801FC604_5B8514 = actor_source;

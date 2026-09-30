@@ -100,6 +100,8 @@ int main(void)
 
     D_8016DAB4_16E6B4 = task;
     anchor_control_machine_hud_bind();
+    assert(anchor_control_machine_bound_task() == task);
+    assert(anchor_control_machine_bound_root() == root->task_store.bytes);
     assert(anchor_control_machine_hud_task() == task);
     assert(!anchor_control_machine_hud_health(0));
     assert(anchor_control_machine_hud_health(&health) && health == 5u);
@@ -108,6 +110,8 @@ int main(void)
     CM_U8(task, 0x8d) = 1;
     assert(anchor_control_machine_hud_health(&health) && health == 1u);
     CM_U8(task, 0x8d) = 0;
+    /* HP zero is still a live native combat state before the final hit. */
+    assert(anchor_control_machine_bound_task() == task);
     assert(!anchor_control_machine_hud_task() &&
            !anchor_control_machine_hud_health(&health) && health == 1u);
     CM_U8(task, 0x8d) = 6;
@@ -116,6 +120,8 @@ int main(void)
 
     child->ai = (TestCallback)((unsigned long)func_080031D8_7042D8 |
                                CM_CALLBACK_DISABLED);
+    CM_U8(task, 0x8d) = 255;
+    assert(anchor_control_machine_bound_task() == task);
     assert(!anchor_control_machine_hud_task());
     child->ai = func_08003634_704734;
     assert(!anchor_control_machine_hud_task());
@@ -124,12 +130,14 @@ int main(void)
     child->ai = func_080036CC_7047CC;
     assert(!anchor_control_machine_hud_task());
     child->ai = func_08002EB4_703FB4;
+    CM_U8(task, 0x8d) = 5;
 
     /* A changed list head rewrites +0x04; the current backlink stays valid. */
     child->backlink = other->backlink_store.bytes;
     other->backlink_target = task;
     assert(anchor_control_machine_hud_task() == task);
     other->backlink_target = 0;
+    assert(!anchor_control_machine_bound_task());
     assert(!anchor_control_machine_hud_task());
     child->backlink = child->backlink_store.bytes;
 
@@ -153,6 +161,7 @@ int main(void)
 
     visit = current_visit;
     current_visit++;
+    assert(!anchor_control_machine_bound_task());
     assert(!anchor_control_machine_hud_task());
     current_visit = visit;
     D_800C7AB2 = 0;

@@ -15,7 +15,8 @@ int recomp_printf(const char *format, ...);
 typedef union TestActor { void *align; unsigned char bytes[0x200]; } TestActor;
 unsigned short D_800C7AB2;
 static unsigned char flags[0x200];
-static int loaded, shared, owner, sent, committed;
+static int loaded, shared, owner, sent, committed, control_machine_committed;
+static void *control_machine_controller;
 int anchor_miracle_star_local_scene_active(void) { return 0; }
 void anchor_tsurami_native_finish_terminal(void) {}
 int anchor_congo_damage_is_shared(void) { return 0; }
@@ -25,11 +26,20 @@ int anchor_dharumanyo_damage_is_owner(void) { return 0; }
 int anchor_tsurami_damage_is_shared(void) { return shared; }
 int anchor_tsurami_damage_is_owner(void) { return owner; }
 int item_sync_save_is_loaded(void) { return loaded; }
+void *anchor_world_quest_koryuta_controller_task(void)
+{ return control_machine_controller; }
 void item_sync_apply_benkei_postfight_state(void) {}
 void anchor_dharumanyo_native_finish_terminal(void) {}
 void item_sync_mark_boss_defeat_announced(const char *flag) { assert(!strcmp(flag,"fl_tsurami")); }
 void item_sync_commit_boss_completion(const char *flag)
-{ assert(!strcmp(flag,"fl_tsurami")); ++committed; flags[TSURAMI_KILL_FLAG]=1; }
+{
+    if (!strcmp(flag, "fl_koryuta")) {
+        ++control_machine_committed;
+        flags[CONTROL_MACHINE_SAVE_FLAG] = 1;
+        return;
+    }
+    assert(!strcmp(flag,"fl_tsurami")); ++committed; flags[TSURAMI_KILL_FLAG]=1;
+}
 char *anchor_get_team_id(void) { char *s=malloc(5); memcpy(s,"team",5); return s; }
 int anchor_send_custom_packet(const char *type,const char *payload,const char *team,
                              unsigned int target,int queue)
@@ -106,6 +116,38 @@ int main(void)
     assert(boss_sync_apply_remote_defeat("fl_tsurami"));
     assert(s_tsurami_state.lethal_hit_pending);
     assert(!boss_sync_queue_tsurami_shared_terminal());
+
+    /* Remote completion must wait through File_58's post-C2 camera/warp. */
+    loaded = 0; boss_sync_reset(); loaded = 1;
+    memset(flags, 0, sizeof(flags));
+    D_800C7AB2 = CONTROL_MACHINE_ROOM;
+    control_machine_controller = &root;
+    control_machine_committed = 0;
+    assert(boss_sync_apply_remote_defeat("fl_koryuta"));
+    assert(boss_sync_control_machine_remote_pending());
+    flags[CONTROL_MACHINE_NATIVE_COMPLETE_FLAG] = 1;
+    boss_sync_control_machine_native_complete();
+    assert(control_machine_committed == 0);
+    control_machine_controller = 0;
+    boss_sync_control_machine_native_complete();
+    assert(control_machine_committed == 1 && flags[CONTROL_MACHINE_SAVE_FLAG]);
+    boss_sync_control_machine_native_complete();
+    assert(control_machine_committed == 1);
+
+    /* Off-room item-sync flush also resolves the retained local encounter. */
+    loaded = 0; boss_sync_reset(); loaded = 1;
+    memset(flags, 0, sizeof(flags));
+    D_800C7AB2 = CONTROL_MACHINE_ROOM;
+    control_machine_controller = &root;
+    assert(boss_sync_apply_remote_defeat("fl_koryuta"));
+    D_800C7AB2 = 0;
+    control_machine_controller = 0;
+    flags[CONTROL_MACHINE_SAVE_FLAG] = 1;
+    boss_sync_control_machine_native_complete();
+    assert(!s_control_machine_remote_pending &&
+           !s_control_machine_controller_seen);
+    boss_sync_reset();
+    assert(!s_control_machine_remote_pending);
     puts("Tsurami terminal progression tests passed");
     return 0;
 }

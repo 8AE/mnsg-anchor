@@ -41,6 +41,7 @@ int anchor_tsurami_damage_is_owner(void) { return 0; }
 int anchor_dharumanyo_damage_is_shared(void) { return dharumanyo_shared; }
 int anchor_dharumanyo_damage_is_owner(void) { return dharumanyo_owner; }
 int item_sync_save_is_loaded(void) { return save_loaded; }
+void *anchor_world_quest_koryuta_controller_task(void) { return 0; }
 void item_sync_apply_benkei_postfight_state(void) {}
 void anchor_dharumanyo_native_finish_terminal(void)
 {

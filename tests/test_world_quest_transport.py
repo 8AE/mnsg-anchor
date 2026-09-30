@@ -295,6 +295,55 @@ class QuestTransportTests(unittest.TestCase):
             self.a.sent(packets_a,True,now)
             self.b.sent(packets_b,True,now)
 
+    def test_active_boss_owner_prefers_only_complete_ready_dragon_graph(self):
+        self.dragon_room()
+        a_rows=[dragon_row(p,instance=p+1) for p in range(12)]
+        b_rows=[dragon_row(p,instance=p+101) for p in range(12)]
+        self.send(self.a,self.ca,self.b,self.cb,a_rows,1)
+        self.send(self.b,self.cb,self.a,self.ca,b_rows,1.1)
+        family=quest.family_key(a_rows[0])
+        self.a.owners[family]=1
+        self.b.owners[family]=1
+        for transport,ctx,rows in ((self.a,self.ca,a_rows),
+                                   (self.b,self.cb,b_rows)):
+            result,_=transport.update(ctx,rows,[],1.11,2)
+            self.assertEqual({r[quest.OWNER] for r in result['a']},{2})
+        # A new active boss owner can move the graph back when still eligible.
+        for transport,ctx,rows in ((self.a,self.ca,a_rows),
+                                   (self.b,self.cb,b_rows)):
+            result,_=transport.update(ctx,rows,[],1.12,1)
+            self.assertEqual({r[quest.OWNER] for r in result['a']},{1})
+
+    def test_unready_or_incomplete_preferred_boss_owner_is_ignored(self):
+        self.dragon_room()
+        a_rows=[dragon_row(p,instance=p+1) for p in range(12)]
+        b_rows=[dragon_row(p,instance=p+101) for p in range(12)]
+        self.send(self.a,self.ca,self.b,self.cb,a_rows,1)
+        b_rows[0][quest.DRAGON_READY]=0
+        self.send(self.b,self.cb,self.a,self.ca,b_rows,1.1)
+        result,_=self.a.update(self.ca,a_rows,[],1.11,2)
+        self.assertEqual({r[quest.OWNER] for r in result['a']},{1})
+        b_rows[0][quest.DRAGON_READY]=1
+        self.send(self.b,self.cb,self.a,self.ca,b_rows[:11],1.31)
+        result,_=self.a.update(self.ca,a_rows,[],1.32,2)
+        self.assertEqual({r[quest.OWNER] for r in result['a']},{1})
+        self.send(self.b,self.cb,self.a,self.ca,b_rows,1.51)
+        result,_=self.a.update(self.ca,a_rows,[],1.52,2)
+        self.assertEqual({r[quest.OWNER] for r in result['a']},{2})
+        self.ca['players'][2]['online']=False
+        result,_=self.a.update(self.ca,a_rows,[],1.53,2)
+        self.assertEqual({r[quest.OWNER] for r in result['a']},{1})
+
+    def test_koryuta_preference_does_not_change_other_quest_families(self):
+        a_row=row(instance=1)
+        b_row=row(instance=2)
+        self.send(self.a,self.ca,self.b,self.cb,[a_row],1)
+        self.send(self.b,self.cb,self.a,self.ca,[b_row],1.1)
+        for transport,ctx,source in ((self.a,self.ca,a_row),
+                                     (self.b,self.cb,b_row)):
+            result,_=transport.update(ctx,[source],[],1.11,2)
+            self.assertEqual({r[quest.OWNER] for r in result['a']},{1})
+
     def test_dragon_peer_snapshot_expiry_makes_reply_unready(self):
         self.dragon_room()
         self.send(self.a,self.ca,self.b,self.cb,[],.2)
