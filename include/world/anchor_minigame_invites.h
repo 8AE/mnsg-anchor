@@ -22,5 +22,10 @@ void anchor_minigame_invites_character_published(unsigned short room);
 int anchor_minigame_invites_character_motion_ready(unsigned short room);
 /* Loaded minigame room scope for the mod's character cycler. */
 int anchor_minigame_invites_required_character(void);
+int anchor_minigame_invites_is_room(unsigned short room);
+/* Use canonical starts for the three challenge rooms; other rooms retain the
+ * caller's exact coordinates. Returns the guarded native transfer result. */
+int anchor_minigame_invites_transfer_to_room(unsigned short room,
+                                             short x, short y, short z);
 
 #endif

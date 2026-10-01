@@ -69,6 +69,11 @@ static int game_for_room(unsigned short room)
     }
 }
 
+int anchor_minigame_invites_is_room(unsigned short room)
+{
+    return game_for_room(room) != ANCHOR_MINIGAME_NONE;
+}
+
 static int character_for_game(int game)
 {
     switch (game) {
@@ -207,6 +212,15 @@ static int transfer_to_game(int game)
     default:
         return 0;
     }
+}
+
+int anchor_minigame_invites_transfer_to_room(unsigned short room,
+                                             short x, short y, short z)
+{
+    int game = game_for_room(room);
+    if (game)
+        return transfer_to_game(game);
+    return anchor_boss_invite_world_transfer_to(room, x, y, z);
 }
 
 static void clear_invitation(void)

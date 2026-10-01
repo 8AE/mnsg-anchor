@@ -180,6 +180,83 @@ class MinigameInvitationTransportTests(unittest.TestCase):
         self.assertEqual(self.client.get_minigame_invitation_json(), "")
         self.assertFalse(self.client._receive_minigame_invite(self.packet(seq=1)))
 
+    def test_departure_blocks_only_stale_matching_transfer_target(self):
+        for game, room in self.client.MINIGAME_ROOMS.items():
+            with self.subTest(game=game):
+                self.peer(game=game, posX=111, posY=-222, posZ=333)
+                entry_seq = game * 10
+                self.assertTrue(self.client._receive_minigame_invite(
+                    self.packet(game=game, seq=entry_seq)))
+                self.client.dismiss_minigame_invitation(2, 202, entry_seq)
+                self.assertEqual(json.loads(self.client.get_transfer_target_json(2))["room"],
+                                 room)  # Declining does not hide a fresh target.
+
+                self.assertTrue(self.client._receive_minigame_invite(
+                    self.packet(game=game, entered=False, seq=entry_seq + 1)))
+                self.assertEqual(self.client._minigame_departures[2], (202, game))
+                self.assertEqual(self.client.get_transfer_target_json(2), "{}")
+                roster = json.loads(self.client.get_player_info_json())
+                self.assertEqual(next(row["ct"] for row in roster if row["cid"] == 2), 0)
+
+                self.assertTrue(self.client._receive_minigame_invite(
+                    self.packet(game=game, seq=entry_seq + 2)))
+                self.assertNotIn(2, self.client._minigame_departures)
+                self.assertEqual(json.loads(self.client.get_transfer_target_json(2))["room"],
+                                 room)
+
+                self.assertTrue(self.client._receive_minigame_invite(
+                    self.packet(game=game, entered=False, seq=entry_seq + 3)))
+                self.peer(game=game, currentRoomId=10, posX=-123, posY=456,
+                          posZ=-789)
+                self.assertNotIn(2, self.client._minigame_departures)
+                self.assertEqual(json.loads(self.client.get_transfer_target_json(2)),
+                                 {"cid": 2, "room": 10, "x": -123,
+                                  "y": 456, "z": -789})
+
+    def test_departure_obsoletes_on_new_session_and_reset(self):
+        self.peer(game=1, posX=1, posY=2, posZ=3)
+        self.assertFalse(self.client._receive_minigame_invite(
+            self.packet(entered=False, seq=0)))
+        self.assertFalse(self.client._minigame_departures)
+        self.assertTrue(self.client._receive_minigame_invite(
+            self.packet(entered=False, seq=1)))
+        self.assertEqual(self.client.get_transfer_target_json(2), "{}")
+        for malformed in (None, "not-a-session"):
+            self.client._prune_minigame_departure(2, {
+                "online": True, "isSaveLoaded": True,
+                "roomId": self.client.MINIGAME_ROOMS[1],
+                "interactionSession": malformed,
+            })
+            self.assertEqual(self.client._minigame_departures[2], (202, 1))
+        self.assertTrue(self.client._receive_minigame_invite(
+            self.packet(session=303, seq=1)))
+        self.assertEqual(self.client.get_transfer_target_json(2), "{}")
+        self.peer(game=1, session=303, posX=4, posY=5, posZ=6)
+        self.assertFalse(self.client._minigame_departures)
+        self.assertEqual(json.loads(self.client.get_transfer_target_json(2))["room"],
+                         self.client.MINIGAME_ROOMS[1])
+        self.assertTrue(self.client._receive_minigame_invite(
+            self.packet(session=303, entered=False, seq=2)))
+        self.assertEqual(self.client.get_transfer_target_json(2), "{}")
+        self.client._reset_minigame_invitations()
+        self.assertFalse(self.client._minigame_departures)
+
+    def test_other_game_entry_keeps_old_room_departure_blocked(self):
+        self.peer(game=1, posX=11, posY=22, posZ=33)
+        self.assertTrue(self.client._receive_minigame_invite(
+            self.packet(game=1, entered=False, seq=1)))
+        self.assertEqual(self.client.get_transfer_target_json(2), "{}")
+        self.assertTrue(self.client._receive_minigame_invite(
+            self.packet(game=2, seq=2)))
+        self.assertEqual(self.client._minigame_departures[2], (202, 1))
+        self.assertEqual(self.client.get_transfer_target_json(2), "{}")
+
+        self.peer(game=2, posX=44, posY=55, posZ=66)
+        self.assertNotIn(2, self.client._minigame_departures)
+        self.assertEqual(json.loads(self.client.get_transfer_target_json(2)),
+                         {"cid": 2, "room": self.client.MINIGAME_ROOMS[2],
+                          "x": 44, "y": 55, "z": 66})
+
     def test_malformed_stale_room_team_and_disconnect(self):
         self.peer()
         for changes in ({"game": 0}, {"game": 4}, {"clientId": True},

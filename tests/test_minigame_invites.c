@@ -153,6 +153,35 @@ int main(void)
     D_8015C5D8_15D1D8[1] = 3;
     player_task[0x60] = 3;
 
+    /* Player-list transfers share the invite's fixed minigame starts. A
+     * busy native gate leaves the request retryable; ordinary rooms retain
+     * the remote's exact signed coordinates. */
+    for (int i = 0; i < 3; ++i) {
+        assert(anchor_minigame_invites_is_room(rooms[i]));
+        before = warps;
+        warp_ready = 0;
+        assert(!anchor_minigame_invites_transfer_to_room(
+            rooms[i], 111, -222, 333));
+        assert(warps == before);
+        warp_ready = 1;
+        assert(anchor_minigame_invites_transfer_to_room(
+            rooms[i], 111, -222, 333));
+        assert(warps == before + 1 && warp_room == rooms[i]);
+        assert(warp_x == coords[i][0] && warp_y == coords[i][1] &&
+               warp_z == coords[i][2]);
+    }
+    assert(!anchor_minigame_invites_is_room(0x0010));
+    before = warps;
+    warp_ready = 0;
+    assert(!anchor_minigame_invites_transfer_to_room(0x0010,
+                                                     -123, 456, -789));
+    assert(warps == before);
+    warp_ready = 1;
+    assert(anchor_minigame_invites_transfer_to_room(0x0010,
+                                                    -123, 456, -789));
+    assert(warps == before + 1 && warp_room == 0x0010 &&
+           warp_x == -123 && warp_y == 456 && warp_z == -789);
+
     anchor_minigame_invites_update();
     assert(published_game == 0);
     for (int i = 0; i < 3; ++i) {

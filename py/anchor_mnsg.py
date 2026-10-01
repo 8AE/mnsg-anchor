@@ -198,6 +198,9 @@ _minigame_events: dict = {}
 _minigame_seen: dict = {}
 _minigame_retired_sessions: "dict[int, set[int]]" = {}
 _minigame_confirmed_sessions: "dict[int, int]" = {}
+# One received exit per sender is enough to reject that sender's stale room
+# snapshot until a new entry or fresh room/session metadata supersedes it.
+_minigame_departures: "dict[int, tuple[int, int]]" = {}
 _congo = anchor_congo.CongoTransport()
 _control_machine = anchor_control_machine.ControlMachineTransport()
 _dharumanyo = anchor_dharumanyo.DharumanyoTransport()
@@ -795,6 +798,7 @@ def _merge_client_state(
     _impact_players.observe(context)
     _invalidate_confirmed_boss_invitation(cid)
     _invalidate_confirmed_minigame_invitation(cid)
+    _prune_minigame_departure(cid, state)
     _prune_projectile_spawns(now_ms)
     return True
 
@@ -944,6 +948,8 @@ def _replace_all_client_states(states: list) -> None:
                 _player_cube_push_seen.pop(cid, None)
         _player_states.clear()
         _player_states.update(new_players)
+        for cid in tuple(_minigame_departures):
+            _prune_minigame_departure(cid, new_players.get(cid))
         context = _boss_context()
         _congo.observe(context)
         _control_machine.observe(context)
@@ -3612,6 +3618,21 @@ def _reset_minigame_invitations() -> None:
     _minigame_seen.clear()
     _minigame_retired_sessions.clear()
     _minigame_confirmed_sessions.clear()
+    _minigame_departures.clear()
+
+
+def _prune_minigame_departure(cid: int, state: "dict | None") -> None:
+    marker = _minigame_departures.get(cid)
+    if not marker:
+        return
+    session, game = marker
+    known_session = (_bounded_int(state.get("interactionSession"), 1,
+                                  _POSITION_SEQUENCE_MASK, 0) if state else 0)
+    if (not state or not state.get("online", False) or
+            not state.get("isSaveLoaded", False) or
+            state.get("roomId") != MINIGAME_ROOMS[game] or
+            known_session > 0 and known_session != session):
+        _minigame_departures.pop(cid, None)
 
 
 def _invalidate_confirmed_minigame_invitation(cid: int) -> None:
@@ -3687,10 +3708,15 @@ def _receive_minigame_invite(packet: dict) -> bool:
             _minigame_events.pop(cid, None)
         _minigame_seen[key] = sequence
         if not packet["entered"]:
+            if (peer and peer.get("roomId") == MINIGAME_ROOMS[packet["game"]] and
+                    peer.get("interactionSession") == session):
+                _minigame_departures[cid] = (session, packet["game"])
             event = _minigame_events.get(cid)
             if event and event["session"] == session:
                 _minigame_events.pop(cid, None)
             return True
+        if _minigame_departures.get(cid) == (session, packet["game"]):
+            _minigame_departures.pop(cid, None)
         _minigame_events[cid] = {
             "cid": cid, "session": session, "seq": sequence,
             "game": packet["game"], "team": _team_id, "entered": True,
@@ -4486,6 +4512,10 @@ def _transfer_target_locked(cid: int, now_ms: int) -> "dict | None":
 
     room = state.get("roomId")
     if type(room) is not int or not 0 <= room <= TRANSFER_ROOM_MAX:
+        return None
+    departure = _minigame_departures.get(cid)
+    if (departure and room == MINIGAME_ROOMS[departure[1]] and
+            int(state["interactionSession"]) == departure[0]):
         return None
     coordinates = (state.get("posX"), state.get("posY"), state.get("posZ"))
     if any(type(value) is not int for value in coordinates):

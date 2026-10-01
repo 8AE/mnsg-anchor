@@ -28,7 +28,7 @@
 #include "platform/recompui.h"
 #include "platform/recompconfig.h"
 #include "core/anchor.h"
-#include "bosses/anchor_boss_invite_world.h"
+#include "world/anchor_minigame_invites.h"
 #include "core/anchor_runtime.h"
 #include "ui/debug_ui.h"
 #include "utils/array_utils.h"
@@ -550,8 +550,17 @@ static int plist_parse_transfer_target(const char *json,
         !mnsg_json_get_u32(json, "cid", &parsed_cid) ||
         parsed_cid != requested_cid ||
         !mnsg_json_get_u16(json, "room", &parsed_room) ||
-        parsed_room > TRANSFER_MAX_ROOM_ID ||
-        !mnsg_json_get_s32(json, "x", &parsed_x) ||
+        parsed_room > TRANSFER_MAX_ROOM_ID)
+        return 0;
+
+    if (anchor_minigame_invites_is_room(parsed_room))
+    {
+        *room = parsed_room;
+        *x = *y = *z = 0;
+        return 1;
+    }
+
+    if (!mnsg_json_get_s32(json, "x", &parsed_x) ||
         !mnsg_json_get_s32(json, "y", &parsed_y) ||
         !mnsg_json_get_s32(json, "z", &parsed_z) ||
         parsed_x < -32768 || parsed_x > 32767 ||
@@ -611,11 +620,15 @@ static int plist_update_pending_transfer(void)
     if (!valid)
         return 0;
 
-    if (!anchor_boss_invite_world_transfer_to(room, x, y, z))
+    if (!anchor_minigame_invites_transfer_to_room(room, x, y, z))
         return 0;
 
-    recomp_printf("[Anchor] Transferring to client %u: room=0x%04X xyz=(%d,%d,%d)\n",
-                  cid, (unsigned int)room, (int)x, (int)y, (int)z);
+    if (anchor_minigame_invites_is_room(room))
+        recomp_printf("[Anchor] Transferring to client %u: minigame room=0x%04X\n",
+                      cid, (unsigned int)room);
+    else
+        recomp_printf("[Anchor] Transferring to client %u: room=0x%04X xyz=(%d,%d,%d)\n",
+                      cid, (unsigned int)room, (int)x, (int)y, (int)z);
     plist_clear_pending_transfer();
     return 1;
 }
