@@ -27,5 +27,24 @@ int anchor_minigame_invites_is_room(unsigned short room);
  * caller's exact coordinates. Returns the guarded native transfer result. */
 int anchor_minigame_invites_transfer_to_room(unsigned short room,
                                              short x, short y, short z);
+/* Player-list joins identify their chosen host; a zero visit asks the bridge
+ * to resolve that host's current loaded challenge. */
+int anchor_minigame_invites_transfer_to_client(unsigned short room,
+                                               short x, short y, short z,
+                                               int cid);
+void anchor_minigame_invites_cancel_player_list_join(int cid);
+/* Guarded world transport calls this after native readiness checks. */
+int anchor_minigame_invites_prepare_transfer(unsigned short destination_room);
+/* Called by the guarded live-world transfer before a minigame warp. Keeps the
+ * first ordinary-room source through minigame reloads and chained visits. */
+void anchor_minigame_invites_note_transfer(unsigned short destination_room);
+/* Returns the exact native player-object XYZ saved for a later result return. */
+int anchor_minigame_invites_source_waypoint(unsigned short *room, float xyz[3]);
+/* Native helper-return and constructor-return hooks. These preserve native
+ * result cleanup; source XYZ is applied once after the matching room spawn. */
+void anchor_minigame_invites_return_saved(void);
+void anchor_minigame_invites_return_ebisumaru(void);
+void anchor_minigame_invites_restore_spawn(void);
+void anchor_minigame_invites_restore_in_place(void);
 
 #endif

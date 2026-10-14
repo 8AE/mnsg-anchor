@@ -238,6 +238,12 @@ extern "C"
    char *anchor_get_minigame_invitation_json(void);
    int anchor_minigame_invitation_is_current(int cid, int session, int sequence);
    void anchor_dismiss_minigame_invitation(int cid, int session, int sequence);
+   /* Prepare a host session before transferring; cid=0 selects a live session
+    * or permits a new local game, including offline. Returns 0 to retry. */
+   int anchor_minigame_prepare_join(int game, int cid, int session, int visit);
+   /* Batched controller/object exchange. Result is an allocated JSON string;
+    * caller frees it. Python gates complete graphs and owns transport ordering. */
+   char *anchor_update_minigame(int game, int visit, const char *state_json);
 
    /* One batched bridge exchange per frame. Python owns election, checkpoint
     * caching, deduplication and the shared packet budget. Free the result. */

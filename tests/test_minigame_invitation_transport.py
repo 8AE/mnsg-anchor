@@ -43,6 +43,67 @@ def load_client(room=10):
     return client
 
 
+def verify_native_ebisumaru_invitation(pending_native, ready_native):
+    """Bridge real C cold-start captures through invitation Yes preparation.
+
+    The native runner supplies these values; readiness is never manufactured
+    here. An unsuccessful native capture is submitted as JSON null, matching
+    the coordinator. This checks the same invitation before and after startup.
+    """
+    assert pending_native is None or pending_native["ready"] == 0
+    assert ready_native["ready"] == 1 and ready_native["running"] == 1
+    assert {row[0] for row in ready_native["a"]} >= {1, 2}
+    host = load_client(room=0x1e1)
+    guest = load_client(room=0x166)
+    host._client_id = 2
+    host._interaction_session = 202
+    host._world_roster_session = 202
+
+    def exchange_metadata():
+        updates = [json.loads(wire[:-1]) for wire in host._sock.sent
+                   if json.loads(wire[:-1]).get("type") == "UPDATE_CLIENT_STATE"]
+        assert updates
+        assert guest._merge_client_state(2, updates[-1]["state"])
+        return updates[-1]["state"][host.anchor_minigame.METADATA_KEY]
+
+    try:
+        with mock.patch("time.monotonic", return_value=100.0) as clock:
+            pending = json.loads(host.update_minigame(2, 7, json.dumps(pending_native)))
+            assert pending["owner"] == 2 and pending["ready"] == 0
+            assert exchange_metadata()["r"] == 0
+            assert host.set_minigame_active(2, 7)
+            invite_wire = host._sock.sent[-1]
+            invite = json.loads(invite_wire[:-1])
+            assert invite["type"] == "MNSG_MINIGAME_INVITE" and invite["game"] == 2
+            assert guest._receive_minigame_invite(invite)
+            shown = json.loads(guest.get_minigame_invitation_json())
+            identity = (shown["cid"], shown["session"], shown["seq"])
+            assert identity == (2, 202, invite["seq"])
+            assert shown["gameVisit"] == 7
+            # C retains its accepted Yes while this exact prepare gate rejects.
+            assert not guest.minigame_prepare_join(2, 2, 202, 7)
+            assert guest.minigame_invitation_is_current(*identity)
+            assert json.loads(guest.get_minigame_invitation_json()) == shown
+
+            clock.return_value = 100.1
+            ready = json.loads(host.update_minigame(2, 7, json.dumps(ready_native)))
+            assert ready["ready"] == 1 and ready["isOwner"] == 1
+            assert exchange_metadata()["r"] == 1
+            assert guest.minigame_invitation_is_current(*identity)
+            assert guest.minigame_prepare_join(2, 2, 202, 7)
+            assert list(guest._minigame.t) == ready["token"] == [2, 2, 202, 7]
+            assert guest._minigame.prepared and not guest._minigame.visit
+            # Neither preparing nor retrying needs a second invitation packet.
+            invites = [json.loads(wire[:-1]) for wire in host._sock.sent
+                       if json.loads(wire[:-1]).get("type") == "MNSG_MINIGAME_INVITE"]
+            assert invites == [invite]
+            guest.dismiss_minigame_invitation(*identity)
+            assert guest.get_minigame_invitation_json() == ""
+    finally:
+        host.disconnect()
+        guest.disconnect()
+
+
 class MinigameInvitationTransportTests(unittest.TestCase):
     def setUp(self):
         self.clock = mock.patch("time.monotonic", return_value=100.0).start()
@@ -93,6 +154,7 @@ class MinigameInvitationTransportTests(unittest.TestCase):
                     "targetTeamId": "blue", "game": game,
                     "entered": True, "session": 101,
                     "seq": (game - 1) * 2 + 1,
+                    "visit": game,
                 })
                 count = len(self.client._sock.sent)
                 self.assertTrue(self.client.set_minigame_active(game, game))
@@ -299,7 +361,7 @@ class MinigameInvitationTransportTests(unittest.TestCase):
         self.route_bytes(wire[:11], wire[11:])
         self.assertEqual(json.loads(self.client.get_minigame_invitation_json()), {
             "cid": 2, "session": 202, "seq": 1,
-            "game": 1, "name": "Remote",
+            "game": 1, "gameVisit": 1, "name": "Remote",
         })
 
     def test_save_unload_clears_and_emits_exit(self):

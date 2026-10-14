@@ -29,11 +29,14 @@
 #include "platform/recompconfig.h"
 #include "core/anchor.h"
 #include "world/anchor_minigame_invites.h"
+#include "bosses/anchor_boss_invite_world.h"
 #include "core/anchor_runtime.h"
 #include "ui/debug_ui.h"
 #include "utils/array_utils.h"
 #include "utils/json_utils.h"
 #include "ui/anchor_rom_icons.h"
+
+extern unsigned short D_800C7AB2;
 
 /* =========================================================================
    Tunables
@@ -143,6 +146,8 @@ static int s_plist_active_row_count = 0;
  * a fresh authoritative target until native transfer gates accept or timeout. */
 static unsigned int s_requested_transfer_cid = 0;
 static unsigned int s_pending_transfer_cid = 0;
+static unsigned short s_pending_transfer_source_room;
+static unsigned int s_pending_transfer_source_visit;
 static int s_pending_transfer_frames = 0;
 static int s_transfer_retry_timer = 0;
 
@@ -529,8 +534,13 @@ failed:
 
 static void plist_clear_pending_transfer(void)
 {
+    if (s_pending_transfer_cid && s_pending_transfer_cid <= 0x7fffffffu)
+        anchor_minigame_invites_cancel_player_list_join(
+            (int)s_pending_transfer_cid);
     s_requested_transfer_cid = 0;
     s_pending_transfer_cid = 0;
+    s_pending_transfer_source_room = 0;
+    s_pending_transfer_source_visit = 0;
     s_pending_transfer_frames = 0;
     s_transfer_retry_timer = 0;
 }
@@ -589,8 +599,11 @@ static int plist_update_pending_transfer(void)
 
     if (s_requested_transfer_cid)
     {
-        s_pending_transfer_cid = s_requested_transfer_cid;
-        s_requested_transfer_cid = 0;
+        unsigned int requested = s_requested_transfer_cid;
+        plist_clear_pending_transfer();
+        s_pending_transfer_cid = requested;
+        s_pending_transfer_source_room = D_800C7AB2;
+        s_pending_transfer_source_visit = anchor_boss_invite_world_visit();
         s_pending_transfer_frames = TRANSFER_REQUEST_TIMEOUT_FRAMES;
         s_transfer_retry_timer = 0;
     }
@@ -598,6 +611,12 @@ static int plist_update_pending_transfer(void)
     cid = s_pending_transfer_cid;
     if (!cid)
         return 0;
+    if (s_pending_transfer_source_room != D_800C7AB2 ||
+        s_pending_transfer_source_visit != anchor_boss_invite_world_visit())
+    {
+        plist_clear_pending_transfer();
+        return 0;
+    }
     if (s_pending_transfer_frames <= 0)
     {
         recomp_printf("[Anchor] Player transfer timed out for client %u\n", cid);
@@ -617,10 +636,10 @@ static int plist_update_pending_transfer(void)
     valid = plist_parse_transfer_target(json, cid, &room, &x, &y, &z);
     if (json)
         recomp_free(json);
-    if (!valid)
+    if (!valid || cid > 0x7fffffffu)
         return 0;
 
-    if (!anchor_minigame_invites_transfer_to_room(room, x, y, z))
+    if (!anchor_minigame_invites_transfer_to_client(room, x, y, z, (int)cid))
         return 0;
 
     if (anchor_minigame_invites_is_room(room))

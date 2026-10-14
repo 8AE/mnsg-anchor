@@ -1,6 +1,7 @@
 #include "bosses/anchor_boss_invite_world.h"
 #include "core/anchor_dialog.h"
 #include "progression/item_sync.h"
+#include "world/anchor_minigame_invites.h"
 
 #ifndef ANCHOR_BOSS_INVITE_WORLD_HOST_TEST
 #include "platform/modding.h"
@@ -298,6 +299,9 @@ static int request_live_world_transfer(unsigned short room, const short *start,
     if (!start || anchor_dialog_busy() ||
         !anchor_boss_invite_world_can_prompt())
         return 0;
+    if (!anchor_minigame_invites_prepare_transfer(room))
+        return 0;
+    anchor_minigame_invites_note_transfer(room);
     /* The peer supplies only the exact destination position. Camera and player
      * rotation remain native room-start data rather than network-controlled
      * values. room_default_start() has already bounded the table index. */

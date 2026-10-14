@@ -90,6 +90,7 @@ import anchor_impact_sound
 import anchor_world
 import anchor_world_dynamic
 import anchor_world_quest
+import anchor_minigame
 
 logger = logging.getLogger("anchor_mnsg")
 
@@ -210,6 +211,7 @@ _impact_players = anchor_impact.ImpactPlayerTransport()
 _impact_visuals = anchor_impact_visual.ImpactVisualTransport()
 _impact_sounds = anchor_impact_sound.ImpactSoundTransport()
 _world = anchor_world.WorldTransport()
+_minigame = anchor_minigame.MinigameTransport()
 _world_actors = anchor_world_dynamic.DynamicTransport(_world)
 _world_quest = anchor_world_quest.QuestTransport(_world)
 _impact_debug_str: str = ""
@@ -261,6 +263,10 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     anchor_impact.PLAYER_PACKET_TYPE: anchor_impact.PLAYER_PACKET_BYTES,
     anchor_impact_visual.PACKET_TYPE: anchor_impact_visual.PACKET_BYTES,
     anchor_impact_sound.PACKET_TYPE: anchor_impact_sound.PACKET_BYTES,
+    anchor_minigame.PACKET_TYPE: anchor_minigame.PACKET_BYTES,
+    anchor_minigame.ACTION_TYPE: anchor_minigame.PACKET_BYTES,
+    anchor_minigame.INPUT_TYPE: anchor_minigame.INPUT_BYTES,
+    anchor_minigame.RESULT_TYPE: anchor_minigame.INPUT_BYTES,
 }
 PLAYER_HIT_MAX_AGE_MS: int = 500
 PLAYER_HIT_DAMAGE_VALUES = (1, 2, 3, 4, 8)
@@ -743,6 +749,12 @@ def _merge_client_state(
             payload[anchor_world.METADATA_KEY], state.get("interactionSession"))
         if value:
             state[anchor_world.METADATA_KEY] = value
+    if anchor_minigame.METADATA_KEY in payload:
+        value = anchor_minigame.merge_metadata(state.get(anchor_minigame.METADATA_KEY),
+            payload[anchor_minigame.METADATA_KEY], state.get("interactionSession"))
+        if value:
+            state[anchor_minigame.METADATA_KEY] = value
+            state["_minigameReceived"] = time.monotonic()
     if anchor_congo.METADATA_KEY in payload:
         value = anchor_congo.merge_metadata(
             state.get(anchor_congo.METADATA_KEY),
@@ -917,6 +929,11 @@ def _replace_all_client_states(states: list) -> None:
                 client_state.get(anchor_world.METADATA_KEY), merged.get("interactionSession"))
             if world:
                 merged[anchor_world.METADATA_KEY] = world
+            minigame = anchor_minigame.merge_metadata(previous.get(anchor_minigame.METADATA_KEY),
+                client_state.get(anchor_minigame.METADATA_KEY), merged.get("interactionSession"))
+            if minigame:
+                merged[anchor_minigame.METADATA_KEY] = minigame
+                merged["_minigameReceived"] = time.monotonic()
             new_players[cid] = merged
         for cid, previous in previous_players.items():
             replacement = new_players.get(cid, {})
@@ -1269,6 +1286,12 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_minigame_invite(packet)
                     continue
 
+                if ptype in (anchor_minigame.PACKET_TYPE, anchor_minigame.ACTION_TYPE, anchor_minigame.INPUT_TYPE,
+                             anchor_minigame.RESULT_TYPE):
+                    with _player_states_lock:
+                        _minigame.receive(_boss_context(), packet, time.monotonic())
+                    continue
+
                 if ptype == anchor_world_dynamic.PACKET_TYPE:
                     with _player_states_lock:
                         _world_actors.receive(_boss_context(), packet, time.monotonic())
@@ -1597,6 +1620,7 @@ def connect(
                 _boss_context()
             ),
             anchor_impact.METADATA_KEY: _impact.advertisement(_boss_context()),
+            anchor_minigame.METADATA_KEY: _minigame.advertisement(_boss_context()),
         },
         "roomState": {},
     }
@@ -3008,6 +3032,7 @@ def update_client_state(state_json: str) -> bool:
         state[anchor_tsurami.METADATA_KEY] = _tsurami.advertisement(context)
         state[anchor_impact.METADATA_KEY] = _impact.advertisement(context)
         state[anchor_world.METADATA_KEY] = _world.advertisement(context)
+        state[anchor_minigame.METADATA_KEY] = _minigame.advertisement(context)
 
     sent = _send_raw({
         "type": "UPDATE_CLIENT_STATE",
@@ -3131,6 +3156,7 @@ def _boss_context() -> dict:
     return {"cid": _client_id, "session": _interaction_session, "team": _team_id,
             "connected": _connected, "loaded": _local_save_loaded,
             "room": _player_states.get(_client_id, {}).get("roomId", _local_room_id),
+            "character": _local_character,
             "players": _player_states}
 
 
@@ -3619,6 +3645,7 @@ def _reset_minigame_invitations() -> None:
     _minigame_retired_sessions.clear()
     _minigame_confirmed_sessions.clear()
     _minigame_departures.clear()
+    _minigame.reset()
 
 
 def _prune_minigame_departure(cid: int, state: "dict | None") -> None:
@@ -3665,7 +3692,8 @@ def set_minigame_active(game: int, visit: int = 0) -> bool:
     packet = {"type": "MNSG_MINIGAME_INVITE", "clientId": _client_id,
               "targetTeamId": _team_id, "game": game or _minigame_local_state[1],
               "entered": game != 0, "session": _interaction_session,
-              "seq": sequence}
+              "seq": sequence, "visit": (_minigame.t[3] if game and _minigame.t and
+                  _minigame.t[0] == game else visit if game else _minigame_local_state[2])}
     if not _send_raw(packet):
         return False
     _minigame_sequence = sequence
@@ -3686,6 +3714,8 @@ def _receive_minigame_invite(packet: dict) -> bool:
     for key in ("clientId", "session", "seq"):
         if type(packet.get(key)) is not int or not 0 < packet[key] <= _POSITION_SEQUENCE_MASK:
             return False
+    if "visit" in packet and not anchor_minigame.positive(packet["visit"]):
+        return False
     cid, session, sequence = (packet[key] for key in ("clientId", "session", "seq"))
     if cid == _client_id:
         return False
@@ -3719,6 +3749,7 @@ def _receive_minigame_invite(packet: dict) -> bool:
             _minigame_departures.pop(cid, None)
         _minigame_events[cid] = {
             "cid": cid, "session": session, "seq": sequence,
+            "visit": packet.get("visit", 0),
             "game": packet["game"], "team": _team_id, "entered": True,
             "consumed": False, "confirmed": False,
             "received": int(time.monotonic() * 1000),
@@ -3762,7 +3793,7 @@ def get_minigame_invitation_json() -> str:
                 name = _player_states[event["cid"]].get("name") or f'Player{event["cid"]}'
                 return json.dumps({"cid": event["cid"], "session": event["session"],
                                    "seq": event["seq"], "game": event["game"],
-                                   "name": str(name)[:64]},
+                                   "gameVisit": event["visit"], "name": str(name)[:64]},
                                   separators=(",", ":"), ensure_ascii=False)
             if event["consumed"]:
                 _minigame_events.pop(event["cid"], None)
@@ -3787,6 +3818,42 @@ def dismiss_minigame_invitation(cid: int, session: int, sequence: int) -> None:
             _minigame_events.pop(cid, None)
 
 
+def minigame_prepare_join(game: int, cid: int, session: int = 0, visit: int = 0) -> bool:
+    """Stage an explicit host token before warp; no snapshot is applied here."""
+    with _player_states_lock:
+        return _minigame.prepare_join(_boss_context(), game, cid, session, visit, time.monotonic())
+
+
+def update_minigame(game: int, visit: int, state_json: str = "") -> str:
+    """One coalesced native exchange; socket I/O never holds the roster lock."""
+    supplied = None
+    if isinstance(state_json, str) and len(state_json.encode("utf-8")) <= anchor_minigame.MAX_GRAPH_BYTES:
+        try:
+            supplied = json.loads(state_json) if state_json else None
+        except (ValueError, RecursionError):
+            pass
+    with _player_states_lock:
+        status, packets = _minigame.update(_boss_context(), game, visit, supplied, time.monotonic())
+        dirty = _minigame.advertisement_dirty
+    if dirty and _connected:
+        # Publish complete discovery/authority metadata before a first graph
+        # packet. Failed metadata publication leaves dirty set for next frame.
+        sent = update_client_state("{}")
+        with _player_states_lock:
+            if sent:
+                _minigame.advertisement_dirty = False
+        if not sent:
+            for packet in packets:
+                with _player_states_lock:
+                    _minigame.packet_send_result(packet, False)
+            return json.dumps(status, separators=(",", ":"))
+    for packet in packets:
+        sent = _send_raw(packet)
+        with _player_states_lock:
+            _minigame.packet_send_result(packet, sent)
+    return json.dumps(status, separators=(",", ":"))
+
+
 def set_save_loaded(is_loaded: bool) -> bool:
     """
     Convenience wrapper: set isSaveLoaded flag, making yourself eligible
@@ -3800,6 +3867,7 @@ def set_save_loaded(is_loaded: bool) -> bool:
         with _player_states_lock:
             _arena_events.clear()
             _minigame_events.clear()
+            _minigame.reset()
             if _congo.local[0] or _congo.e:
                 _congo.update(
                     _boss_context(), False, 0, False, None, time.monotonic()
@@ -4312,6 +4380,7 @@ def set_local_room(room_id: int, char_name: str = "") -> bool:
     area_name = _ROOM_NAMES.get(room_id, "")
     # Update our own local entry immediately – the server won't echo us back.
     with _player_states_lock:
+        _minigame.room_changed(_boss_context(), room_id)
         # ALL_CLIENT_STATE temporarily resets the broadcast baseline to -1;
         # a same-room metadata refresh must preserve active remote visuals.
         if (previous_room >= 0 and previous_room != room_id) or \

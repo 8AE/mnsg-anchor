@@ -420,6 +420,35 @@ void anchor_dismiss_minigame_invitation(int cid, int session, int sequence)
     REPY_FN_CLEANUP;
 }
 
+int anchor_minigame_prepare_join(int game, int cid, int session, int visit)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("game", game);
+    REPY_FN_SET_S32("cid", cid);
+    REPY_FN_SET_S32("session", session);
+    REPY_FN_SET_S32("visit", visit);
+    REPY_FN_EXEC_CACHE(anchor_minigame_prepare_join_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.minigame_prepare_join(game, cid, session, visit)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+char *anchor_update_minigame(int game, int visit, const char *state_json)
+{
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("game", game);
+    REPY_FN_SET_S32("visit", visit);
+    REPY_FN_SET_STR("state_json", state_json ? state_json : "null");
+    REPY_FN_EXEC_CACHE(anchor_update_minigame_code,
+                      "import anchor_mnsg\n"
+                      "result = anchor_mnsg.update_minigame(game, visit, state_json)\n");
+    char *result = REPY_FN_GET_STR("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
 char *anchor_congo_update(int ready, unsigned int visit, int paused,
                           const char *state_json)
 {

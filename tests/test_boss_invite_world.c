@@ -19,6 +19,9 @@ void *D_801FC604_5B8514;
 void *D_801FC60C_5B851C;
 static int s_saved, s_health, s_dialog_busy;
 static int s_destination_calls, s_step_calls;
+static int s_transfer_notes;
+static unsigned short s_noted_room;
+static int s_prepare_ready = 1;
 static short s_destination[7];
 static int s_last_field91;
 static int s_impact_calls, s_impact_index;
@@ -48,6 +51,16 @@ void anchor_boss_invite_world_finish_load(void);
 int item_sync_save_is_loaded(void) { return s_saved; }
 unsigned int item_sync_local_player_health(void) { return (unsigned int)s_health; }
 int anchor_dialog_busy(void) { return s_dialog_busy; }
+int anchor_minigame_invites_prepare_transfer(unsigned short room)
+{
+    (void)room;
+    return s_prepare_ready;
+}
+void anchor_minigame_invites_note_transfer(unsigned short room)
+{
+    ++s_transfer_notes;
+    s_noted_room = room;
+}
 
 void func_8000607C_6C7C(unsigned short room, short x, short y, short z,
                         short camera, short player, short field90, int field91)
@@ -55,6 +68,7 @@ void func_8000607C_6C7C(unsigned short room, short x, short y, short z,
     /* Destination preparation must happen before changing the main step. */
     assert(s_system.bytes[0x3add4] == 13);
     assert(s_step_calls == 0);
+    assert(s_transfer_notes == 1 && s_noted_room == room);
     s_destination[0] = (short)room;
     s_destination[1] = x;
     s_destination[2] = y;
@@ -129,6 +143,8 @@ static void ready(unsigned short room)
     s_health = 5;
     s_dialog_busy = 0;
     s_destination_calls = s_step_calls = 0;
+    s_transfer_notes = 0;
+    s_prepare_ready = 1;
     s_impact_calls = 0;
     s_impact_index = -1;
     s_impact_field90 = -1;
@@ -146,13 +162,15 @@ static void check_gate(unsigned int offset, unsigned char value)
     for (int arena = 1; arena <= 8; ++arena)
         assert(!anchor_boss_invite_world_warp(arena));
     assert(!anchor_boss_invite_world_transfer_to(0x130, 123, -456, 789));
-    assert(s_destination_calls == 0 && s_step_calls == 0 && s_impact_calls == 0);
+    assert(s_destination_calls == 0 && s_step_calls == 0 &&
+           s_impact_calls == 0 && s_transfer_notes == 0);
 }
 
 static void check_transfer_blocked(void)
 {
     assert(!anchor_boss_invite_world_transfer_to(0x130, 123, -456, 789));
-    assert(s_destination_calls == 0 && s_step_calls == 0);
+    assert(s_destination_calls == 0 && s_step_calls == 0 &&
+           s_transfer_notes == 0);
 }
 
 int main(void)
@@ -232,6 +250,22 @@ int main(void)
     ready(0x130); D_8015C5C8_15D1C8 = 0;
     assert(!anchor_boss_invite_world_can_prompt());
     check_transfer_blocked();
+
+    /* All three challenge transfers note a source only after the world gate
+     * admits the request and before native destination preparation. */
+    for (unsigned short room = 0x01e0; room <= 0x01e2; ++room) {
+        ready(0x0130);
+        s_dialog_busy = 1;
+        assert(!anchor_boss_invite_world_transfer_to(room, 0, 0, 0));
+        assert(s_transfer_notes == 0);
+        s_dialog_busy = 0;
+        s_prepare_ready = 0;
+        assert(!anchor_boss_invite_world_transfer_to(room, 0, 0, 0));
+        assert(s_transfer_notes == 0 && s_destination_calls == 0);
+        s_prepare_ready = 1;
+        assert(anchor_boss_invite_world_transfer_to(room, 0, 0, 0));
+        assert(s_transfer_notes == 1 && s_noted_room == room);
+    }
 
     /* Peer transfer preserves exact signed coordinates and uses only the
      * destination room's native rotations. The native loader still owns the
