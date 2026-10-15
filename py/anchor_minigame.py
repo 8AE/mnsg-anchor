@@ -2,8 +2,8 @@
 
 Native adapters own the meaning of controller/actor words and resource safety.
 This module owns identity, ordering, authority, atomic assembly and transport.
-SYNC is latest state to the team (5 Hz running/changed, 1 Hz idle). Ebi v2
-uses 1 Hz complete checkpoints and base-dependent ACTION phase/lifetime cues
+SYNC is latest state to the team (5 Hz running/changed, 1 Hz idle). Goemon/Ebi v2
+use 1 Hz complete checkpoints and base-dependent ACTION phase/lifetime cues
 at a 50 ms floor. INPUT is direct to the authority; RESULT is an idempotent
 transient team edge. None enters Anchor's durable queue or native gameplay FIFO.
 """
@@ -65,6 +65,14 @@ def ebi_v2(game, c):
     return game == 2 and len(c) == 13 and c[0] == 2
 
 
+def goemon_v2(game, c):
+    return game == 1 and len(c) == 5 and c[0] == 2
+
+
+def action_v2(game, c):
+    return goemon_v2(game, c) or ebi_v2(game, c)
+
+
 def _direction(bits):
     # Native velocity words are IEEE float bits, including negative zero.
     return 0 if not bits & 0x7fffffff else -1 if bits & 0x80000000 else 1
@@ -91,6 +99,32 @@ def ebi_cue(state, terminal, acks):
     return (tuple(c[i] for i in (0, 1, 4, 6, 7, 8, 9, 10, 12)),
             tuple(sorted(actor_cue(row) for row in state["a"])),
             state["running"], terminal, tuple(sorted(acks.items())))
+
+
+def action_actor_cue(game, row):
+    if game == 2:
+        return actor_cue(row)
+    if row[0] == 1 and len(row) == 31:
+        # Schedule and restart edges seed native target simulation. Height,
+        # clocks, child transforms and scales advance locally between fulls.
+        return tuple(row[i] for i in (0, 1, 2, 3, 4, 5, 7, 8, 10, 18, 19, 29, 30))
+    if row[0] == 2 and len(row) == 20:
+        # A launch stays stable across subsequent flight pose checkpoints;
+        # held pose sequences are bounded native anchors for the carrier.
+        return tuple(row[:8]) + (row[15], row[19], row[14] if row[7] else 0)
+    return tuple(row)
+
+
+def action_cue(game, state, terminal, acks):
+    if game == 2:
+        return ebi_cue(state, terminal, acks)
+    return (tuple(state["c"][i] for i in (0, 1, 4)),
+            tuple(sorted(action_actor_cue(game, row) for row in state["a"])),
+            state["running"], terminal, tuple(sorted(acks.items())))
+
+
+def goemon_core_keys(rows):
+    return {tuple(row[:3]) for row in rows if row[0] == 1}
 
 
 def compose_rows(previous, changed, removed):
@@ -439,10 +473,10 @@ class MinigameTransport:
         if previous and (g < previous["g"] or g == previous["g"] and packet["k"] <= previous["k"]):
             return False
         action = kind == ACTION_TYPE
-        if action and (not ebi_v2(t[0], packet["c"]) or not positive(packet.get("b")) or
+        if action and (not action_v2(t[0], packet["c"]) or not positive(packet.get("b")) or
                 packet["b"] >= packet["k"] or not previous or previous["g"] != g or
                 previous["o"] != list(o) or previous["k"] != packet["b"] or
-                not ebi_v2(t[0], previous["c"]) or
+                not action_v2(t[0], previous["c"]) or
                 not isinstance(packet.get("z"), list) or len(packet["z"]) > MAX_ACTORS or
                 any(not words(row, 3, 3) or any(x < 0 for x in row) for row in packet["z"]) or
                 len({tuple(row) for row in packet["z"]}) != len(packet["z"])):
@@ -486,7 +520,8 @@ class MinigameTransport:
             if not removed <= old_keys or removed & {tuple(row[:3]) for row in rows}:
                 return False
             rows = compose_rows(previous["a"], rows, header["z"])
-            if len(rows) > MAX_ACTORS:
+            if (len(rows) > MAX_ACTORS or goemon_v2(t[0], header["c"]) and
+                    goemon_core_keys(rows) != goemon_core_keys(previous["a"])):
                 return False
         history = dict(previous.get("ackHistory", {})) if previous else {}
         for ack in header["h"]:
@@ -580,7 +615,8 @@ class MinigameTransport:
             if action:
                 prior = {tuple(row[:3]): row for row in self.graph["a"]}
                 selected = [row for row in state["a"]
-                            if tuple(row[:3]) not in prior or actor_cue(row) != actor_cue(prior[tuple(row[:3])])]
+                            if tuple(row[:3]) not in prior or
+                            action_actor_cue(self.game, row) != action_actor_cue(self.game, prior[tuple(row[:3])])]
                 current = {tuple(row[:3]) for row in state["a"]}
                 base.update(b=self.graph["k"], z=[list(key) for key in prior if key not in current])
             parts, rows = [], []
@@ -723,11 +759,13 @@ class MinigameTransport:
         if is_owner and self.local_ready and state:
             if self.result_pending:
                 self.terminal = self.result_pending
-            semantic = ebi_v2(game, state["c"])
-            fingerprint = (ebi_cue(state, self.terminal, self.acks) if semantic else
+            semantic = action_v2(game, state["c"])
+            fingerprint = (action_cue(game, state, self.terminal, self.acks) if semantic else
                            (state["c"], state["a"], state["running"], self.terminal, sorted(self.acks.items())))
-            full = (not semantic or not self.graph or not ebi_v2(game, self.graph["c"]) or self.graph["g"] != self.g or
-                    self.graph["o"] != list(self.o) or now - self.last_full_wire + 1e-9 >= KEEPALIVE)
+            full = (not semantic or not self.graph or not action_v2(game, self.graph["c"]) or self.graph["g"] != self.g or
+                    self.graph["o"] != list(self.o) or now - self.last_full_wire + 1e-9 >= KEEPALIVE or
+                    goemon_v2(game, state["c"]) and
+                    goemon_core_keys(state["a"]) != goemon_core_keys(self.graph["a"]))
             action = semantic and not full
             interval = (FLOOR if action else KEEPALIVE if semantic else
                         FLOOR if state["edge"] else INTERVAL if state["running"] or fingerprint != self.published else KEEPALIVE)

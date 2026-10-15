@@ -36,6 +36,26 @@ def ebi_state(**changes):
     return value
 
 
+def goemon_state(visuals=1, core=6, **changes):
+    """Goemon v2 wire widths; production C captures are tested by its harness."""
+    rows = []
+    for actor_id in range(core):
+        row = [1, actor_id, 1] + [0] * 28
+        row[3:11] = [1, 1, 0, 12, actor_id * 30, 100, 0, 2048]
+        row[11:18] = [actor_id * 102400, 0, -102400, 0, 1024, 1024, 1024]
+        row[18:20] = [1, 1]
+        row[24:27] = [1024] * 3
+        row[29:31] = [102400, 1]
+        rows.append(row)
+    for slot in range(visuals):
+        rows.append([2, slot + 1, 1, slot // 3 + 1, (slot // 3 + 1) * 101,
+                     slot % 3, 1, 0, 102400, 204800, -102400, 0, 0, 0,
+                     1, 17, 4096, 2048, -4096, 1])
+    value = {"ready": 1, "running": 1, "c": [2, 1, 0, 2900, 0], "a": rows}
+    value.update(changes)
+    return value
+
+
 class Peer:
     def __init__(self, cid, roster, game=1, room=10, team="blue"):
         self.cid, self.session, self.team = cid, cid * 101, team
@@ -841,6 +861,273 @@ class EbisumaruActionTests(unittest.TestCase):
             self.assertTrue(guest.engine.receive(guest.context(), packets[-1], now))
             self.assertEqual(guest.update(many, now=now, visit=17)[0]["fullTick"], packets[0]["k"])
             self.assertEqual(guest.engine.graph["a"], many["a"])
+
+
+class GoemonActionTests(unittest.TestCase):
+    def pair(self, supplied=None):
+        current = supplied or goemon_state()
+        host, guest = MinigameSyncTests().pair(1, current)
+        guest.update(current, now=100.01, visit=17)
+        return host, guest
+
+    def deliver(self, host, guest, supplied, now, kind=mg.ACTION_TYPE):
+        _, packets = host.update(supplied, now=now)
+        self.assertTrue(packets)
+        for packet in packets:
+            self.assertEqual(packet["type"], kind)
+            self.assertTrue(guest.engine.receive(guest.context(), packet, now))
+        self.assertEqual(host.engine.graph["a"], guest.engine.graph["a"])
+        return packets
+
+    def test_exact_game_version_and_controller_width_select_action_transport(self):
+        for game, controller in ((1, [1, 1, 0, 2900, 0]), (1, [2, 1, 0, 2900]),
+                                 (1, [2, 1, 0, 2900, 0, 0]), (3, [2, 1, 0, 2900, 0])):
+            with self.subTest(game=game, controller=controller):
+                before = goemon_state(c=controller)
+                host, _ = MinigameSyncTests().pair(game, before)
+                changed = copy.deepcopy(before)
+                changed["a"][0][30] += 1
+                self.assertEqual(host.update(changed, now=100.05)[1], [])
+                _, packets = host.update(changed, now=100.2)
+                self.assertEqual(packets[0]["type"], mg.PACKET_TYPE)
+                self.assertNotIn("b", packets[0])
+        self.assertTrue(mg.action_v2(1, goemon_state()["c"]))
+        self.assertTrue(mg.action_v2(2, ebi_state()["c"]))
+        self.assertFalse(mg.action_v2(1, ebi_state()["c"]))
+
+    def test_motion_clocks_child_pose_and_flight_sequence_wait_for_full(self):
+        host, guest = self.pair()
+        moving = goemon_state()
+        moving["c"][2:4] = [20, 2870]
+        for row in moving["a"][:6]:
+            for index in (6, 9, *range(11, 18), *range(20, 29)):
+                row[index] += 23
+        for index in (*range(8, 15), 16, 17, 18):
+            moving["a"][6][index] += 7
+        self.assertEqual(host.update(moving, now=100.2)[1], [])
+        # A controller edge must not smuggle unrelated continuously moving rows.
+        moving["c"][1] = 5
+        packet = self.deliver(host, guest, moving, 100.25)[0]
+        self.assertEqual((packet["a"], packet["z"]), ([], []))
+        self.assertEqual(guest.engine.graph["a"], goemon_state()["a"])
+        self.assertEqual(guest.engine.graph["fullTick"], 1)
+        self.deliver(host, guest, moving, 101, mg.PACKET_TYPE)
+        self.assertEqual(guest.engine.graph["a"], moving["a"])
+        self.assertEqual(guest.engine.graph["fullTick"], 3)
+
+    def test_target_phase_schedule_completion_child_and_restart_edges(self):
+        for index in (3, 4, 5, 7, 8, 10, 18, 19, 29, 30):
+            with self.subTest(index=index):
+                host, guest = self.pair()
+                changed = goemon_state()
+                changed["a"][2][index] += 1
+                packet = self.deliver(host, guest, changed, 100.05)[0]
+                self.assertEqual(packet["a"], [changed["a"][2]])
+        current = goemon_state()
+        current["a"][0][4] = 4
+        host, guest = self.pair(current)
+        for count in range(1, 4):
+            current["a"][0][6] = 0  # Repeated native phase-4 HIT reset.
+            current["a"][0][30] += 1
+            packet = self.deliver(host, guest, current, 100 + count * .05)[0]
+            self.assertEqual(packet["a"], [current["a"][0]])
+            self.assertEqual(packet["a"][0][4], 4)
+
+    def test_visual_launch_stop_pop_lifetime_and_held_anchor_edges(self):
+        for index in (1, 2, 3, 4, 5, 6, 7, 15, 19):
+            with self.subTest(index=index):
+                host, guest = self.pair()
+                changed = goemon_state()
+                changed["a"][6][index] += 1
+                packet = self.deliver(host, guest, changed, 100.05)[0]
+                self.assertEqual(packet["a"], [changed["a"][6]])
+                expected = [goemon_state()["a"][6][:3]] if index in (1, 2) else []
+                self.assertEqual(packet["z"], expected)
+        current = goemon_state()
+        current["a"][6][7] = 1
+        host, guest = self.pair(current)
+        current["a"][6][14] += 1
+        self.assertEqual(self.deliver(host, guest, current, 100.2)[0]["a"], [current["a"][6]])
+        # First free-flight input fixes the launch serial. Checkpoint poseSeq
+        # and velocity updates during that flight cannot restart it.
+        current["a"][6][7] = 0
+        current["a"][6][19] += 1
+        self.deliver(host, guest, current, 100.25)
+        for frame in range(1, 15):
+            current["a"][6][14] += 1
+            current["a"][6][8] += 4096
+            current["a"][6][17] -= 1
+            self.assertEqual(host.update(current, now=100.25 + frame / 30)[1], [])
+        current["a"][6][6] = 0
+        self.assertEqual(self.deliver(host, guest, current, 100.8)[0]["a"], [current["a"][6]])
+        current["a"].pop()
+        packet = self.deliver(host, guest, current, 100.85)[0]
+        self.assertEqual((packet["a"], packet["z"]), ([], [[2, 1, 1]]))
+
+    def test_core_topology_changes_publish_full_under_floor_and_keep_native_order(self):
+        intro = goemon_state(core=0, c=[2, 3, 12, -1, 0], running=0)
+        host, guest = self.pair(intro)
+        gameplay = goemon_state()
+        self.assertEqual(host.update(gameplay, now=100.049)[1], [])
+        packets = self.deliver(host, guest, gameplay, 100.05, mg.PACKET_TYPE)
+        self.assertNotIn("b", packets[0])
+        self.assertEqual(guest.engine.graph["a"], gameplay["a"])
+        self.assertEqual([row[:3] for row in guest.engine.graph["a"][:6]],
+                         [[1, i, 1] for i in range(6)])
+        gameplay["a"][2][30] += 1
+        self.deliver(host, guest, gameplay, 100.1)
+        self.assertEqual(guest.engine.graph["a"], gameplay["a"])
+        # Generation replacement is another core identity-set change.
+        gameplay["a"][4][2] += 1
+        self.deliver(host, guest, gameplay, 100.15, mg.PACKET_TYPE)
+        self.deliver(host, guest, intro, 100.2, mg.PACKET_TYPE)
+        self.assertEqual(guest.engine.graph["a"], intro["a"])
+
+    def test_sparse_composes_only_published_rows_and_visual_tombstones(self):
+        host, guest = self.pair(goemon_state(visuals=2))
+        current = goemon_state(visuals=2)
+        current["a"][0][11] += 100
+        current["a"][1][30] += 1
+        current["a"][6][14] += 1
+        current["a"].pop()
+        packet = self.deliver(host, guest, current, 100.05)[0]
+        self.assertEqual(packet["a"], [current["a"][1]])
+        self.assertEqual(packet["z"], [[2, 2, 1]])
+        expected = goemon_state()["a"]
+        expected[1] = current["a"][1]
+        self.assertEqual(guest.engine.graph["a"], expected)
+        current["a"].append(goemon_state(visuals=2)["a"][-1])
+        current["a"][-1][2] = 2
+        self.deliver(host, guest, current, 100.1)
+        self.assertEqual(guest.engine.graph["a"][:6], expected[:6])
+        self.deliver(host, guest, current, 101, mg.PACKET_TYPE)
+        self.assertEqual(guest.engine.graph["a"], current["a"])
+
+    def test_missing_base_recovery_duplicate_reorder_version_game_and_generation(self):
+        host, guest = self.pair()
+        changed = goemon_state()
+        changed["a"][0][30] += 1
+        _, lost = host.update(changed, now=100.05)
+        changed["a"][1][30] += 1
+        _, newer = host.update(changed, now=100.1)
+        previous = copy.deepcopy(guest.engine.graph)
+        self.assertFalse(guest.engine.receive(guest.context(), newer[0], 100.1))
+        for updates in ({"c": [1, 1, 0, 2900, 0]}, {"c": [2, 1, 0, 2900]},
+                        {"c": ebi_state()["c"]}, {"t": [3, 2, 202, 7]}, {"g": 2},
+                        {"targetTeamId": "red"}, {"targetClientId": 1}, {"addToQueue": False},
+                        {"clientId": 77}, {"b": True}):
+            self.assertFalse(guest.engine.receive(guest.context(), {**lost[0], **updates}, 100.11), updates)
+            self.assertEqual(guest.engine.graph, previous)
+        # Core additions/removals are forbidden in sparse packets too.
+        forged = {**lost[0], "z": [[1, 5, 1]]}
+        self.assertFalse(guest.engine.receive(guest.context(), forged, 100.11))
+        self.assertEqual(guest.engine.graph, previous)
+        self.assertTrue(guest.engine.receive(guest.context(), lost[0], 100.12))
+        self.assertTrue(guest.engine.receive(guest.context(), newer[0], 100.13))
+        self.assertFalse(guest.engine.receive(guest.context(), lost[0], 100.14))
+        self.assertFalse(guest.engine.receive(guest.context(), newer[0], 100.14))
+        guest.engine.cache.clear()
+        changed["a"][2][30] += 1
+        _, missing = host.update(changed, now=100.2)
+        self.assertFalse(guest.engine.receive(guest.context(), missing[0], 100.2))
+        self.deliver(host, guest, changed, 101, mg.PACKET_TYPE)
+        self.assertEqual(guest.engine.graph["a"], changed["a"])
+
+    def largest(self):
+        current = goemon_state(visuals=18)
+        current["c"][2:4] = [32767, 3000]
+        for row in current["a"]:
+            row[2] = mg.MAX_INT
+            if row[0] == 1:
+                row[6:9] = [32767] * 3
+                for index in (9, 10, 11, 12, 13, 15, 16, 17, 20, 21, 22, 24, 25, 26, 29):
+                    row[index] = -33554432
+                row[30] = mg.MAX_INT
+            else:
+                row[3:5] = [mg.MAX_INT - row[1], mg.MAX_INT]
+                for index in (8, 9, 10, 16, 17, 18):
+                    row[index] = -33554432
+                row[14:16] = [mg.MAX_INT, mg.MAX_INT]
+                row[11:14] = [1023] * 3
+                row[19] = mg.MAX_INT
+        return current
+
+    def test_native_width_worst_case_bytes_partial_failure_and_atomic_retry(self):
+        before = self.largest()
+        self.assertEqual([len(row) for row in before["a"]], [31] * 6 + [20] * 18)
+        self.assertIsNotNone(mg.native_state(before))
+        host, guest = self.pair(before)
+        self.assertGreater(len(host.sent), 1)
+        changed = copy.deepcopy(before)
+        for row in changed["a"]:
+            row[30 if row[0] == 1 else 19] -= 1
+        previous = copy.deepcopy(host.engine.graph)
+        _, packets = host.engine.update(host.context(), 1, 7, changed, 100.05)
+        self.assertGreater(len(packets), 1)
+        for index, packet in enumerate(packets):
+            host.engine.packet_send_result(packet, index != 1)
+        self.assertEqual((host.engine.tick, host.engine.last_full_wire), (1, 100))
+        self.assertEqual(host.engine.graph, previous)
+        self.assertEqual(host.update(changed, now=100.08)[1], [])
+        _, retry = host.update(changed, now=100.1)
+        self.assertEqual(packets, retry)
+        prior_guest = copy.deepcopy(guest.engine.graph)
+        for packet in reversed(retry[1:]):
+            self.assertTrue(guest.engine.receive(guest.context(), packet, 100.1))
+            self.assertEqual(guest.engine.graph, prior_guest)
+        self.assertTrue(guest.engine.receive(guest.context(), retry[-1], 100.11))
+        self.assertTrue(guest.engine.receive(guest.context(), retry[0], 100.12))
+        self.assertEqual(host.engine.graph["a"], guest.engine.graph["a"])
+        prior_host = copy.deepcopy(host.engine.graph)
+        _, failed_full = host.update(changed, now=101, success=False)
+        self.assertEqual(host.engine.graph, prior_host)
+        self.assertEqual(host.engine.last_full_wire, 100)
+        retry_full = self.deliver(host, guest, changed, 101.05, mg.PACKET_TYPE)
+        self.assertEqual(failed_full, retry_full)
+        for packets in (host.sent[:len(failed_full)], retry, retry_full):
+            self.assertLessEqual(len(packets), mg.MAX_PARTS)
+            self.assertLessEqual(sum(mg.wire_bytes(packet) for packet in packets), mg.MAX_GRAPH_BYTES)
+            self.assertTrue(all(mg.wire_bytes(packet) <= mg.PACKET_BYTES for packet in packets))
+
+    def test_motion_only_one_hz_edges_at_floor_and_running_receipt_result_cues(self):
+        host, guest = self.pair()
+        current = goemon_state()
+        fulls = []
+        for frame in range(1, 151):
+            current["c"][3] -= 1
+            current["a"][0][6] += 1
+            current["a"][0][11] += 1024
+            current["a"][6][14] += 1
+            _, packets = host.update(current, now=100 + frame / 30)
+            fulls.extend(packets)
+        self.assertEqual(len(fulls), 5)
+        self.assertTrue(all(p["type"] == mg.PACKET_TYPE for p in fulls))
+        sent_at = []
+        for millisecond in range(1, 1001):
+            current["a"][0][30] += 1
+            now = 105 + millisecond / 1000
+            _, packets = host.update(current, now=now)
+            if packets:
+                sent_at.append(now)
+        self.assertEqual(len(sent_at), 20)
+        self.assertTrue(all(b - a + 1e-9 >= mg.FLOOR for a, b in zip(sent_at, sent_at[1:])))
+        host, guest = self.pair()
+        current = goemon_state(running=0)
+        self.assertEqual(self.deliver(host, guest, current, 100.05)[0]["r"], 0)
+        host.update({**current, "inputs": [[1, 1, 0, 1]]}, now=100.06)
+        current["inputAck"] = [[2, 202, 7, 1]]
+        self.assertEqual(self.deliver(host, guest, current, 100.1)[0]["h"], [[2, 202, 7, 1]])
+        current["c"][4] = 1
+        self.assertEqual(self.deliver(host, guest, current, 100.15)[0]["c"][4], 1)
+        current["result"] = 1
+        _, packets = host.update(current, now=100.2)
+        action = next(packet for packet in packets if packet["type"] == mg.ACTION_TYPE)
+        self.assertEqual(action["x"], 1)
+        for packet in host.sent:
+            self.assertEqual((packet["clientId"], packet.get("targetTeamId")), (2, "blue"))
+            self.assertTrue(packet["quiet"])
+            self.assertNotIn("targetClientId", packet)
+            self.assertNotIn("addToQueue", packet)
 
 
 class MinigameBridgeTests(unittest.TestCase):
