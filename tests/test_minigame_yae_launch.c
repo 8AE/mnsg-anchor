@@ -38,6 +38,7 @@ unsigned char *D_8015C5C8_15D1C8=(unsigned char *)system_words;
 static unsigned int root[64],root_object[64],local[16],player[64],player_object[64],player_work[64];
 static unsigned int timer[64],proxy[64],proxy_object[64],assets[3][8],camera[8],group[8];
 void *D_801FC604_5B8514=player,*D_801FC60C_5B851C=player_object,*D_8016DAB4_16E6B4;
+void *D_801FC628_5B8538;
 static unsigned int fixture_visit;
 static int saved=1,connected=1,health=16,vm,modal,flags[256],warps,locks,clear_calls;
 static int broadcasts,announced_game,prompt_count,prepare_calls,peer_current=1,peer_ready=1;
@@ -135,6 +136,26 @@ void func_080002B4_72BB04(void *task)
 unsigned int anchor_minigame_sync_visit(void) { return fixture_visit; }
 unsigned int anchor_minigame_sync_local_ack(int game) { (void)game;return 0; }
 int anchor_minigame_sync_participant_current(int game,int cid) { (void)game;(void)cid;return 0; }
+/* This launch-only fixture has no remote display roster. Rendering behavior
+ * and native constructor arguments are exercised by the adapter fixture. */
+unsigned int anchor_minigame_sync_participants(int game,int *out,unsigned int capacity)
+{ (void)game;(void)out;(void)capacity;return 0; }
+int anchor_player_models_get_display_position(int cid,float *x,float *y,float *z)
+{ (void)cid;(void)x;(void)y;(void)z;assert(0);return 0; }
+int anchor_remote_model_pool_contains(const void *pointer) { (void)pointer;return 0; }
+void *func_8000DBF0_E7F0(void *task,unsigned int model,unsigned int animation,
+    float x,float y,float z,short rx,short ry,short rz,
+    float sx,float sy,float sz,short file8,short file9)
+{
+    (void)task;(void)model;(void)animation;(void)x;(void)y;(void)z;
+    (void)rx;(void)ry;(void)rz;(void)sx;(void)sy;(void)sz;(void)file8;(void)file9;
+    assert(0);return 0;
+}
+void func_800115E0_121E0(void *object,int x,int y)
+{ (void)object;(void)x;(void)y;assert(0); }
+void func_8001136C_11F6C(void *task) { (void)task;assert(0); }
+void *func_80036158_36D58(void *task,void *object,unsigned char count)
+{ (void)task;(void)object;(void)count;assert(0);return 0; }
 void anchor_minigame_sync_begin_load(void)
 { if(bound) reset();bound=0; }
 void anchor_minigame_sync_finish_load(void) { ++fixture_visit; }

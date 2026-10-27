@@ -4,6 +4,15 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mnsg-minigame-tests.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 HOST_COMPILER="${HOST_CC:-cc}"
+case "$(uname -s)" in
+    Darwin) HUD_DEAD_CODE_FLAG="-Wl,-dead_strip" ;;
+    *) HUD_DEAD_CODE_FLAG="-Wl,--gc-sections" ;;
+esac
+"$HOST_COMPILER" -std=c99 -Wall -Wextra -Werror -O2 -ffast-math \
+    -ffunction-sections -fdata-sections "$HUD_DEAD_CODE_FLAG" -fsanitize=undefined \
+    -Iinclude tests/test_player_model_sound_position.c -o "$TEST_DIR/test_player_model_sound_position"
+"$TEST_DIR/test_player_model_sound_position"
+
 "$HOST_COMPILER" -std=c99 -Wall -Wextra -Werror -fsanitize=undefined \
     -Iinclude tests/test_minigame_sync_native.c -o "$TEST_DIR/test_minigame_sync_native"
 "$TEST_DIR/test_minigame_sync_native"
@@ -23,7 +32,7 @@ HOST_COMPILER="${HOST_CC:-cc}"
 "$TEST_DIR/test_minigame_sasuke_native"
 "$TEST_DIR/test_minigame_sasuke_native" --export > "$TEST_DIR/sasuke-native.json"
 
-"$HOST_COMPILER" -std=c99 -Wall -Wextra -Werror -fsanitize=undefined \
+"$HOST_COMPILER" -std=c99 -Wall -Wextra -Werror -O2 -ffast-math -fsanitize=undefined \
     -Iinclude tests/test_minigame_yae_native.c -o "$TEST_DIR/test_minigame_yae_native"
 "$TEST_DIR/test_minigame_yae_native"
 "$TEST_DIR/test_minigame_yae_native" --export > "$TEST_DIR/yae-native.json"

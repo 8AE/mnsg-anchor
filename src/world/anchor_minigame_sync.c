@@ -168,6 +168,16 @@ int anchor_minigame_sync_participant_current(int game, int cid)
         if (s_participants[i] == cid) return 1;
     return 0;
 }
+unsigned int anchor_minigame_sync_participants(int game, int *out,
+                                              unsigned int capacity)
+{
+    unsigned int i, count;
+    if (!out || !capacity || !bound() || game != s_game || !s_active ||
+        !s_ready || !s_token[0]) return 0;
+    count = s_participant_count < capacity ? s_participant_count : capacity;
+    for (i = 0; i < count; ++i) out[i] = s_participants[i];
+    return count;
+}
 
 static int same_token(const unsigned int *a, const unsigned int *b)
 {

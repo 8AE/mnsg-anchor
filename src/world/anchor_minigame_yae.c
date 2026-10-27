@@ -7,6 +7,8 @@
 #endif
 #include "world/anchor_minigame_sync.h"
 #include "world/anchor_minigame_invites.h"
+#include "player/anchor_player_models.h"
+#include "player/anchor_remote_model_pool.h"
 
 #define YB(p,o) (*(unsigned char *)((char *)(p)+(o)))
 #define YS(p,o) (*(short *)((char *)(p)+(o)))
@@ -27,6 +29,7 @@ extern unsigned char *D_8015C5C8_15D1C8;
 extern void osViBlack(unsigned char active);
 extern int item_sync_save_is_loaded(void);
 extern void *D_801FC604_5B8514, *D_801FC60C_5B851C, *D_8016DAB4_16E6B4;
+extern void *D_801FC628_5B8538;
 extern void *func_800141C4_14DC4(unsigned int);
 extern int func_8003F1D8_3FDD8(void);
 extern void func_80221F70_5DD440(void);
@@ -43,6 +46,11 @@ extern void func_08000AB4_72C304(void *,float);
 extern void func_08000AC8_72C318(void *,float);
 extern int anchor_boss_invite_world_can_prompt(void);
 extern int anchor_dialog_busy(void);
+extern void *func_8000DBF0_E7F0(void *,unsigned int,unsigned int,
+    float,float,float,short,short,short,float,float,float,short,short);
+extern void func_800115E0_121E0(void *,int,int);
+extern void func_8001136C_11F6C(void *);
+extern void *func_80036158_36D58(void *,void *,unsigned char);
 
 enum { Y_ROOM=0x154,Y_GAME=4,Y_COUNT=64,Y_CONTROLLER=9,Y_WORDS=15,
        Y_GOAL=1,Y_HIT=2,Y_PREDICT=6,Y_INPUTS=32,Y_MOTION=0x00800200 };
@@ -54,6 +62,7 @@ typedef struct {
 } YaeNode;
 static YaeNode s_root,s_obstacles[Y_COUNT],s_hud,s_swimmer;
 static void *s_local,*s_hud_text,*s_hud_sprite,*s_hud_marker;
+static void *s_hud_remotes[ANCHOR_MINIGAME_MAX_PARTICIPANTS];
 typedef struct {
     void *task,*object,*local;
     unsigned int visit;
@@ -68,6 +77,7 @@ static int s_personal_failed,s_music_started,s_intro_skipped,s_debug_intro,s_war
 static unsigned int s_goal_sequence;
 static int s_black_owned,s_black_release_pending,s_world_fade_had_record,s_direct_bootstrap;
 static unsigned int s_direct_frames,s_direct_host_tick,s_direct_host_generation;
+static int s_direct_wait_visible,s_direct_result_pending;
 static void *s_swimmer_init_task,*s_hud_draw_task;
 static int s_hud_draw_timer;
 static void root_callback(void *,void *);
@@ -77,6 +87,7 @@ static void swimmer_callback(void *,void *);
 static int root_live(void);
 static int root_identity(void);
 static int direct_graph_ready(void);
+static int direct_intro_scene_ready(void);
 static const AnchorMinigameAdapter s_adapter;
 
 static int callback_is(void *pointer,YaeCallback callback)
@@ -203,6 +214,74 @@ static int hud_live(void)
         s_hud_text && s_hud_sprite && s_hud_marker &&
         callback_is(YP(s_hud.task,0x0c),hud_callback);
 }
+static int hud_marker_owned(void *marker)
+{
+    void *cursor;
+    unsigned int i;
+    if(!hud_live() || !marker) return 0;
+    cursor=YP(s_hud.task,0x18);
+    for(i=0;i<ANCHOR_MINIGAME_MAX_PARTICIPANTS+16u &&
+        (native_pointer(cursor) || anchor_remote_model_pool_contains(cursor));++i) {
+        if(cursor==marker) return YB(cursor,4)==2 && YB(cursor,5)==10;
+        cursor=YP(cursor,0);
+    }
+    return 0;
+}
+static void release_hud_markers(void)
+{
+    unsigned int i;
+    for(i=0;i<ANCHOR_MINIGAME_MAX_PARTICIPANTS;++i) {
+        void *marker=s_hud_remotes[i];s_hud_remotes[i]=0;
+        if(hud_marker_owned(marker)) (void)func_80036158_36D58(s_hud.task,marker,1);
+    }
+}
+static void update_hud_markers(void)
+{
+    int members[ANCHOR_MINIGAME_MAX_PARTICIPANTS];
+    int heights[ANCHOR_MINIGAME_MAX_PARTICIPANTS];
+    unsigned int i,j,members_count,count=0;
+    float x,y,z,spacing=18.f,scale=3.f;
+    if(!hud_live()) return;
+    for(i=0;i<ANCHOR_MINIGAME_MAX_PARTICIPANTS;++i) {
+        if(hud_marker_owned(s_hud_remotes[i])) YB(s_hud_remotes[i],0x64)|=1u;
+        else s_hud_remotes[i]=0;
+    }
+    if(!s_active || !s_ready || s_direct_bootstrap || s_terminal || s_personal_failed ||
+       YB(s_local,0)!=7 || !hud_marker_owned(s_hud_marker)) return;
+    members_count=anchor_minigame_sync_participants(Y_GAME,members,
+        ANCHOR_MINIGAME_MAX_PARTICIPANTS);
+    /* The committed roster is sorted by CID. Filter before assigning lanes so
+     * the local member or a missing render snapshot cannot leave a gap. */
+    for(i=0;i<members_count;++i) {
+        unsigned int height_bits;
+        if(!anchor_player_models_get_display_position(members[i],&x,&y,&z)) continue;
+        __builtin_memcpy(&height_bits,&y,sizeof(height_bits));
+        if((height_bits&0x7f800000u)==0x7f800000u) continue;
+        /* Published player Y is proxy Y+15; the local meter uses proxy Y+440.
+         * Clamp the float before conversion to avoid overflow on bad samples. */
+        y+=425.f;
+        heights[count++]=y<=0.f ? 0:y>=820.f ? 820:(int)y;
+    }
+    if(count>4u) { spacing=72.f/(float)count;scale=12.f/(float)count; }
+    for(i=0;i<count;++i) {
+        void *marker=s_hud_remotes[i];
+        if(!marker) {
+            marker=func_8000DBF0_E7F0(s_hud.task,0x480002e0u,0x8006d920u,
+                0.f,0.f,0.f,(short)0x8000,(short)0x8000,(short)0x8000,
+                scale,scale,scale,0x4d1,0);
+            if(!marker) continue;
+            YB(marker,5)=10;s_hud_remotes[i]=marker;
+        }
+        /* Only the first16-byte icon wrapper is shared. The native countdown
+         * and green/black fill remain exclusively on the original HUD. */
+        YP(marker,0x30)=YP(s_hud_marker,0x30);
+        for(j=0;j<3u;++j) YF(marker,0x1c+4u*j)=scale;
+        func_800115E0_121E0(marker,(int)(48.f+spacing*(float)i),
+            ((820-heights[i])*150)/820+56);
+        YB(marker,0x64)&=(unsigned char)~1u;
+    }
+    if(count) func_8001136C_11F6C(s_hud.task);
+}
 static void *swimmer_object(void)
 {
     void *task;
@@ -240,6 +319,7 @@ static void restore_motion(YaeNode *node)
 static void reset(void)
 {
     int i;
+    release_hud_markers();
     if(live(&s_root) && callback_is(YP(s_root.task,0x0c),root_callback))
         schedule(&s_root,func_080014E8_72CD38);
     for(i=0;i<Y_COUNT;++i) {
@@ -253,6 +333,7 @@ static void reset(void)
     if(s_direct_bootstrap && !anchor_minigame_invites_yae_direct_pending())
         anchor_minigame_yae_direct_load_cancel();
     s_direct_bootstrap=0;s_direct_frames=s_direct_host_tick=s_direct_host_generation=0;
+    s_direct_wait_visible=s_direct_result_pending=0;
     s_swimmer_init_task=s_hud_draw_task=0;
     anchor_minigame_zero(&s_swimmer,sizeof(s_swimmer));
     if(hud_live()) YP(s_hud.task,0x0c)=(void *)((unsigned long)func_080002B4_72BB04 |
@@ -412,10 +493,12 @@ static int apply(const AnchorMinigameState *s)
     unsigned int i;
     int j,missing=0;
     if(!validate(s) || !root_live() || s_personal_failed) return 0;
+    if(s_direct_result_pending && s->result && s->result!=s_direct_result_pending) return 0;
     s_host_phase=s->controller[1];
     /* Prelude reconstruction is scheduled natively. Never skip the camera,
      * fade, HUD or local swimmer constructors by copying an advanced phase. */
     if(s_host_phase>=7 && YB(s_local,0)<7) return 0;
+    if(s_direct_bootstrap && s_host_phase>=7 && !direct_graph_ready()) return 0;
     if(s_host_phase==7 && (!hud_live() || !swimmer_object())) return 0;
     if(s_terminal) return 1;
     /* Retire obsolete identities before reserving the replacement graph. This
@@ -483,14 +566,14 @@ static int apply(const AnchorMinigameState *s)
         YB(s_local,0)=(unsigned char)(s_outcome==1 ? 9:10);YS(s_local,4)=0;
     }
     if(s_direct_bootstrap && !s_owner && s_host_phase>=4 && s_host_phase<=6 &&
-       direct_graph_ready() && s->source_tick &&
+       s->source_tick &&
        (s->adopted_generation>s_direct_host_generation ||
         (s->adopted_generation==s_direct_host_generation && s->source_tick>s_direct_host_tick))) {
         /* A live natural host may read its instructions for more than20s.
          * Renew only for a successfully adopted advancing authority sample,
          * never for local frames or an incomplete local native graph. */
         s_direct_host_generation=s->adopted_generation;s_direct_host_tick=s->source_tick;
-        s_direct_frames=0;
+        if(direct_intro_scene_ready() || direct_graph_ready()) s_direct_frames=0;
     }
     reconcile_music();return 1;
 }
@@ -536,7 +619,11 @@ static int return_pending(void)
 }
 static void result(int outcome)
 {
-    if(outcome<1 || outcome>2 || s_terminal || s_personal_failed || !root_live()) return;
+    if(outcome<1 || outcome>2 || s_terminal || s_direct_result_pending ||
+       s_personal_failed || !root_live()) return;
+    /* Native9 reads the proxy on entry and10/f1 writes its task. A result
+     * received during the visible prelude must finish constructing it first. */
+    if(s_direct_bootstrap && !direct_graph_ready()) { s_direct_result_pending=outcome;return; }
     s_outcome=outcome;s_terminal=1;
     YB(s_local,0)=(unsigned char)(outcome==1 ? 9:10);YS(s_local,4)=0;
 }
@@ -560,11 +647,49 @@ static int direct_graph_ready(void)
         native_pointer(camera=YP(s_local,0x0c)) &&
         native_pointer(YP(camera,0x6c)) && YB(s_local,1)==2;
 }
+static int direct_intro_scene_ready(void)
+{
+    static const float intro[6]={0.f,-354.f,-110.f,0.f,-404.f,190.f};
+    void *camera,*descriptor,*world;
+    unsigned int i;
+    if(!root_live() || YB(s_local,0)!=4 || YS(s_local,4)!=21 ||
+       YP(s_local,0x10) || YP(s_local,0x18) ||
+       !native_pointer(camera=YP(s_local,0x0c)) ||
+       !native_pointer(descriptor=YP(camera,0x6c)) ||
+       !native_pointer(D_801FC628_5B8538)) return 0;
+#ifdef ANCHOR_MINIGAME_YAE_HOST_TEST
+    world=YP(D_801FC628_5B8538,0x2c);
+#else
+    /* Native controller08001504..28 decodes this tagged CPU descriptor. */
+    world=(void *)(unsigned long)(YW(D_801FC628_5B8538,0x2c)&0x8ffffffeu);
+#endif
+    if(!native_pointer(world) || YF(camera,0x74)!=2560.f ||
+       YH(descriptor,0x1a)!=0xa00u || YH(world,0x1a)!=0xa00u) return 0;
+    /* The initializer copies an OLD world descriptor before changing camera
+     * scalars. Wait for its scheduled callback and the root's common-tail
+     * copy to publish the actual intro camera, rather than trusting pointers. */
+    for(i=0;i<6u;++i)
+        if(YF(camera,0x80+4u*i)!=intro[i] || YF(descriptor,4u*i)!=intro[i] ||
+           YW(descriptor,4u*i)!=YW(world,4u*i)) return 0;
+    return 1;
+}
+static void reveal_direct_intro(void)
+{
+    void *fade;
+    if(s_direct_wait_visible || !s_active || s_owner || !s_ready || s_terminal ||
+       s_host_phase<4 || s_host_phase>5 || !s_direct_host_tick ||
+       !direct_intro_scene_ready() || !same_world_reveal_scope() ||
+       func_8003F1D8_3FDD8() || !native_pointer(fade=YP(s_local,0x1c))) return;
+    func_08000AB4_72C304(fade,0.f);func_08000AC8_72C318(fade,0.f);
+    s_direct_wait_visible=1;
+    if(s_black_owned) { s_black_owned=s_black_release_pending=0;osViBlack(0); }
+}
 static int direct_commit_ready(void)
 {
     if(!direct_graph_ready() || !same_world_reveal_scope() ||
        func_8003F1D8_3FDD8()) return 0;
-    if(s_active && (!s_ready || (!s_owner && s_host_phase<7))) return 0;
+    if(s_active && !s_direct_result_pending &&
+       (!s_ready || (!s_owner && s_host_phase<7 && !s_terminal))) return 0;
     return YB(s_local,0)==7 || s_terminal;
 }
 static void finish_direct_bootstrap(void)
@@ -574,9 +699,12 @@ static void finish_direct_bootstrap(void)
     if(!native_pointer(fade)) return;
     /* A new owner has held its1500 frames. A joining follower keeps the timer
      * from its last successful authoritative apply, never resets the host. */
-    func_08000AC8_72C318(fade,0.f);
+    if(!s_direct_wait_visible) func_08000AC8_72C318(fade,0.f);
     s_direct_bootstrap=0;s_direct_frames=0;
     if(s_black_owned) { s_black_owned=s_black_release_pending=0;osViBlack(0); }
+    if(s_direct_result_pending) {
+        int outcome=s_direct_result_pending;s_direct_result_pending=0;result(outcome);
+    }
     reconcile_music();
 }
 static void direct_bootstrap_callback(void *task,void *object)
@@ -603,20 +731,36 @@ static void direct_bootstrap_callback(void *task,void *object)
         func_080014E8_72CD38(task,object);
         if(!root_live()) return;
         void *fade=YP(s_local,0x1c);
-        if(native_pointer(fade)) {
+        if(native_pointer(fade) && (!s_active || s_owner || s_host_phase>=6)) {
             func_08000AB4_72C304(fade,255.f);func_08000AC8_72C318(fade,255.f);
         }
-        /* VM177 is never started for an explicit direct arrival. */
+        /* Native4/f20 places the player and camera at the tutorial bottom.
+         * Hold the following prelude slot while its host readsVM177. */
+        if(s_active && !s_owner && s_host_phase<6 && !s_terminal && !s_direct_result_pending) {
+            YS(s_local,4)=21;reveal_direct_intro();return;
+        }
+        YB(s_local,0)=6;YS(s_local,4)=1;return;
+    }
+    if(phase==4 && frame==21) {
+        if(s_active && !s_owner && s_host_phase<6 && !s_terminal && !s_direct_result_pending) {
+            /* This slot has no constructors or VM. Its native common tail
+             * publishes the scheduled camera descriptor once per frame. */
+            func_080014E8_72CD38(task,object);
+            if(root_live()) { YS(s_local,4)=21;reveal_direct_intro(); }
+            return;
+        }
+        /* Keep an already-visible intro visible through the nativephase6
+         * camera/swimmer transition. Input and timer still await readiness. */
         YB(s_local,0)=6;YS(s_local,4)=1;return;
     }
     if(phase==6) {
         func_080014E8_72CD38(task,object);
         /* Native6/f1 constructs exactly once; its20-tick camera interpolation
-         * and6/f20 descriptor copy remain naturally scheduled under black. */
+         * and6/f20 descriptor copy remain naturally scheduled. */
         if(root_live() && YB(s_local,0)==7) finish_direct_bootstrap();
         return;
     }
-    /* Once local construction reaches7, keep input/time hidden until a real
+    /* Once local construction reaches7, keep input/time held until a real
      * adopted running host graph is ready; a natural host may still be in177. */
     finish_direct_bootstrap();
 }
@@ -873,6 +1017,7 @@ void anchor_minigame_yae_frame(void)
     bind_active(task,object,local);
     s_direct_bootstrap=origin==ANCHOR_YAE_LAUNCH_JOIN ? origin:0;
     s_direct_frames=s_direct_host_tick=s_direct_host_generation=0;
+    s_direct_wait_visible=s_direct_result_pending=0;
     s_debug_intro=origin==ANCHOR_YAE_LAUNCH_DEBUG;
     s_intro_skipped=origin==ANCHOR_YAE_LAUNCH_JOIN;
 }
@@ -933,7 +1078,7 @@ RECOMP_HOOK("func_080002B4_72BB04")
 void anchor_minigame_yae_hud(void *task)
 {
     s_hud_draw_task=0;
-    if(s_direct_bootstrap && root_live() && task==YP(s_local,0x10) && native_pointer(task)) {
+    if(root_live() && task==YP(s_local,0x10) && native_pointer(task)) {
         s_hud_draw_task=task;s_hud_draw_timer=YI(task,0x84);
     }
     if(!root_live() || !task || task!=YP(s_local,0x10) || s_hud.task) return;
@@ -947,6 +1092,7 @@ void anchor_minigame_yae_hud_return(void)
 {
     if(s_hud_draw_task && s_direct_bootstrap && hud_live() && s_hud_draw_task==s_hud.task)
         YI(s_hud.task,0x84)=s_hud_draw_timer;
+    if(s_hud_draw_task && s_hud_draw_task==s_hud.task) update_hud_markers();
     s_hud_draw_task=0;
 }
 RECOMP_HOOK("func_80034A10_35610")
@@ -959,6 +1105,7 @@ void anchor_minigame_yae_reuse(void *task)
     if(task==s_swimmer.task) anchor_minigame_zero(&s_swimmer,sizeof(s_swimmer));
     if(task==s_root.task) { reset();return; }
     if(task==s_hud.task) {
+        anchor_minigame_zero(s_hud_remotes,sizeof(s_hud_remotes));
         anchor_minigame_zero(&s_hud,sizeof(s_hud));s_hud_text=s_hud_sprite=s_hud_marker=0;
     }
     for(i=0;i<Y_COUNT;++i) if(task==s_obstacles[i].task) {
@@ -977,8 +1124,11 @@ void anchor_minigame_yae_delete(void *task)
     if(task==s_root.task) {
         if(s_direct_bootstrap) anchor_minigame_yae_direct_load_cancel();
         s_direct_bootstrap=s_debug_intro=0;s_root.task=0;
+        s_direct_wait_visible=s_direct_result_pending=0;
+        anchor_minigame_zero(s_hud_remotes,sizeof(s_hud_remotes));
     }
     if(task==s_hud.task) {
+        anchor_minigame_zero(s_hud_remotes,sizeof(s_hud_remotes));
         anchor_minigame_zero(&s_hud,sizeof(s_hud));s_hud_text=s_hud_sprite=s_hud_marker=0;
     }
     for(i=0;i<Y_COUNT;++i) if(task==s_obstacles[i].task) s_obstacles[i].task=0;

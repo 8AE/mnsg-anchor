@@ -981,6 +981,35 @@ int anchor_player_models_get_sound_position(int cid, int session, int epoch,
     return 1;
 }
 
+static int display_coordinate_finite(const float *value)
+{
+    unsigned int bits;
+    /* Inspect storage as integers: -ffast-math may discard finiteness checks
+     * after a coordinate has already crossed a float-valued call boundary. */
+    __builtin_memcpy(&bits,value,sizeof(bits));
+    return (bits & 0x7f800000u) != 0x7f800000u;
+}
+
+int anchor_player_models_get_display_position(int cid, float *x, float *y, float *z)
+{
+    const RemoteModelSlot *slot = find_slot(cid);
+    const AnchorPlayerModelRemote *remote;
+    if (!x || !y || !z || !slot || !slot->pending_valid ||
+        slot->pending_room != D_800C7AB2 ||
+        s_owner_task != D_801FC604_5B8514 ||
+        !is_linked_task(s_owner_task) || !is_linked_remote_task(slot->task))
+        return 0;
+    remote = &slot->pending_remote;
+    if (!remote->same_team || remote->interaction_session <= 0 ||
+        remote->player_epoch <= 0 || !display_coordinate_finite(&remote->x) ||
+        !display_coordinate_finite(&remote->y) || !display_coordinate_finite(&remote->z))
+        return 0;
+    *x = remote->x;
+    *y = remote->y;
+    *z = remote->z;
+    return 1;
+}
+
 static RemoteModelSlot *alloc_slot(int cid)
 {
     int i;

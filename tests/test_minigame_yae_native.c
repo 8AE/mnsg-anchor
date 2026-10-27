@@ -12,7 +12,10 @@
 #define RECOMP_HOOK_RETURN(name)
 #define YP(p,o) TP(p,o)
 #define YAE_DISABLED (1ul << (sizeof(unsigned long)*8-1))
-#include "../src/world/anchor_minigame_yae.c"
+#ifndef YAE_ADAPTER_SOURCE
+#define YAE_ADAPTER_SOURCE "../src/world/anchor_minigame_yae.c"
+#endif
+#include YAE_ADAPTER_SOURCE
 #include "../src/world/anchor_minigame_codec.c"
 
 unsigned short D_800C7AB2;
@@ -20,16 +23,24 @@ unsigned short D_800C7AB2;
  * character 3 read zero on the big-endian target (00 00 00 03). */
 unsigned int D_8015C5DC_15D1DC;
 void *D_801FC604_5B8514,*D_801FC60C_5B851C,*D_8016DAB4_16E6B4;
+void *D_801FC628_5B8538;
 static unsigned int full_system[0xd0000u/4u];
 unsigned char *D_8015C5C8_15D1C8=(unsigned char *)full_system;
 static unsigned int root[64],root_object[64],work[16],player_task[64],player_object[64];
-static unsigned int timer_task[64],swimmer_task[64],swimmer_obj[64],camera[8],fade[8];
+static unsigned int timer_task[64],swimmer_task[64],swimmer_obj[64],camera[64],fade[8];
+static unsigned int camera_descriptor[24],world_descriptor[24],world_scene[16];
 enum { TEST_CHILD_CAPACITY=Y_COUNT+8 };
-static unsigned int children[TEST_CHILD_CAPACITY][64],child_objects[TEST_CHILD_CAPACITY][64],hud_assets[3][8];
+static unsigned int children[TEST_CHILD_CAPACITY][64],child_objects[TEST_CHILD_CAPACITY][64],hud_assets[3][40];
+static unsigned int hud_extras[ANCHOR_MINIGAME_MAX_PARTICIPANTS][40];
+static int hud_members[ANCHOR_MINIGAME_MAX_PARTICIPANTS],hud_member_count;
+static float hud_peer_y[65];
+static int hud_peer_valid[65],hud_extra_allocations,hud_extra_fail,hud_extra_removals,hud_transforms;
+static int native_draw_height;
 static unsigned int visit=1,ack;
 static int requested,cancelled,started,finished,missing_resource,vm,modal,prompt_safe=1;
 static int request_kind,active_attempt,save_loaded=1,host_available=1,vi_black,fade_current,fade_target;
 static int native_roots,camera_ticks,hud_draws,hud_builds,proxy_builds,child_allocations;
+static int intro_fade_builds,intro_camera_builds;
 static int obstacle_calls,obstacle_initializers,child_deletes,locks,clear_flags,fail_alloc;
 static int fail_after=-1;
 static int intro_vms,reward_vms,rewards,native_failure_warps,cleanups;
@@ -37,11 +48,63 @@ static int music_calls,last_music,warning_calls,result_audio;
 static int obstacle_sfx;
 static int flags[256],participant_ok=1;
 static const AnchorMinigameAdapter *bound;
+static void tick_camera(void)
+{
+    if(!YP(work,0x0c)) return;
+    for(unsigned int i=0;i<6;++i) YW(camera_descriptor,4*i)=YW(camera,0x80+4*i);
+    YH(camera_descriptor,0x1a)=(unsigned short)YF(camera,0x74);
+}
 
 unsigned int anchor_minigame_sync_visit(void) { return visit; }
 unsigned int anchor_minigame_sync_local_ack(int game) { assert(game==4);return ack; }
 int anchor_minigame_sync_participant_current(int game,int cid)
 { assert(game==4);return participant_ok && cid==9; }
+unsigned int anchor_minigame_sync_participants(int game,int *out,unsigned int capacity)
+{
+    assert(game==4);
+    unsigned int count=(unsigned int)hud_member_count;
+    if(count>capacity) count=capacity;
+    for(unsigned int i=0;i<count;++i) out[i]=hud_members[i];
+    return count;
+}
+int anchor_player_models_get_display_position(int cid,float *x,float *y,float *z)
+{
+    /* cid7 is the local player and can never appear in the remote cache. */
+    if(cid<=0 || cid>64 || cid==7 || !hud_peer_valid[cid]) return 0;
+    *x=0.f;*y=hud_peer_y[cid];*z=280.f;return 1;
+}
+int anchor_remote_model_pool_contains(const void *pointer) { (void)pointer;return 0; }
+void *func_8000DBF0_E7F0(void *task,unsigned int model,unsigned int animation,
+    float x,float y,float z,short rx,short ry,short rz,
+    float sx,float sy,float sz,short file8,short file9)
+{
+    assert(task==timer_task && model==0x480002e0u && animation==0x8006d920u);
+    assert(x==0.f && y==0.f && z==0.f && rx==(short)0x8000 &&
+           ry==(short)0x8000 && rz==(short)0x8000 && file8==0x4d1 && !file9);
+    if(hud_extra_fail || hud_extra_allocations==ANCHOR_MINIGAME_MAX_PARTICIPANTS) return 0;
+    void *object=hud_extras[hud_extra_allocations++];
+    memset(object,0,sizeof(hud_extras[0]));YB(object,4)=2;
+    YF(object,0x1c)=sx;YF(object,0x20)=sy;YF(object,0x24)=sz;
+    void *tail=YP(task,0x1c);
+    if(tail) YP(tail,0)=object;else YP(task,0x18)=object;
+    YP(task,0x1c)=object;YP(object,0)=0;
+    return object;
+}
+void func_800115E0_121E0(void *object,int x,int y)
+{ assert(object);YI(object,0x80)=x;YI(object,0x84)=y; }
+void func_8001136C_11F6C(void *task)
+{ assert(task==timer_task);++hud_transforms; }
+void *func_80036158_36D58(void *task,void *object,unsigned char count)
+{
+    void *previous=0,*cursor=YP(task,0x18);assert(task==timer_task && count==1);
+    while(cursor && cursor!=object) { previous=cursor;cursor=YP(cursor,0); }
+    assert(cursor && object!=hud_assets[2]);
+    void *next=YP(cursor,0);
+    if(previous) YP(previous,0)=next;else YP(task,0x18)=next;
+    if(YP(task,0x1c)==object) YP(task,0x1c)=previous;
+    YB(object,4)=0x82;YP(object,0)=0;++hud_extra_removals;
+    return next;
+}
 int anchor_minigame_sync_bind(const AnchorMinigameAdapter *adapter)
 { assert(adapter->game==4);bound=adapter;role(1,0,0);return 1; }
 int anchor_minigame_invites_yae_requested(void) { return requested; }
@@ -126,6 +189,10 @@ void func_0800107C_72C8CC(void *task,void *object)
 void func_080002B4_72BB04(void *task)
 {
     anchor_minigame_yae_hud(task);++hud_draws;
+    native_draw_height=YI(task,0x90);
+    func_800115E0_121E0(YP(task,0x80),30,((820-native_draw_height)*150)/820+56);
+    func_8001136C_11F6C(task);
+    YP(YP(task,0x80),0x30)=YP(task,0x78);
     if(YI(task,0x84)>0) --YI(task,0x84);
     anchor_minigame_yae_hud_return();
 }
@@ -135,11 +202,15 @@ static void build_trial_graph(void)
     YP(work,0x10)=timer_task;YP(timer_task,0x0c)=(void *)func_080002B4_72BB04;
     YP(timer_task,0x78)=hud_assets[0];YP(timer_task,0x7c)=hud_assets[1];
     YP(timer_task,0x80)=hud_assets[2];YI(timer_task,0x84)=50*30;
+    YP(timer_task,0x18)=hud_assets[1];YP(timer_task,0x1c)=hud_assets[2];
+    YP(hud_assets[1],0)=hud_assets[2];YP(hud_assets[2],0)=0;
+    YB(hud_assets[1],4)=1;YB(hud_assets[2],4)=2;YB(hud_assets[2],5)=10;
+    YF(hud_assets[2],0x1c)=YF(hud_assets[2],0x20)=YF(hud_assets[2],0x24)=3.f;
     memset(swimmer_task,0,sizeof(swimmer_task));memset(swimmer_obj,0,sizeof(swimmer_obj));
     YP(work,0x18)=swimmer_task;YP(swimmer_task,0x18)=swimmer_obj;
     YP(swimmer_task,0x0c)=(void *)func_0800107C_72C8CC;YH(swimmer_task,0x28)=69;
     YF(swimmer_obj,8)=0.f;YF(swimmer_obj,0x0c)=-350.f;YF(swimmer_obj,0x10)=264.f;
-    YP(camera,0x6c)=hud_assets[2];D_8015C5C8_15D1C8[0xcf8a2]=1;
+    YP(camera,0x6c)=camera_descriptor;D_8015C5C8_15D1C8[0xcf8a2]=1;
 }
 void func_080014E8_72CD38(void *task,void *object)
 {
@@ -153,8 +224,17 @@ void func_080014E8_72CD38(void *task,void *object)
         YS(work,4)=0;
     }break;
     case 4:
-        if(frame==1) YP(work,0x1c)=fade;
-        if(frame==20) YP(work,0x0c)=camera;
+        if(frame==1) { ++intro_fade_builds;YP(work,0x1c)=fade; }
+        if(frame==20) {
+            ++intro_camera_builds;
+            YP(work,0x0c)=camera;YP(camera,0x6c)=camera_descriptor;
+            memcpy(camera_descriptor,world_descriptor,sizeof(camera_descriptor));
+            YF(camera,0x80)=0.f;YF(camera,0x84)=-354.f;YF(camera,0x88)=-110.f;
+            YF(camera,0x8c)=0.f;YF(camera,0x90)=-404.f;YF(camera,0x94)=190.f;
+            YF(camera,0x74)=2560.f;
+            YF(player_object,8)=0.f;YF(player_object,0x0c)=-454.f;YF(player_object,0x10)=190.f;
+            YB(player_task,0xcc)=0xc4;fade_target=0;
+        }
         if(frame==40) { ++intro_vms;vm=1;YB(work,0)=5; }
         ++YS(work,4);break;
     case 5:if(!vm) { YB(work,0)=6;YS(work,4)=1; }break;
@@ -196,6 +276,7 @@ void func_080014E8_72CD38(void *task,void *object)
     case 12:if(!vm) { YB(work,0)=1;YS(work,4)=0; }break;
     default:assert(0);
     }
+    if(YP(work,0x0c)) memcpy(world_descriptor,camera_descriptor,sizeof(world_descriptor));
     anchor_minigame_yae_root_return();
 }
 static void tick_hud(void)
@@ -222,11 +303,18 @@ static void fixture(int request)
     memset(player_task,0,sizeof(player_task));memset(player_object,0,sizeof(player_object));
     memset(children,0,sizeof(children));memset(child_objects,0,sizeof(child_objects));
     memset(timer_task,0,sizeof(timer_task));memset(flags,0,sizeof(flags));
+    memset(camera,0,sizeof(camera));memset(camera_descriptor,0,sizeof(camera_descriptor));
+    memset(world_descriptor,0,sizeof(world_descriptor));memset(world_scene,0,sizeof(world_scene));
+    D_801FC628_5B8538=world_scene;YP(world_scene,0x2c)=world_descriptor;
+    memset(hud_assets,0,sizeof(hud_assets));memset(hud_extras,0,sizeof(hud_extras));
+    memset(hud_peer_valid,0,sizeof(hud_peer_valid));memset(hud_peer_y,0,sizeof(hud_peer_y));
+    hud_member_count=hud_extra_allocations=hud_extra_fail=hud_extra_removals=hud_transforms=0;
     requested=request!=0;request_kind=request;active_attempt=0;
     cancelled=started=finished=missing_resource=vm=modal=0;prompt_safe=participant_ok=1;
     save_loaded=host_available=1;vi_black=fade_current=fade_target=0;memset(full_system,0,sizeof(full_system));
     D_8015C5C8_15D1C8[0x3add4]=13;D_8015C5C8_15D1C8[0x3adde]=1;
     native_roots=camera_ticks=hud_draws=hud_builds=proxy_builds=child_allocations=0;
+    intro_fade_builds=intro_camera_builds=0;
     obstacle_calls=obstacle_initializers=child_deletes=locks=clear_flags=fail_alloc=0;
     fail_after=-1;
     intro_vms=reward_vms=rewards=native_failure_warps=cleanups=0;
@@ -242,6 +330,7 @@ static void fixture(int request)
 }
 static void tick_swimmer(void)
 {
+    tick_camera();
     if(!YP(work,0x18)) return;
     YaeCallback callback=(YaeCallback)YP(swimmer_task,0x0c);callback(swimmer_task,swimmer_obj);
 }
@@ -282,11 +371,14 @@ static void test_launch_and_bootstrap(void)
     AnchorMinigameState initial=state();assert(initial.controller[1]==4 && initial.controller[3]==-1);
     role(1,0,0);
     for(int i=0;i<40;++i) { root_callback(root,root_object);tick_swimmer();tick_hud(); }
-    assert(YB(work,0)==7 && vi_black && !intro_vms && !vm && hud_builds==1 && proxy_builds==1);
-    assert(YI(timer_task,0x84)==1500 && !music_calls && fade_current==255);
-    /* A local graph can be complete while its authority is still pending.
-     * Reveal and start the clock only after the real owner-ready edge. */
-    role(1,1,1);root_callback(root,root_object);
+    assert(YB(work,0)==4 && YS(work,4)==21 && vi_black && !intro_vms && !vm && !hud_builds && !proxy_builds);
+    assert(!music_calls && fade_current==255);
+    /* An unready follower holds the prelude. A real owner takeover may then
+     * build the gameplay graph and commit its normal native start. */
+    role(1,1,1);
+    for(int i=0;i<32 && vi_black;++i) {
+        root_callback(root,root_object);if(!vi_black) break;tick_swimmer();tick_hud();
+    }
     assert(!vi_black && music_calls==1 && last_music==0x292 && YI(timer_task,0x84)==1500);
     /* The renderer still runs while the shared clock is held awaiting ACK. */
     role(1,0,0);int before=YI(timer_task,0x84);for(int i=0;i<10;++i) tick_hud();
@@ -531,52 +623,150 @@ static AnchorMinigameState natural_host_prelude(int phase)
     AnchorMinigameState prelude=state();assert(prelude.controller[1]==phase && !prelude.running);
     return prelude;
 }
-static void hidden_join(const AnchorMinigameState *prelude)
+static void assert_intro_wait(void)
 {
-    fixture(2);assert(bound && !flags[0x15]);assert(apply(prelude));role(1,0,1);
-    for(int i=0;i<35;++i) {
-        root_callback(root,root_object);tick_swimmer();tick_hud();
-        assert(!vm && !intro_vms && vi_black);
-    }
-    assert(YB(work,0)==7 && hud_live() && YI(timer_task,0x84)==1500);
-    assert(YF(swimmer_obj,0x0c)==-350.f && !music_calls && !s_input_count);
+    assert(YB(work,0)==4 && YS(work,4)==21 && !hud_builds && !proxy_builds);
+    assert(YF(player_object,8)==0.f && YF(player_object,0x0c)==-454.f &&
+           YF(player_object,0x10)==190.f && YB(player_task,0xcc)==0xc4);
+    assert(!vm && !intro_vms && !music_calls && !s_input_count && !child_allocations);
+    assert(intro_fade_builds==1 && intro_camera_builds==1);
+    AnchorMinigameState local=state();assert(!local.running && !local.result && local.controller[3]==-1);
 }
-static void test_join_waits_for_running_host_and_preserves_timer(void)
+static void visible_join(AnchorMinigameState *prelude)
+{
+    prelude->adopted_generation=1;prelude->source_tick=1;
+    fixture(2);assert(bound && !flags[0x15]);assert(apply(prelude));role(1,0,1);
+    root_callback(root,root_object);assert(vi_black); /* Native4/f1. */
+    root_callback(root,root_object);assert(vi_black); /* Native4/f20. */
+    assert_intro_wait();
+    /* Constructor copied the old world descriptor. Pointer presence alone
+     * must not expose that camera before its own scheduled callback runs. */
+    for(int i=0;i<3;++i) { root_callback(root,root_object);assert(vi_black); }
+    tick_camera();root_callback(root,root_object);
+    assert(!vi_black && fade_current==0 && fade_target==0);assert_intro_wait();
+}
+static void construct_waiter_gameplay(void)
+{
+    for(int i=0;i<35 && YB(work,0)<7;++i) {
+        root_callback(root,root_object);tick_swimmer();tick_hud();
+        assert(!vi_black && !music_calls && !vm && !intro_vms);
+    }
+    assert(YB(work,0)==7 && hud_builds==1 && proxy_builds==1 && hud_live());
+}
+static void test_join_waits_visibly_for_host_instructions(void)
 {
     begin_running(1);AnchorMinigameState running=state();running.controller[3]=1200;
     assert(validate(&running));
     for(int phase=4;phase<=5;++phase) {
-        AnchorMinigameState prelude=natural_host_prelude(phase);hidden_join(&prelude);
+        AnchorMinigameState prelude=natural_host_prelude(phase);visible_join(&prelude);
         for(int frame=0;frame<700;++frame) {
             if(frame%30==0) {
-                prelude.adopted_generation=1;prelude.source_tick=(unsigned int)frame+1;
-                assert(apply(&prelude));
+                prelude.source_tick=(unsigned int)frame+2;assert(apply(&prelude));role(1,0,1);
             }
             root_callback(root,root_object);tick_swimmer();tick_hud();
-            assert(vi_black && !finished && YI(timer_task,0x84)==1500 && !music_calls);
+            assert(!vi_black && !finished);assert_intro_wait();
         }
-        assert(apply(&running));tick_hud();
-        assert(vi_black && YI(timer_task,0x84)==1200 && !music_calls);
+        /* The host closes its instructions. Native6 is now constructed once
+         * in view; the authoritative running clock still must be adopted. */
+        AnchorMinigameState advancing=prelude;advancing.controller[1]=6;
+        assert(apply(&advancing));role(1,0,0);construct_waiter_gameplay();
+        assert(YI(timer_task,0x84)==1500 && !music_calls && !vi_black);
+        assert(apply(&running));role(1,0,1);tick_hud();
+        assert(!vi_black && YI(timer_task,0x84)==1200 && !music_calls);
         root_callback(root,root_object);
         assert(!vi_black && YI(timer_task,0x84)==1200 && music_calls==1);
         for(int i=0;i<5;++i) root_callback(root,root_object);
         assert(music_calls==1);tick_hud();assert(YI(timer_task,0x84)==1199);
     }
-    AnchorMinigameState stalled=natural_host_prelude(5);hidden_join(&stalled);
-    stalled.adopted_generation=1;stalled.source_tick=1;assert(apply(&stalled));
+    AnchorMinigameState stalled=natural_host_prelude(5);visible_join(&stalled);
     for(int frame=0;frame<700 && !finished;++frame) {
-        if(frame%30==0) assert(apply(&stalled)); /* Duplicate cannot renew. */
+        if(frame%30==0 && !s_personal_failed) assert(apply(&stalled)); /* Duplicate cannot renew. */
         root_callback(root,root_object);tick_swimmer();tick_hud();
     }
     assert(finished==1 && !vi_black);
     begin_running(1);result(1);root_callback(root,root_object);root_callback(root,root_object);
     AnchorMinigameState won=state();assert(won.result==1);
-    AnchorMinigameState prelude=natural_host_prelude(5);hidden_join(&prelude);
-    assert(apply(&won));root_callback(root,root_object);
+    AnchorMinigameState prelude=natural_host_prelude(5);visible_join(&prelude);
+    assert(!apply(&won));role(1,0,0);construct_waiter_gameplay();
+    assert(apply(&won));role(1,0,1);root_callback(root,root_object);
     assert(!vi_black && !music_calls && s_terminal);
     for(int i=0;i<100 && YB(work,0)!=12;++i) root_callback(root,root_object);
     assert(cleanups==1 && reward_vms==1 && !intro_vms);
     vm=0;root_callback(root,root_object);assert(finished==1 && !vi_black);
+}
+static void test_instruction_reveal_guards_and_pending_result(void)
+{
+    AnchorMinigameState prelude=natural_host_prelude(5);
+    fixture(2);assert(apply(&prelude));role(1,0,1);
+    root_callback(root,root_object);root_callback(root,root_object);tick_camera();
+    root_callback(root,root_object);assert(vi_black); /* No adopted source tick. */
+    AnchorMinigameState bad=prelude;bad.controller[0]=2;bad.source_tick=5;
+    assert(!apply(&bad));root_callback(root,root_object);assert(vi_black);
+    prelude.adopted_generation=1;prelude.source_tick=1;assert(apply(&prelude));role(1,0,0);
+    root_callback(root,root_object);assert(vi_black);
+    role(1,0,1);D_8015C5C8_15D1C8[0x3adde]=0;
+    root_callback(root,root_object);assert(vi_black);
+    D_8015C5C8_15D1C8[0x3adde]=1;vm=1;
+    root_callback(root,root_object);assert(vi_black);vm=0;
+    root_callback(root,root_object);assert(!vi_black);assert_intro_wait();
+    /* A validated result may be followed by unready status throughout native
+     * construction. Pending outcome must keep capture valid and finish once
+     * the proxy exists, without needing a second ready receipt. */
+    for(int outcome=1;outcome<=2;++outcome) {
+        prelude=natural_host_prelude(5);visible_join(&prelude);result(outcome);
+        result(outcome==1 ? 2:1); /* First accepted terminal outcome wins. */
+        AnchorMinigameState local=state();assert(!local.result && validate(&local));
+        role(1,0,0);
+        for(int frame=0;frame<40 && YB(work,0)<9;++frame) {
+            local=state();assert(validate(&local));role(1,0,0);
+            root_callback(root,root_object);tick_swimmer();tick_hud();
+            assert(!vi_black && !intro_vms && !music_calls);
+        }
+        assert(s_terminal && s_outcome==outcome && hud_builds==1 && proxy_builds==1);
+        assert(YB(work,0)==(outcome==1 ? 9:10));
+        for(int frame=0;frame<100 && !finished && YB(work,0)!=12;++frame)
+            root_callback(root,root_object);
+        assert(cleanups==1 && !intro_vms);
+        if(outcome==1) { assert(reward_vms==1 && flags[0x1e]);vm=0;root_callback(root,root_object); }
+        assert(finished==1 && !vi_black);
+    }
+    /* The phase byte can reach7 before a newly constructed swimmer's first
+     * scheduled initializer. Neither a result callback nor a terminal graph
+     * may dispatch9/10 during that gap. */
+    begin_running(1);result(1);root_callback(root,root_object);root_callback(root,root_object);
+    AnchorMinigameState won=state();
+    fixture(2);role(1,0,0);s_host_phase=7;
+    for(int frame=0;frame<32 && YB(work,0)<7;++frame) { root_callback(root,root_object);tick_hud(); }
+    assert(YB(work,0)==7 && !YB(swimmer_task,0xd0) && vi_black && !flags[0x1e]);
+    assert(!apply(&won));result(1);role(1,0,0);root_callback(root,root_object);
+    assert(YB(work,0)==7 && !s_terminal && !flags[0x1e]);
+    AnchorMinigameState awaiting=state();assert(validate(&awaiting) && !awaiting.result);
+    tick_swimmer();
+    AnchorMinigameState conflicting=won;conflicting.controller[1]=10;
+    conflicting.controller[5]=conflicting.result=2;assert(validate(&conflicting));
+    assert(!apply(&conflicting));root_callback(root,root_object);
+    assert(s_terminal && YB(work,0)==9 && !vi_black && !music_calls);
+    root_callback(root,root_object);root_callback(root,root_object);assert(flags[0x1e]);
+    /* Owner/offline transitions build normally from the visible waiting
+     * prelude; none can start a second local instruction VM. */
+    for(int offline=0;offline<=1;++offline) {
+        prelude=natural_host_prelude(5);visible_join(&prelude);role(!offline,1,1);
+        for(int frame=0;frame<40 && s_direct_bootstrap;++frame) {
+            root_callback(root,root_object);tick_swimmer();tick_hud();
+        }
+        assert(!s_direct_bootstrap && !vi_black && hud_builds==1 && proxy_builds==1 && !intro_vms);
+    }
+    /* A cancelled visible visit owns no VI mask. Clearing or replacing that
+     * root cannot resurrect its prelude, pending result or remote HUD state. */
+    prelude=natural_host_prelude(5);visible_join(&prelude);result(1);
+    anchor_minigame_yae_delete(root);root_callback(root,root_object);
+    assert(!root_live() && !vi_black && !hud_builds && !proxy_builds);
+    reset();assert(!s_direct_bootstrap && !vi_black);
+    prelude=natural_host_prelude(4);visible_join(&prelude);++visit;reset();
+    assert(!root_live() && !vi_black && !hud_builds && !proxy_builds);
+    prelude=natural_host_prelude(5);visible_join(&prelude);D_800C7AB2=0x155;reset();
+    assert(!root_live() && !vi_black && !hud_builds && !proxy_builds);
+    begin_running(1);AnchorMinigameState fresh=state();assert(!fresh.result && fresh.running);
 }
 static void export_native(void)
 {
@@ -616,8 +806,111 @@ static void test_debug_tutorial_for_owner_offline_and_follower(void)
         assert(music_calls==1);
     }
 }
+static void hud_roster(unsigned int count)
+{
+    assert(count<=ANCHOR_MINIGAME_MAX_PARTICIPANTS);
+    hud_member_count=(int)count;
+    for(unsigned int i=0;i<count;++i) {
+        hud_members[i]=(int)i+1;hud_peer_valid[i+1]=1;hud_peer_y[i+1]=-335.f;
+    }
+}
+static void assert_local_hud(int height)
+{
+    assert(YI(timer_task,0x90)==height && native_draw_height==height);
+    assert(YI(hud_assets[2],0x80)==30 &&
+           YI(hud_assets[2],0x84)==((820-height)*150)/820+56);
+    assert(YF(hud_assets[2],0x1c)==3.f && YF(hud_assets[2],0x20)==3.f &&
+           YF(hud_assets[2],0x24)==3.f);
+}
+static void test_multiplayer_hud_icons(void)
+{
+    for(int owner=0;owner<=1;++owner) {
+        begin_running(owner);YI(timer_task,0x90)=410;
+        hud_members[0]=7;hud_members[1]=9;hud_members[2]=13;hud_member_count=3;
+        hud_peer_valid[9]=hud_peer_valid[13]=hud_peer_valid[11]=1;
+        hud_peer_y[9]=hud_peer_y[13]=-335.f;
+        int timer=YI(timer_task,0x84),draws=hud_draws;
+        tick_hud();assert(hud_draws==draws+1 && YI(timer_task,0x84)==timer-1);
+        assert_local_hud(410);assert(hud_extra_allocations==2);
+        for(int i=0;i<2;++i) {
+            assert(s_hud_remotes[i]==hud_extras[i] && !(YB(hud_extras[i],0x64)&1u));
+            assert(YI(hud_extras[i],0x80)==48+18*i && YI(hud_extras[i],0x84)==189);
+            assert(YF(hud_extras[i],0x1c)==3.f &&
+                   YP(hud_extras[i],0x30)==YP(hud_assets[2],0x30));
+        }
+        /* Same-height swimmers retain separate X lanes; a nearby nonmember
+         * never gets an icon. The surviving member reuses the first lane. */
+        hud_members[1]=13;hud_member_count=2;hud_peer_y[13]=15.f;
+        tick_hud();assert(hud_extra_allocations==2 && !hud_extra_removals);
+        assert(!(YB(hud_extras[0],0x64)&1u) && (YB(hud_extras[1],0x64)&1u));
+        assert(YI(hud_extras[0],0x84)==125);assert_local_hud(410);
+        role(1,owner,0);timer=YI(timer_task,0x84);tick_hud();
+        assert((YB(hud_extras[0],0x64)&1u) && YI(timer_task,0x84)==timer);
+        role(1,owner,1);tick_hud();assert(!(YB(hud_extras[0],0x64)&1u));
+        s_terminal=1;tick_hud();assert(YB(hud_extras[0],0x64)&1u);s_terminal=0;
+        s_personal_failed=1;tick_hud();assert(YB(hud_extras[0],0x64)&1u);s_personal_failed=0;
+        s_direct_bootstrap=1;tick_hud();assert(YB(hud_extras[0],0x64)&1u);s_direct_bootstrap=0;
+        role(0,1,1);tick_hud();assert(YB(hud_extras[0],0x64)&1u);
+        role(1,owner,1);hud_peer_valid[13]=0;tick_hud();assert(YB(hud_extras[0],0x64)&1u);
+        reset();assert(hud_extra_removals==2 && YP(timer_task,0x1c)==hud_assets[2]);
+        assert(YP(hud_assets[2],0)==0 && !s_hud_remotes[0] && !s_hud_remotes[1]);
+    }
+}
+static void test_hud_bounds_allocations_and_lifetime(void)
+{
+    union { unsigned int bits;float value; } malformed;
+    begin_running(1);hud_roster(4);YI(timer_task,0x90)=123;
+    hud_peer_y[1]=-100000.f;hud_peer_y[2]=100000.f;
+    malformed.bits=0x7fc00000u;hud_peer_y[3]=malformed.value;
+    malformed.bits=0x7f800000u;hud_peer_y[4]=malformed.value;
+    hud_extra_fail=1;tick_hud();assert(!hud_extra_allocations);assert_local_hud(123);
+    hud_extra_fail=0;tick_hud();assert(hud_extra_allocations==2);
+    assert(YI(hud_extras[0],0x84)==206 && YI(hud_extras[1],0x84)==56);
+    /* An unlinked cached record must not be touched or freed on reset. */
+    YP(hud_assets[2],0)=hud_extras[1];YB(hud_extras[0],0x64)=0x80;
+    tick_hud();assert(YB(hud_extras[0],0x64)==0x80 && hud_extra_allocations==3);
+    reset();assert(hud_extra_removals==2 && YB(hud_extras[0],0x64)==0x80);
+
+    begin_running(1);hud_roster(2);tick_hud();assert(hud_extra_allocations==2);
+    unsigned char saved=YB(root,0x74);YB(root,0x74)++;
+    int draws=hud_draws;tick_hud();assert(hud_draws==draws);
+    reset();assert(!hud_extra_removals);YB(root,0x74)=saved;
+    assert(!s_hud_remotes[0] && !s_hud_remotes[1]);
+
+    begin_running(1);hud_roster(2);tick_hud();anchor_minigame_yae_reuse(timer_task);
+    reset();assert(!hud_extra_removals && !s_hud_remotes[0]);
+    begin_running(1);hud_roster(2);tick_hud();anchor_minigame_yae_delete(timer_task);
+    reset();assert(!hud_extra_removals && !s_hud_remotes[0]);
+    begin_running(1);hud_roster(2);tick_hud();anchor_minigame_yae_delete(root);
+    reset();assert(!hud_extra_removals && !s_hud_remotes[0]);
+    begin_running(1);hud_roster(2);tick_hud();++visit;
+    reset();assert(!hud_extra_removals && !s_hud_remotes[0]);
+    begin_running(1);hud_roster(2);tick_hud();D_800C7AB2=0x155;
+    reset();assert(!hud_extra_removals && !s_hud_remotes[0]);
+}
+static void test_full_hud_roster(void)
+{
+    begin_running(1);hud_roster(ANCHOR_MINIGAME_MAX_PARTICIPANTS);
+    YI(timer_task,0x90)=410;int timer=YI(timer_task,0x84);tick_hud();
+    assert(hud_extra_allocations==63 && YI(timer_task,0x84)==timer-1);
+    assert_local_hud(410);
+    for(int i=0;i<63;++i) {
+        assert(!(YB(hud_extras[i],0x64)&1u) && YI(hud_extras[i],0x84)==189);
+        assert(YI(hud_extras[i],0x80)>=48 && YI(hud_extras[i],0x80)<120);
+        if(i) assert(YI(hud_extras[i],0x80)>YI(hud_extras[i-1],0x80));
+        assert(YF(hud_extras[i],0x1c)==12.f/63.f);
+        assert(YP(hud_extras[i],0x30)==YP(hud_assets[2],0x30));
+    }
+    tick_hud();assert(hud_extra_allocations==63);
+    reset();assert(hud_extra_removals==63 && YP(timer_task,0x1c)==hud_assets[2]);
+}
 int main(int argc,char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--instruction-wait")) {
+        test_join_waits_visibly_for_host_instructions();
+        test_instruction_reveal_guards_and_pending_result();
+        puts("Yae instruction wait: visible native prelude, fresh host receipts, camera proof, deferred outcomes and takeover passed");return 0;
+    }
     if(argc==2 && !strcmp(argv[1],"--export")) { export_native();return 0; }
     if(argc==3 && !strcmp(argv[1],"--validate")) {
         char json[ANCHOR_MINIGAME_JSON_SIZE];AnchorMinigameStatus incoming;
@@ -644,8 +937,10 @@ int main(int argc,char **argv)
     test_full_graph_replacement_and_contact_once();test_entry_identity_and_takeover_music();
     test_saturated_contact_queue_retries_after_ack();
     test_postphysics_prediction_hold_and_restore();
-    test_join_waits_for_running_host_and_preserves_timer();
+    test_join_waits_visibly_for_host_instructions();
+    test_instruction_reveal_guards_and_pending_result();
     test_debug_tutorial_for_owner_offline_and_follower();
-    puts("Yae native adapter: scoped native launch, scheduled bootstrap, shared timer/obstacles, goal/hit inputs, result cleanup and lifecycle passed");
+    test_multiplayer_hud_icons();test_hud_bounds_allocations_and_lifetime();test_full_hud_roster();
+    puts("Yae native adapter: scoped native launch, scheduled bootstrap, shared timer/obstacles, participant HUD icons, goal/hit inputs, result cleanup and lifecycle passed");
     return 0;
 }

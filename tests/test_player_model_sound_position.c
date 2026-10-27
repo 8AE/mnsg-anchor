@@ -20,6 +20,9 @@ void *recomp_alloc(unsigned long size);
 void recomp_free(void *memory);
 int recomp_printf(const char *format, ...);
 unsigned char *recomp_get_mod_file_path(void);
+/* Keep this native-only fixture on the debug branch, where the production
+ * renderer's cube-request result is consumed by its diagnostic branch. */
+#define DEBUG_BUTTON_ENABLED 1
 
 #include "../src/player/anchor_player_models.c"
 
@@ -78,6 +81,30 @@ int anchor_remote_collision_is_scripted(void)
 {
     return 0;
 }
+
+int recomp_printf(const char *format, ...)
+{ (void)format;return 0; }
+unsigned int anchor_player_skin_alternative_base(void) { return 0; }
+unsigned int anchor_player_skin_alternative_size(void) { return 0; }
+int anchor_alternative_rebase_mesh(unsigned char *broad,unsigned int size)
+{ (void)broad;(void)size;return 0; }
+int anchor_alternative_patch_action(unsigned char *slice,unsigned int start,
+                                    unsigned int size,unsigned int model)
+{ (void)slice;(void)start;(void)size;(void)model;return 0; }
+void anchor_nameplates_hide(int cid) { (void)cid; }
+void anchor_nameplates_sync(int cid,const char *name,int same_team,
+                            void *task,const void *body,unsigned short room,float height)
+{ (void)cid;(void)name;(void)same_team;(void)task;(void)body;(void)room;(void)height; }
+int anchor_player_freeze_visual_has_cube(int cid,int session,int epoch)
+{ (void)cid;(void)session;(void)epoch;return 0; }
+void anchor_player_effects_suspend(AnchorPlayerEffectState *state) { (void)state; }
+void anchor_player_effects_apply(AnchorPlayerEffectState *state,void *task,void *object,
+                                const AnchorPlayerModelRemote *remote,unsigned short room)
+{ (void)state;(void)task;(void)object;(void)remote;(void)room; }
+void anchor_remote_smoke_suspend(AnchorRemoteSmokeState *state) { (void)state; }
+void anchor_remote_smoke_apply(AnchorRemoteSmokeState *state,void *task,void *object,
+                              const AnchorPlayerModelRemote *remote,unsigned short room)
+{ (void)state;(void)task;(void)object;(void)remote;(void)room; }
 
 int anchor_collision_append_enemies(AnchorCollisionBody **bodies, int *capacity,
                                     int count)
@@ -253,6 +280,7 @@ static void reset_sound_slot(void)
     sound_slot.pending_room = D_800C7AB2;
     sound_slot.pending_remote.interaction_session = 901;
     sound_slot.pending_remote.player_epoch = 14;
+    sound_slot.pending_remote.same_team = 1;
     sound_slot.pending_remote.x = 10.5f;
     sound_slot.pending_remote.y = -20.25f;
     sound_slot.pending_remote.z = 30.75f;
@@ -260,6 +288,7 @@ static void reset_sound_slot(void)
     sound_slot.collision_body.position.y = -200.25f;
     sound_slot.collision_body.position.z = 300.75f;
     sound_slot.task = remote_task.task;
+    sound_slot.drive_sample_tick = s_interaction_tick;
 }
 
 static void assert_position(float expected_x, float expected_y, float expected_z)
@@ -346,6 +375,50 @@ static void test_local_sound_task_ownership(void)
     assert(!anchor_player_models_is_local_sound_task(owner_task.task));
 }
 
+static void test_cached_display_position(void)
+{
+    float x = 1.f, y = 2.f, z = 3.f;
+    union { unsigned int bits;float value; } malformed;
+    reset_sound_slot();
+    assert(anchor_player_models_get_display_position(37,&x,&y,&z));
+    assert(x==10.5f && y==-20.25f && z==30.75f);
+    sound_slot.collision_ready=1;
+    assert(anchor_player_models_get_display_position(37,&x,&y,&z));
+    assert(x==10.5f && y==-20.25f && z==30.75f);
+    assert(!anchor_player_models_get_display_position(37,0,&y,&z));
+    sound_slot.pending_remote.same_team=0;
+    assert(!anchor_player_models_get_display_position(37,&x,&y,&z));
+    sound_slot.pending_remote.same_team=1;
+    sound_slot.pending_room++;
+    assert(!anchor_player_models_get_display_position(37,&x,&y,&z));
+    sound_slot.pending_room=D_800C7AB2;
+    sound_slot.pending_valid=0;
+    assert(!anchor_player_models_get_display_position(37,&x,&y,&z));
+    sound_slot.pending_valid=1;
+    sound_slot.pending_remote.player_epoch=0;
+    assert(!anchor_player_models_get_display_position(37,&x,&y,&z));
+    sound_slot.pending_remote.player_epoch=14;
+    sound_slot.pending_remote.interaction_session=0;
+    assert(!anchor_player_models_get_display_position(37,&x,&y,&z));
+    sound_slot.pending_remote.interaction_session=901;
+    malformed.bits=0x7fc00000u;sound_slot.pending_remote.y=malformed.value;
+    assert(!anchor_player_models_get_display_position(37,&x,&y,&z));
+    malformed.bits=0x7f800000u;sound_slot.pending_remote.y=malformed.value;
+    assert(!anchor_player_models_get_display_position(37,&x,&y,&z));
+    sound_slot.pending_remote.y=-20.25f;
+    /* Stationary streams only keep alive every 120 frames. HUD liveness is
+     * the active renderer roster, not the short collision-drive timeout. */
+    s_interaction_tick+=240u;
+    assert(anchor_player_models_get_display_position(37,&x,&y,&z));
+    reset_sound_slot();store_pointer(remote_task.task,0x0c,0);
+    assert(!anchor_player_models_get_display_position(37,&x,&y,&z));
+    reset_sound_slot();store_pointer(owner_task.backlink,0,0);
+    assert(!anchor_player_models_get_display_position(37,&x,&y,&z));
+    reset_sound_slot();D_801FC604_5B8514=remote_task.task;
+    assert(!anchor_player_models_get_display_position(37,&x,&y,&z));
+    assert(x==10.5f && y==-20.25f && z==30.75f);
+}
+
 int main(void)
 {
     test_scripted_position_does_not_require_collision();
@@ -353,5 +426,6 @@ int main(void)
     test_identity_mismatch_is_rejected_without_writing();
     test_stale_or_unlinked_tasks_are_rejected();
     test_local_sound_task_ownership();
+    test_cached_display_position();
     return 0;
 }

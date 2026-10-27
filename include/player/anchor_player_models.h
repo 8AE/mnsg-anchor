@@ -124,6 +124,9 @@ void anchor_player_models_update(const AnchorPlayerModelRemote *remotes, int cou
 void anchor_player_models_load_resources(void);
 void anchor_player_models_reset(void);
 int anchor_player_models_get_position(int cid, float *x, float *y, float *z);
+/* Cached same-team presentation, including scripted movement without a
+ * collision body. Safe in native HUD hooks; never queries the bridge. */
+int anchor_player_models_get_display_position(int cid, float *x, float *y, float *z);
 /* Resolve a current peer's audible position without requiring gameplay
  * collision, which is intentionally absent during scripted movement. */
 int anchor_player_models_get_sound_position(int cid, int session, int epoch,

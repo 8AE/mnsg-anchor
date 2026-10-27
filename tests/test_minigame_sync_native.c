@@ -482,7 +482,7 @@ static void test_full_pool_graph(void)
 }
 static void test_committed_bridge_status(void)
 {
-    int before, queries;
+    int before, queries, members[3] = {-1,-1,-1};
     fresh();
     response_state(0,1,1,1,50,0);response_fields("\"localAck\":5,\"members\":[7,8]");
     check_role_cache=1;role_expected_ack=5;role_expected_participant=8;
@@ -494,15 +494,23 @@ static void test_committed_bridge_status(void)
     assert(anchor_minigame_sync_participant_current(1,8));
     assert(!anchor_minigame_sync_participant_current(2,8));
     assert(!anchor_minigame_sync_participant_current(1,0));
+    assert(anchor_minigame_sync_participants(1,members,3)==2);
+    assert(members[0]==7 && members[1]==8 && members[2]==-1);
+    assert(anchor_minigame_sync_participants(1,members,1)==1);
+    assert(!anchor_minigame_sync_participants(2,members,3));
+    assert(!anchor_minigame_sync_participants(1,0,3));
+    assert(!anchor_minigame_sync_participants(1,members,0));
     assert(calls==before && connection_queries==queries); /* No Python queries. */
     response_state(0,1,1,2,50,0);response_fields("\"localAck\":3,\"members\":[7]");
     anchor_minigame_sync_frame();
     assert(anchor_minigame_sync_local_ack(1)==5 && !anchor_minigame_sync_participant_current(1,8));
+    assert(anchor_minigame_sync_participants(1,members,3)==1 && members[0]==7);
     /* Invalid/stale status cannot advance receipts, and revokes target membership. */
     response_state(0,1,1,1,50,0);response_fields("\"localAck\":900,\"members\":[9]");
     anchor_minigame_sync_frame();
     assert(s_local_ack==5 && !s_participant_count && anchor_minigame_sync_local_ack(1)==0);
     assert(!anchor_minigame_sync_participant_current(1,9));
+    assert(!anchor_minigame_sync_participants(1,members,3));
     response_state(0,1,1,3,50,0);response_fields("\"localAck\":900,\"members\":[9,9]");
     anchor_minigame_sync_frame();assert(s_local_ack==5 && !s_participant_count);
     response_state(0,0,1,3,50,0);response_fields("\"localAck\":900,\"members\":[9]");
@@ -541,6 +549,7 @@ static void test_committed_bridge_status(void)
     assert(anchor_minigame_sync_local_ack(1)==900 && anchor_minigame_sync_participant_current(1,9));
     D_800C7AB2=0x40;
     assert(anchor_minigame_sync_local_ack(1)==0 && !anchor_minigame_sync_participant_current(1,9));
+    assert(!anchor_minigame_sync_participants(1,members,3));
     D_800C7AB2=0x1e0;fresh();
     assert(s_local_ack==0 && !s_participant_count);
     response_state(1,1,1,1,0,0);response_fields("\"localAck\":0,\"members\":[7,8]");
@@ -554,6 +563,7 @@ static void test_committed_bridge_status(void)
     assert(s_input_ack_count==1 && anchor_minigame_sync_local_ack(1)==0);
     anchor_minigame_sync_begin_load();
     assert(!s_local_ack && !s_participant_count && anchor_minigame_sync_local_ack(1)==0);
+    assert(!anchor_minigame_sync_participants(1,members,3));
     /* Even a same-tick bridge receipt must adopt its canonical state before
      * pending local claims can retire. A failed apply cannot commit the ACK. */
     fresh();response_state(0,1,1,1,50,0);

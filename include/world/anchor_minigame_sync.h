@@ -34,5 +34,8 @@ int anchor_minigame_sync_result(void);
 /* Last committed ready status for this bound game/visit; no bridge queries. */
 unsigned int anchor_minigame_sync_local_ack(int game);
 int anchor_minigame_sync_participant_current(int game, int cid);
+/* Copy the committed current-game roster without querying the bridge. */
+unsigned int anchor_minigame_sync_participants(int game, int *out,
+                                              unsigned int capacity);
 
 #endif
