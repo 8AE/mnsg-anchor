@@ -1729,6 +1729,94 @@ static void bridge_reply_build(unsigned int cid, unsigned int latency,
   bridge_frame_reply_ready = 1;
 }
 
+static WorldActor *entrance_elevator_fixture(unsigned int room,
+                                            unsigned int placed_index,
+                                            unsigned int route) {
+  fixture(0x1fc, 0);
+  D_800C7AB2 = room;
+  U32(definition, 4) = route;
+  anchor_world_roster_begin(room);
+  anchor_world_roster_add(placed_index, source, definition);
+  anchor_world_roster_end(placed_index + 1);
+  anchor_world_register(actor, source);
+  anchor_world_post(actor);
+  return &s_actors[placed_index];
+}
+
+static void entrance_elevator_local_case_test(unsigned int room,
+                                             unsigned int placed_index,
+                                             unsigned int route,
+                                             float lower_y, float upper_y) {
+  WorldActor *w = entrance_elevator_fixture(0x161, placed_index, route);
+  int row[ANCHOR_WORLD_WORDS], captured[ANCHOR_WORLD_WORDS];
+  unsigned int index, signature;
+  platform_addresses();
+  PTR(actor, 0xc) = platform_states[35];
+  assert(w->kind == WORLD_PLATFORM && w->variant == 15);
+  assert(capture(placed_index, row) && anchor_world_row_valid(row));
+  row[5] = (int)(upper_y * 100); /* A peer's lift has reached the upper floor. */
+
+  bridge_frame_reply_ready = 0;
+  w = entrance_elevator_fixture(room, placed_index, route);
+  signature = s_signature;
+  assert(!w->kind && w->actor == actor && w->source == source);
+  assert(anchor_world_source_index(source, &index) && index == placed_index + 1);
+  assert(!capture(placed_index, captured));
+  F32(object, 0xc) = lower_y;
+  /* Both an old ordinary offer and its join-bootstrap form remain valid
+   * wire rows, but neither may attach to the local-only lift. */
+  for (unsigned int bootstrap = 0; bootstrap < 2; ++bootstrap) {
+    row[WORLD_INSTANCE] = (int)w->instance;
+    row[WORLD_RECEIPT] = bootstrap ? WORLD_BOOTSTRAP | 7 : 0;
+    assert(anchor_world_row_valid(row));
+    bridge_reply_build(1, 0, row);
+    anchor_world_frame();
+    bridge_frame_reply_ready = 0;
+    assert(!w->have && !w->receipt && !w->retained_valid);
+    tick();
+    assert(native_calls == (int)bootstrap + 1);
+    assert(PTR(actor, 0xc) == (void *)idle && F32(object, 0xc) == lower_y);
+    assert(!capture(placed_index, captured));
+  }
+
+  /* Proximity culling/replacement cannot acquire an old shared checkpoint. */
+  U32(actor, 0x68) = 2;
+  anchor_world_post(actor);
+  assert(!w->actor && !capture(placed_index, captured));
+  U32(actor, 0x68) = 0;
+  anchor_world_register(actor, source);
+  anchor_world_post(actor);
+  assert(!w->kind && !w->have && !capture(placed_index, captured));
+  tick();
+  assert(native_calls == 3 && PTR(actor, 0xc) == (void *)idle);
+
+  /* Rebuilding this roster preserves its original index and layout hash. */
+  anchor_world_roster_begin(room);
+  anchor_world_roster_add(placed_index, source, definition);
+  anchor_world_roster_end(placed_index + 1);
+  anchor_world_register(actor, source);
+  anchor_world_post(actor);
+  assert(s_signature == signature && !s_actors[placed_index].kind);
+  assert(anchor_world_source_index(source, &index) && index == placed_index + 1);
+  assert(!capture(placed_index, captured));
+  tick();
+  assert(native_calls == 4);
+
+  /* Leaving and returning does not restore shared elevator control. */
+  w = entrance_elevator_fixture(0x161, placed_index, route);
+  assert(w->kind == WORLD_PLATFORM && w->variant == 15);
+  w = entrance_elevator_fixture(room, placed_index, route);
+  assert(!w->kind && !capture(placed_index, captured));
+  tick();
+  assert(native_calls == 1);
+}
+
+static void entrance_elevator_local_test(void) {
+  /* Actual zero-based placement indices and File44 route definitions. */
+  entrance_elevator_local_case_test(0x49, 4, 5, -104, 294);
+  entrance_elevator_local_case_test(0x1a, 14, 0, -225, -66);
+}
+
 static void pickup_reply_build(int coin_dead) {
   int n = snprintf(bridge_frame_reply, sizeof(bridge_frame_reply),
                    "{\"a\":[],\"d\":\"%02x", coin_dead ? 1 : 0);
@@ -2386,6 +2474,7 @@ int main(void) {
   bridge_cohort_rejection_test();
   bridge_scheduler_test();
   bridge_frame_bootstrap_test();
+  entrance_elevator_local_test();
   /* Coupled-controller scheduling: owner echoes carry input only, while a
    * real remote bootstrap/rebuilt child requires one native application. */
   WorldActor *crane = fixture(WORLD_CRANE_ENTITY, 0);

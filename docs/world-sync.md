@@ -44,6 +44,12 @@ exchange state. Both players need this version of the mod.
 | Doors and breakable walls | Door animation/mesh/pose checkpoints preserve local input and travel callbacks. Actual breaks of wall `0x23D` subtypes 1/3/4 propagate removal; subtype 3/4 progression flags retain the existing durable path. |
 | Existing progression objects | Save flags, dolls, keys, upgrades, relevant doors and boss rewards continue through their existing synchronization modules. |
 
+The Oedo Castle entrance elevator (room `0x001A`) and Dharumanyo's boss-entry
+elevator (room `0x0049`), both entity `0x1FC`, run locally for each player.
+Later arrivals can still ride up and activate their local entry and scene triggers.
+Remote player displays ignore their meshes and the receiving client's room geometry;
+player and enemy body contact still applies. Other elevators retain shared state.
+
 File_59 town NPCs carry 22 validated native continuations. These include gated
 arrivals and the pickpocket's approach, return, delay and escape states. An
 existing local NPC restores its own continuation; a reconstructed NPC also binds

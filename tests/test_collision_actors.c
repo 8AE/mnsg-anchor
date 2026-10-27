@@ -101,6 +101,7 @@ int main(void)
         {0x0cc, 1}, {0x34f, 0}, {0x0cb, 1}, {0x0cd, 0},
         {0x0fa, 1}, {0x0f9, 0}, {0x100, 1}, {0x101, 0},
         {0x1a6, 1}, {0x1b6, 0}, {0x323, 1}, {0x324, 0},
+        {0x1fc, 0}, /* Dharumanyo's entrance elevator is never a combat body. */
         {0x3da, 0}, {0, 0}, {0xffff, 0}, {0x0cc, 1},
     };
     unsigned int visit;

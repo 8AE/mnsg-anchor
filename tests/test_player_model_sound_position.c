@@ -57,6 +57,9 @@ static TestLinkedTask remote_task;
 static TestLinkedTask owned_child_task;
 static TestTaskStorage local_object_storage;
 static RemoteModelSlot sound_slot;
+static int collision_fixture_enabled;
+static int collision_actor_calls;
+static int collision_enemy_calls;
 
 /* remote_model_task_update is retained because the production linkage guard
  * compares its address. These inert definitions satisfy the callback's dead
@@ -69,7 +72,7 @@ void *recomp_alloc(unsigned long size)
 
 int anchor_is_connected(void)
 {
-    return 0;
+    return collision_fixture_enabled;
 }
 
 int anchor_dialog_world_paused(void)
@@ -111,6 +114,8 @@ int anchor_collision_append_enemies(AnchorCollisionBody **bodies, int *capacity,
 {
     (void)bodies;
     (void)capacity;
+    if (collision_fixture_enabled)
+        ++collision_enemy_calls;
     return count;
 }
 
@@ -119,9 +124,13 @@ int anchor_collision_move_actors(const AnchorCollisionBody *moving,
                                  const AnchorCollisionBody *actors, int count,
                                  AnchorCollisionVec3 *out)
 {
-    (void)moving;
+    if (collision_fixture_enabled)
+    {
+        assert(moving->radius == 7.0f && moving->height == 18.5f);
+        assert(count == 0);
+        ++collision_actor_calls;
+    }
     (void)actors;
-    (void)count;
     *out = *target;
     return 1;
 }
@@ -179,11 +188,8 @@ int func_8001C3E0_1CFE0(void *object, unsigned int model_ptr,
 int mnsg_array_reserve(void **data, int *capacity, int needed,
                        unsigned int element_size)
 {
-    (void)data;
-    (void)capacity;
-    (void)needed;
     (void)element_size;
-    return 0;
+    return collision_fixture_enabled && *data && *capacity >= needed;
 }
 
 int mnsg_texture_cache_find(const MnsgTextureCacheEntry *entries, int count,
@@ -419,6 +425,62 @@ static void test_cached_display_position(void)
     assert(x==10.5f && y==-20.25f && z==30.75f);
 }
 
+static void test_elevator_ascent_case(unsigned short room, float x, float z,
+                                      const float *heights, unsigned int count)
+{
+    TestTaskStorage display_object;
+    AnchorCollisionBody peers[2];
+    unsigned int i;
+
+    reset_sound_slot();
+    memset(&display_object, 0, sizeof(display_object));
+    D_800C7AB2 = sound_slot.pending_room = room;
+    D_801FC660_5B8570[0] = 70;
+    D_801FC668_5B8578[0] = 185;
+    /* Contact-free scene: the native task fixture's 32-bit pointer offsets
+     * cannot represent both playable links and +0x18 on a 64-bit host. */
+    D_801FC604_5B8514 = 0;
+    sound_slot.object = display_object.bytes;
+    sound_slot.collision_ready = 0;
+    sound_slot.pending_remote.ch = 0;
+    sound_slot.pending_remote.x = x;
+    sound_slot.pending_remote.z = z;
+    s_collision_peers = peers;
+    s_collision_peer_capacity = 2;
+    collision_fixture_enabled = 1;
+    collision_actor_calls = collision_enemy_calls = 0;
+
+    /* Exercise the production renderer's resolver with gameplay collision
+     * enabled while the observer stays downstairs. Its actor-only solver
+     * must receive every ascending pose. No world solver is linked here. */
+    for (i = 0; i < count; ++i)
+    {
+        sound_slot.pending_remote.y = heights[i];
+        assert(resolve_slot_collision(&sound_slot, &sound_slot.pending_remote, 0.1f));
+        assert(sound_slot.collision_ready);
+        assert(sound_slot.collision_body.position.y == heights[i]);
+        assert(object_position(sound_slot.object).y == heights[i]);
+        assert(object_position(sound_slot.object).x == x);
+        assert(object_position(sound_slot.object).z == z);
+    }
+    assert(collision_actor_calls == (int)i && collision_enemy_calls == (int)i);
+    collision_fixture_enabled = 0;
+    s_collision_peers = 0;
+    s_collision_peer_capacity = 0;
+}
+
+static void test_elevator_ascent_uses_actor_only_collision(void)
+{
+    static const float dharumanyo_heights[] = {
+        -104.0f, -60.0f, 25.0f, 75.0f, 294.0f, 311.0f};
+    static const float oedo_heights[] = {
+        -225.0f, -200.0f, -170.0f, -146.0f, -100.0f, -66.0f};
+    test_elevator_ascent_case(0x49, -177.0f, -5.0f, dharumanyo_heights,
+        sizeof(dharumanyo_heights) / sizeof(dharumanyo_heights[0]));
+    test_elevator_ascent_case(0x1a, -50.0f, 280.0f, oedo_heights,
+        sizeof(oedo_heights) / sizeof(oedo_heights[0]));
+}
+
 int main(void)
 {
     test_scripted_position_does_not_require_collision();
@@ -427,5 +489,6 @@ int main(void)
     test_stale_or_unlinked_tasks_are_rejected();
     test_local_sound_task_ownership();
     test_cached_display_position();
+    test_elevator_ascent_uses_actor_only_collision();
     return 0;
 }

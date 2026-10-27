@@ -648,7 +648,10 @@ void anchor_world_roster_add(unsigned int index, void *source,
     w->kind = WORLD_PLATFORM;
     w->variant = 14;
   }
-  if (w->entity == 0x1fc) {
+  /* The Oedo Castle and Dharumanyo entrance lifts follow local entry and
+   * scene triggers. Sharing their poses strands later arrivals downstairs.
+   * Keep roster identities/hashes, but leave the native cycles entirely local. */
+  if (w->entity == 0x1fc && s_room != 0x49 && s_room != 0x1a) {
     w->kind = WORLD_PLATFORM;
     w->variant = 15;
   }
