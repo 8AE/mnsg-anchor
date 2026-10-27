@@ -195,6 +195,7 @@ _arena_confirmed_sessions: "dict[int, int]" = {}
 # Transient minigame entry events are separate from boss arenas and save state.
 _minigame_local_state: "tuple[str, int, int]" = ("", 0, 0)
 _minigame_sequence: int = 0
+_minigame_yae_exit_metadata_pending: bool = False
 _minigame_events: dict = {}
 _minigame_seen: dict = {}
 _minigame_retired_sessions: "dict[int, set[int]]" = {}
@@ -346,6 +347,7 @@ MINIGAME_ROOMS: "dict[int, int]" = {
     1: 0x01E0,  # Goemon Sudden Impact
     2: 0x01E1,  # Mini Ebisumaru sweets
     3: 0x01E2,  # Sasuke High Jump
+    4: 0x0154,  # Mermaid challenge; ordinary Kegon visits are not participants.
 }
 MINIGAME_METADATA_WAIT_MS: int = 5000
 ANIMATION_RESTART_DELTA_100: int = 50
@@ -3637,9 +3639,10 @@ def dismiss_boss_invitation(cid: int, session: int, sequence: int) -> None:
 
 def _reset_minigame_invitations() -> None:
     """Called with the roster lock during connection teardown/setup."""
-    global _minigame_local_state, _minigame_sequence
+    global _minigame_local_state, _minigame_sequence, _minigame_yae_exit_metadata_pending
     _minigame_local_state = ("", 0, 0)
     _minigame_sequence = 0
+    _minigame_yae_exit_metadata_pending = False
     _minigame_events.clear()
     _minigame_seen.clear()
     _minigame_retired_sessions.clear()
@@ -3655,11 +3658,26 @@ def _prune_minigame_departure(cid: int, state: "dict | None") -> None:
     session, game = marker
     known_session = (_bounded_int(state.get("interactionSession"), 1,
                                   _POSITION_SEQUENCE_MASK, 0) if state else 0)
+    minigame = (anchor_minigame.metadata(state.get(anchor_minigame.METADATA_KEY), known_session)
+                if state else None)
     if (not state or not state.get("online", False) or
             not state.get("isSaveLoaded", False) or
             state.get("roomId") != MINIGAME_ROOMS[game] or
+            (game == 4 and minigame is not None and not minigame["t"]) or
             known_session > 0 and known_session != session):
         _minigame_departures.pop(cid, None)
+
+
+def _active_yae_metadata(peer: dict, session: int, visit: int = 0) -> "dict | None":
+    """Kegon is shared world space; only an explicit native session is a game."""
+    if not anchor_minigame.positive(session):
+        return None
+    minigame = anchor_minigame.metadata(peer.get(anchor_minigame.METADATA_KEY), session)
+    if (minigame and minigame["t"] and minigame["t"][0] == 4 and not minigame["x"] and
+            (not visit or minigame["t"][3] == visit) and
+            peer.get("currentCharacter", peer.get("character")) in (3, "3", "Yae")):
+        return minigame
+    return None
 
 
 def _invalidate_confirmed_minigame_invitation(cid: int) -> None:
@@ -3671,7 +3689,7 @@ def _invalidate_confirmed_minigame_invitation(cid: int) -> None:
 
 def set_minigame_active(game: int, visit: int = 0) -> bool:
     """Publish a native challenge entry or exit edge without durable state."""
-    global _minigame_local_state, _minigame_sequence
+    global _minigame_local_state, _minigame_sequence, _minigame_yae_exit_metadata_pending
     if (type(game) is not int or (game != 0 and game not in MINIGAME_ROOMS) or
             type(visit) is not int or not 0 <= visit <= _POSITION_SEQUENCE_MASK or
             not _connected or _client_id <= 0 or _interaction_session <= 0):
@@ -3680,8 +3698,16 @@ def set_minigame_active(game: int, visit: int = 0) -> bool:
                  _local_room_character_pending or
                  _local_room_id != MINIGAME_ROOMS[game]):
         return False
+    if game == 4 and (not _minigame.t or _minigame.game != game or
+                      _minigame.visit != visit or _minigame.t[0] != game or
+                      _local_character != "Yae" or _minigame.terminal):
+        return False
     next_state = (_team_id, game, visit if game else 0)
     if next_state == _minigame_local_state:
+        if game == 0 and _minigame_yae_exit_metadata_pending:
+            sent = update_client_state("{}")
+            _minigame_yae_exit_metadata_pending = not sent
+            return sent
         return True
     if game == 0 and _minigame_local_state[1] == 0:
         _minigame_local_state = next_state
@@ -3696,8 +3722,20 @@ def set_minigame_active(game: int, visit: int = 0) -> bool:
                   _minigame.t[0] == game else visit if game else _minigame_local_state[2])}
     if not _send_raw(packet):
         return False
+    retiring_yae = (game == 0 and _minigame_local_state[1] == 4 and
+                    _minigame.game == 4 and _minigame.visit > 0)
     _minigame_sequence = sequence
     _minigame_local_state = next_state
+    if retiring_yae:
+        # Native Mermaid cleanup can finish in Kegon without any room change
+        # or bound adapter frame to clear the session's discovery metadata.
+        with _player_states_lock:
+            _minigame.reset()
+        sent = update_client_state("{}")
+        _minigame_yae_exit_metadata_pending = not sent
+        return sent
+    if game:
+        _minigame_yae_exit_metadata_pending = False
     return True
 
 
@@ -3715,6 +3753,8 @@ def _receive_minigame_invite(packet: dict) -> bool:
         if type(packet.get(key)) is not int or not 0 < packet[key] <= _POSITION_SEQUENCE_MASK:
             return False
     if "visit" in packet and not anchor_minigame.positive(packet["visit"]):
+        return False
+    if packet["game"] == 4 and not anchor_minigame.positive(packet.get("visit")):
         return False
     cid, session, sequence = (packet[key] for key in ("clientId", "session", "seq"))
     if cid == _client_id:
@@ -3760,7 +3800,8 @@ def _receive_minigame_invite(packet: dict) -> bool:
 def _minigame_invitation_is_current(event: dict, now: int) -> bool:
     if (not _connected or not _local_save_loaded or event["team"] != _team_id or
             not event["entered"] or event["consumed"] or
-            _local_room_id == MINIGAME_ROOMS[event["game"]] or
+            (event["game"] != 4 and _local_room_id == MINIGAME_ROOMS[event["game"]]) or
+            (event["game"] == 4 and _minigame.game == 4 and _minigame.visit > 0) or
             _minigame_local_state[:2] == (_team_id, event["game"])):
         event["consumed"] = True
         return False
@@ -3773,6 +3814,8 @@ def _minigame_invitation_is_current(event: dict, now: int) -> bool:
                 peer.get("roomId") == MINIGAME_ROOMS[event["game"]] and
                 known_session == session and
                 session not in _retired_interaction_sessions.get(cid, ()))
+    if eligible and event["game"] == 4:
+        eligible = _active_yae_metadata(peer, session, event["visit"]) is not None
     if eligible:
         previous_session = _minigame_confirmed_sessions.get(cid, 0)
         if previous_session and previous_session != session:
@@ -3826,6 +3869,7 @@ def minigame_prepare_join(game: int, cid: int, session: int = 0, visit: int = 0)
 
 def update_minigame(game: int, visit: int, state_json: str = "") -> str:
     """One coalesced native exchange; socket I/O never holds the roster lock."""
+    global _minigame_yae_exit_metadata_pending
     supplied = None
     if isinstance(state_json, str) and len(state_json.encode("utf-8")) <= anchor_minigame.MAX_GRAPH_BYTES:
         try:
@@ -3833,6 +3877,7 @@ def update_minigame(game: int, visit: int, state_json: str = "") -> str:
         except (ValueError, RecursionError):
             pass
     with _player_states_lock:
+        retiring_yae = game == 0 and _minigame.game == 4 and _minigame.visit > 0
         status, packets = _minigame.update(_boss_context(), game, visit, supplied, time.monotonic())
         dirty = _minigame.advertisement_dirty
     if dirty and _connected:
@@ -3842,6 +3887,8 @@ def update_minigame(game: int, visit: int, state_json: str = "") -> str:
         with _player_states_lock:
             if sent:
                 _minigame.advertisement_dirty = False
+            if retiring_yae:
+                _minigame_yae_exit_metadata_pending = not sent
         if not sent:
             for packet in packets:
                 with _player_states_lock:
@@ -4567,8 +4614,6 @@ def _transfer_target_locked(cid: int, now_ms: int) -> "dict | None":
         return None
     if state.get("self", False) or not state.get("isSaveLoaded", False):
         return None
-    if int(state.get("collisionDisabled", 0)) != 0:
-        return None
     if int(state.get("interactionSession", 0)) <= 0:
         return None
     if int(state.get("playerEpoch", 0)) <= 0:
@@ -4582,6 +4627,14 @@ def _transfer_target_locked(cid: int, now_ms: int) -> "dict | None":
     room = state.get("roomId")
     if type(room) is not int or not 0 <= room <= TRANSFER_ROOM_MAX:
         return None
+    yae_metadata = (_active_yae_metadata(state, state["interactionSession"])
+                    if room == MINIGAME_ROOMS[4] and state.get("teamId") == _team_id else None)
+    active_yae = yae_metadata is not None
+    # Mermaid's native challenge marks its local scripted player disabled.
+    # Its explicit session still offers the canonical minigame join; ordinary
+    # scripted/disabled world targets retain the existing transfer guard.
+    if int(state.get("collisionDisabled", 0)) != 0 and not active_yae:
+        return None
     departure = _minigame_departures.get(cid)
     if (departure and room == MINIGAME_ROOMS[departure[1]] and
             int(state["interactionSession"]) == departure[0]):
@@ -4593,13 +4646,18 @@ def _transfer_target_locked(cid: int, now_ms: int) -> "dict | None":
            for value in coordinates):
         return None
 
-    return {
+    target = {
         "cid": cid,
         "room": room,
         "x": coordinates[0],
         "y": coordinates[1],
         "z": coordinates[2],
     }
+    if active_yae:
+        target["game"] = 4
+        target["session"] = state["interactionSession"]
+        target["gameVisit"] = yae_metadata["t"][3]
+    return target
 
 
 def get_transfer_target_json(cid: int) -> str:

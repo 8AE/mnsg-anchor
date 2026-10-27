@@ -88,6 +88,9 @@ static int game_for_room(unsigned short room)
     if (room == 0x1e0u) return 1;
     if (room == 0x1e1u) return 2;
     if (room == 0x1e2u) return 3;
+    /* Kegon is only a candidate: no sync exists until its native challenge
+     * adapter binds after an explicit launch or the real sign interaction. */
+    if (room == 0x154u) return 4;
     return 0;
 }
 static int online(void)

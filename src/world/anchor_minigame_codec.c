@@ -204,7 +204,7 @@ int anchor_minigame_status_decode(const char *json, AnchorMinigameStatus *out)
         s->takeover > 1 || s->result > 2 || s->state.running > 1 ||
         ((seen & 2816u) != 0 && (seen & 2816u) != 2816u)) return 0;
     if (s->owner) {
-        if (s->token[0] < 1 || s->token[0] > 3 || !s->token[1] ||
+        if (s->token[0] < 1 || s->token[0] > 4 || !s->token[1] ||
             !s->token[2] || !s->token[3] || !s->generation) return 0;
     } else if (s->ready || s->is_owner || s->generation || s->token[0] ||
                s->result || s->input_count || s->local_ack || s->full_tick ||

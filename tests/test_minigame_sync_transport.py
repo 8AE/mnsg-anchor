@@ -56,11 +56,22 @@ def goemon_state(visuals=1, core=6, **changes):
     return value
 
 
+def yae_state(actors=64, **changes):
+    """Maximum-width fields from the native Mermaid v1 scalar schema."""
+    rows = [[1, mg.MAX_INT - actors + i + 1, 1, 2, 1, 32767,
+             -33554432, -33554432, -33554432, 65535, 65535, 65535,
+             -65536, -65536, -65536] for i in range(actors)]
+    value = {"ready": 1, "running": 1,
+             "c": [1, 7, 32767, 1500, 2, 0, mg.MAX_INT, 1, 0], "a": rows}
+    value.update(changes)
+    return value
+
+
 class Peer:
     def __init__(self, cid, roster, game=1, room=10, team="blue"):
         self.cid, self.session, self.team = cid, cid * 101, team
         self.game, self.room, self.roster = game, room, roster
-        self.character = {1: "Goemon", 2: "Ebisumaru", 3: "Sasuke"}[game]
+        self.character = {1: "Goemon", 2: "Ebisumaru", 3: "Sasuke", 4: "Yae"}[game]
         self.engine = mg.MinigameTransport()
         self.engine._scope(self.context())
         self.sent = []
@@ -363,6 +374,104 @@ class MinigameSyncTests(unittest.TestCase):
         for p in terminal:
             self.assertTrue(guest.engine.receive(guest.context(), p, 101.1))
         self.assertEqual(guest.engine.terminal, 1)
+
+    def test_yae_goal_is_direct_validated_input_and_only_owner_ends_team(self):
+        host, guest = self.pair(4)
+        guest.update(state(), now=100.1, visit=17)
+        _, packets = guest.update(state(inputs=[[1, 1, 390 * 1024, 0, 0]]), now=100.2, visit=17)
+        request = packets[0]
+        self.assertEqual(request["type"], mg.INPUT_TYPE)
+        self.assertEqual(request["targetClientId"], 2)
+        self.assertNotIn("targetTeamId", request)
+        self.assertNotIn("addToQueue", request)
+        for changes in ({"s": 999}, {"visit": 18}, {"targetClientId": 3},
+                        {"targetTeamId": "red"}, {"i": [True, 1, 1]}, {"addToQueue": False}):
+            self.assertFalse(host.engine.receive(host.context(), {**request, **changes}, 100.2))
+        host.roster[1]["currentCharacter"] = "Goemon"
+        self.assertFalse(host.engine.receive(host.context(), request, 100.2))
+        host.roster[1]["currentCharacter"] = "Yae"
+        self.assertTrue(host.engine.receive(host.context(), request, 100.2))
+        self.assertFalse(host.engine.receive(host.context(), request, 100.21))
+        status, _ = host.update(state(), now=100.3)
+        self.assertEqual(status["inputs"], [[1, 101, 17, 1, 1, 390 * 1024, 0, 0]])
+        self.assertEqual(host.engine.terminal, 0)
+        # The adapter validates native goal geometry, then publishes success.
+        _, terminal = host.update(state(result=1, inputAck=[[1, 101, 17, 1]]), now=100.5)
+        for packet in terminal:
+            self.assertTrue(guest.engine.receive(guest.context(), packet, 100.5))
+        self.assertEqual(guest.engine.terminal, 1)
+
+    def test_yae_owner_personal_fall_withdraws_without_overwriting_checkpoint(self):
+        host, guest = self.pair(4)
+        guest.update(state(), now=100.1, visit=17)
+        old = copy.deepcopy(host.engine.graph)
+        withdrawn, packets = host.update(None, now=100.2)
+        self.assertEqual((withdrawn["ready"], withdrawn["result"]), (0, 0))
+        self.assertEqual(packets, [])
+        self.assertEqual(host.engine.graph, old)
+        self.assertEqual(host.roster[2][mg.METADATA_KEY]["r"], 0)
+        taken, packets = guest.update(state(phase=0, timer=0), now=103.1, visit=17)
+        self.assertEqual((taken["isOwner"], taken["generation"], taken["takeover"]), (1, 2, 1))
+        self.assertEqual(taken["result"], 0)
+        self.assertEqual(packets[0]["c"], old["c"])
+        self.assertEqual(packets[0]["a"], old["a"])
+
+    def test_yae_session_members_exclude_passive_same_room_and_wrong_character(self):
+        host, guest = self.pair(4)
+        guest.update(state(), now=100.1, visit=17)
+        passive = Peer(3, host.roster, 4, 0x154)
+        self.assertEqual(host.update(state(), now=100.2)[0]["members"], [1, 2])
+        guest.roster[1]["currentCharacter"] = "Goemon"
+        self.assertEqual(host.update(state(), now=100.3)[0]["members"], [2])
+        self.assertFalse(passive.engine.prepare_join(passive.context(), 4, 1, 101, 7, 100.3))
+
+    def test_yae_arrival_revalidates_selected_host_before_native_visit_binds(self):
+        host, guest = self.pair(4)
+        selected = guest.engine.t
+        checkpoint = copy.deepcopy(guest.engine.graph)
+        self.assertEqual(guest.engine.visit, 0)
+        self.assertTrue(guest.engine.prepare_join(guest.context(), 4, 2, 202, 7, 100.1))
+        self.assertEqual(guest.engine.t, selected)
+        self.assertEqual(guest.engine.graph, checkpoint)
+        self.assertEqual(guest.engine.visit, 0)
+        # A new host visit cannot silently replace the specific invitation
+        # accepted before the guarded world load.
+        host.update(state(), now=100.2, visit=8)
+        self.assertFalse(guest.engine.prepare_join(guest.context(), 4, 2, 202, 7, 100.2))
+        self.assertEqual(guest.engine.t, selected)
+        self.assertEqual(guest.engine.visit, 0)
+        guest.roster[2]["online"] = False
+        self.assertFalse(guest.engine.prepare_join(guest.context(), 4, 2, 202, 7, 100.3))
+        self.assertEqual(guest.engine.t, selected)
+
+    def test_yae_full_census_byte_budget_five_hz_and_correctness_floor(self):
+        roster = {}
+        host = Peer(mg.MAX_INT, roster, 4, 0x154, team="t" * 64)
+        host.session = mg.MAX_INT
+        native = yae_state()
+        _, initial = host.update(native, now=100, visit=mg.MAX_INT)
+        self.assertTrue(initial)
+        self.assertTrue(all(packet["type"] == mg.PACKET_TYPE for packet in initial))
+        self.assertLessEqual(len(initial), mg.MAX_PARTS)
+        self.assertLessEqual(sum(mg.wire_bytes(packet) for packet in initial), 32768)
+        for packet in initial:
+            self.assertLessEqual(mg.wire_bytes(packet), 4096)
+            self.assertEqual(packet["targetTeamId"], host.team)
+            self.assertNotIn("targetClientId", packet)
+            self.assertNotIn("addToQueue", packet)
+        self.assertEqual(host.update(native, now=100.19, visit=mg.MAX_INT)[1], [])
+        _, running = host.update(native, now=100.2, visit=mg.MAX_INT)
+        self.assertEqual(len(running), len(initial))
+        edge = {**native, "edge": 1}
+        self.assertEqual(host.update(edge, now=100.23, visit=mg.MAX_INT)[1], [])
+        self.assertTrue(host.update(edge, now=100.25, visit=mg.MAX_INT)[1])
+        host.engine.acks = {(mg.MAX_INT-i, mg.MAX_INT, mg.MAX_INT): mg.MAX_INT
+                            for i in range(32)}
+        acknowledged = host.engine._chunks(host.context(), mg.native_state(native), 4)
+        self.assertTrue(acknowledged)
+        self.assertLessEqual(len(acknowledged), mg.MAX_PARTS)
+        self.assertLessEqual(sum(mg.wire_bytes(packet) for packet in acknowledged), 32768)
+        self.assertTrue(all(mg.wire_bytes(packet) <= 4096 for packet in acknowledged))
 
     def test_native_shape_limits_and_metadata_order(self):
         for changes in ({"c": [False]}, {"c": [0] * 33}, {"a": [[1, 0, 0, 0x80000000]]},

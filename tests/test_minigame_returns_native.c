@@ -196,9 +196,61 @@ static void test_retained_player_return(void)
     assert(current_xyz[0]==12.25f && current_xyz[1]==-8.5f && current_xyz[2]==32766.75f);
     assert(!memcmp(current_xyz,previous_xyz,sizeof(current_xyz)) && !s_return.phase);
 }
+static void test_yae_cleanup_source_return(void)
+{
+    static unsigned char before[sizeof(system_words)];
+    for (int same_room = 0; same_room < 2; ++same_room)
+        for (int outcome = 0; outcome < 2; ++outcome) {
+            unsigned short source = same_room ? 0x154 : 0x42;
+            int character = same_room ? 1 : 2;
+            reset_yae_source(source, character);
+            set_player_position(12.25f, -8.5f, 32766.75f);
+            return_destination_calls = return_step_calls = 0;
+            D_8006B780_6C380[source * 5 + 3] = -512;
+            D_8006B780_6C380[source * 5 + 4] = 8;
+            assert(anchor_minigame_invites_debug_start_yae());
+            assert(D_8015C5D8_15D1D8[1] == 3);
+            load_room(0x154);anchor_minigame_invites_yae_started();
+            /* Success remains in the world; failure has queued Kegon's native
+             * return. The adapter invokes finished only after either cleanup. */
+            native_destination(0x154, outcome ? 9 : 0);
+            memcpy(before, D_8015C5C8_15D1C8, sizeof(before));
+            anchor_minigame_invites_return_saved();
+            anchor_minigame_invites_return_ebisumaru();
+            assert(return_destination_calls == 0);
+            anchor_minigame_invites_yae_finished();
+            assert(destination_room() == source && s_return.phase == 1);
+            assert(return_destination_calls == 1 && return_step_calls == 1);
+            assert(D_8015C5D8_15D1D8[1] == (unsigned int)character);
+            assert(return_camera == -512 && return_player_rot == 8);
+            for (unsigned int j = 0; j < sizeof(before); ++j)
+                if (!(j >= MINI_SYS_DEST_ROOM && j < MINI_SYS_DEST_ROOM + 12) &&
+                    j != 0x3add4 && j != MINI_SYS_MARKER &&
+                    !(j >= 0x3ae2c && j < 0x3ae32) &&
+                    !(j >= 0x3ae3a && j < 0x3ae40))
+                    assert(before[j] == D_8015C5C8_15D1C8[j]);
+            load_room(source);set_linked_player();
+            assert(anchor_minigame_invites_required_character() == -1);
+            set_player_position(100.f, 100.f, 100.f);
+            anchor_minigame_invites_restore_spawn();
+            float actual[3];memcpy(actual, player_object + 8, sizeof(actual));
+            assert(actual[0] == 12.25f && actual[1] == -8.5f && actual[2] == 32766.75f);
+            assert(!s_return.phase && D_8015C5D8_15D1D8[1] == (unsigned int)character);
+            set_player_position(10.f, 10.f, 10.f);
+            anchor_minigame_invites_restore_spawn();
+            assert(*(float *)(player_object + 8) == 10.f);
+        }
+    reset_yae_source(0x154, 3);
+    anchor_minigame_invites_yae_started();
+    native_destination(0x154, 9);return_destination_calls = return_step_calls = 0;
+    anchor_minigame_invites_yae_finished();
+    assert(destination_room() == 0x154 && return_destination_calls == 0);
+    assert(!s_yae_active && !s_source_valid);
+}
+
 int main(void)
 {
-    invites_regression_main();test_full_return_dispatch();test_return_fields();test_return_guards();test_retained_player_return();
+    invites_regression_main();test_full_return_dispatch();test_return_fields();test_return_guards();test_retained_player_return();test_yae_cleanup_source_return();
     puts("minigame native returns: full warp request/order, preloader character seed, cleared camera overrides, exact XYZ and provenance guards passed");
     return 0;
 }

@@ -4,6 +4,9 @@
 #include <string.h>
 #include "world/anchor_minigame_invites.h"
 #include "core/anchor_dialog.h"
+#ifndef DEBUG_BUTTON_ENABLED
+#define DEBUG_BUTTON_ENABLED 1
+#endif
 
 unsigned short D_800C7AB2;
 unsigned int D_8015C5D8_15D1D8[12];
@@ -13,7 +16,23 @@ void *D_801FC604_5B8514 = player_task;
 void *D_801FC60C_5B851C = player_object;
 static unsigned int system_words[0xd0000u / 4u];
 unsigned char *D_8015C5C8_15D1C8 = (unsigned char *)system_words;
-static int sync_game, sync_returning;
+static int sync_game, sync_returning, sync_begins, sync_finishes, sync_retires;
+void anchor_minigame_yae_direct_load_begin(void) { }
+void anchor_minigame_yae_direct_load_cancel(void) { }
+char *anchor_get_transfer_target_json(unsigned int cid)
+{
+    if(cid!=2) return 0;
+    const char *json="{\"cid\":2,\"room\":340,\"game\":4,\"session\":202,\"gameVisit\":17}";
+    char *copy=malloc(strlen(json)+1);assert(copy);strcpy(copy,json);return copy;
+}
+void anchor_minigame_sync_begin_load(void) { ++sync_begins; sync_game = 0; }
+void anchor_minigame_sync_finish_load(void) { ++sync_finishes; }
+char *anchor_update_minigame(int game, int visit, const char *state_json)
+{
+    assert(game == 0 && visit == 0 && !strcmp(state_json, "null"));
+    ++sync_retires;
+    return 0;
+}
 static int return_destination_calls, return_step_calls;
 static short return_camera, return_player_rot;
 void func_8000607C_6C7C(unsigned short room, short x, short y, short z,
@@ -48,6 +67,8 @@ static int warps, warp_ready = 1, warp_room, warp_x, warp_y, warp_z;
 static int prepared_calls, prepared_game, prepared_cid;
 static int prepared_session, prepared_visit, reject_explicit;
 static int modal;
+int func_800240DC_24CDC(unsigned short flag) { assert(flag==0x15 || flag==0x1e);return flag==0x15; }
+int func_8003F1D8_3FDD8(void) { return 0; }
 static AnchorDialogResult choice = ANCHOR_DIALOG_PENDING;
 static AnchorDialogOwner owner = ANCHOR_DIALOG_OWNER_NONE;
 static const char *packet;
@@ -321,6 +342,123 @@ static void test_player_list_source_entry(void)
         assert(anchor_minigame_invites_character_motion_ready(rooms[i]));
         load_room(0x40);assert(D_8015C5D8_15D1D8[1]==3 && player_task[0x60]==3);
     }
+}
+
+static void reset_yae_source(unsigned short room, int character)
+{
+    loaded = 0; anchor_minigame_invites_update(); loaded = 1;
+    connected = live_world = prompt_safe = warp_ready = 1;
+    reject_explicit = modal = boss_active = sign_pending = 0;
+    packet = 0; owner = ANCHOR_DIALOG_OWNER_NONE;
+    player_work[0x69] = 0;
+    player_task[0x60] = (unsigned char)character;
+    D_8015C5D8_15D1D8[1] = (unsigned int)character;
+    load_room(room);
+    set_player_position(17.25f, -81.5f, 328.75f);
+}
+
+static void test_yae_scoped_entry(void)
+{
+    unsigned short source;
+    float xyz[3];
+    reset_yae_source(0x154, 2);
+    assert(!anchor_minigame_invites_is_room(0x154));
+    assert(anchor_minigame_invites_required_character() == -1);
+    assert(published_game == 0 && !anchor_minigame_invites_yae_requested());
+    assert(anchor_minigame_invites_reporting_character(0x154) == -1);
+    /* Ordinary teleports and player-list follows keep the exact requested
+     * waterfall position and do not create a challenge or return waypoint. */
+    assert(anchor_minigame_invites_transfer_to_room(0x154, 1, -2, 3));
+    assert(warp_x == 1 && warp_y == -2 && warp_z == 3);
+    assert(anchor_minigame_invites_transfer_to_client(0x154, 4, -5, 6, 2));
+    assert(warp_x == 4 && warp_y == -5 && warp_z == 6);
+    assert(!anchor_minigame_invites_source_waypoint(&source, xyz));
+    warp_ready = 0;
+    assert(!anchor_minigame_invites_debug_start_yae());
+    assert(D_8015C5D8_15D1D8[1] == 2);
+    assert(!anchor_minigame_invites_source_waypoint(&source, xyz));
+    warp_ready = 1;
+    assert(anchor_minigame_invites_debug_start_yae());
+    assert(prepared_game == 4 && prepared_cid == 0);
+    assert(warp_room == 0x154 && warp_x == 29 && warp_y == -320 && warp_z == -544);
+    /* Model-bank selection occurs before the resource-return/constructor. */
+    assert(D_8015C5D8_15D1D8[1] == 3 && player_task[0x60] == 2);
+    assert(anchor_minigame_invites_source_waypoint(&source, xyz));
+    assert(source == 0x154 && xyz[0] == 17.25f && xyz[1] == -81.5f);
+    assert(!anchor_minigame_invites_yae_requested());
+    assert(!anchor_minigame_invites_debug_start_yae()); /* Preserve the accepted load. */
+    load_room(0x154);
+    assert(anchor_minigame_invites_yae_requested());
+    assert(anchor_minigame_invites_required_character() == 3);
+    assert(player_task[0x60] == 3 && published_game == 0);
+    int prior_begins = sync_begins, prior_finishes = sync_finishes;
+    anchor_minigame_invites_yae_started();
+    assert(sync_begins == prior_begins + 1 && sync_finishes == prior_finishes + 1);
+    assert(!anchor_minigame_invites_yae_requested());
+    anchor_minigame_invites_update();
+    assert(published_game == 4);
+    anchor_minigame_invites_yae_started();
+    assert(sync_begins == prior_begins + 1); /* Duplicate native observation. */
+    int before = return_destination_calls;
+    anchor_minigame_invites_yae_finished();
+    assert(return_destination_calls == before + 1 && D_8015C5D8_15D1D8[1] == 2);
+    assert(!anchor_minigame_invites_yae_requested());
+    anchor_minigame_invites_yae_finished();
+    assert(return_destination_calls == before + 1);
+    load_room(0x154);
+    assert(anchor_minigame_invites_required_character() == -1 && published_game == 0);
+    assert(player_task[0x60] == 2 && D_8015C5D8_15D1D8[1] == 2);
+
+    /* A real sign start is allowed without a debug request, and repeated
+     * challenges in the same room publish distinct visits. */
+    reset_yae_source(0x154, 3);
+    before = return_destination_calls;
+    anchor_minigame_invites_yae_started();anchor_minigame_invites_update();
+    int first_visit = published_visit;
+    assert(published_game == 4 && !anchor_minigame_invites_source_waypoint(&source, xyz));
+    anchor_minigame_invites_yae_finished();anchor_minigame_invites_update();
+    assert(published_game == 0 && return_destination_calls == before);
+    assert(anchor_minigame_invites_required_character() == -1);
+    anchor_minigame_invites_yae_started();anchor_minigame_invites_update();
+    assert(published_game == 4 && published_visit > first_visit);
+    anchor_minigame_invites_yae_finished();
+
+    /* Passive Kegon observers can accept the event and retain their original
+     * location while the exact accepted host is temporarily unready. */
+    reset_yae_source(0x154, 1);
+    begin(4);assert(!strcmp(shown_game, "Yae Mermaid Training"));
+    before = warps;choice = ANCHOR_DIALOG_YES;reject_explicit = 1;
+    anchor_minigame_invites_update();
+    assert(warps == before && anchor_minigame_invites_active());
+    assert(prepared_game == 4 && prepared_cid == 2 && prepared_session == 202 && prepared_visit == 17);
+    assert(D_8015C5D8_15D1D8[1] == 1 && anchor_minigame_invites_required_character() == -1);
+    reject_explicit = 0;anchor_minigame_invites_update();
+    assert(warps == before + 1 && !anchor_minigame_invites_active());
+    assert(D_8015C5D8_15D1D8[1] == 3 && player_task[0x60] == 1);
+    load_room(0x154);anchor_minigame_invites_yae_started();
+    anchor_minigame_invites_yae_finished();load_room(0x154);
+    assert(player_task[0x60] == 1 && anchor_minigame_invites_required_character() == -1);
+
+    reset_yae_source(0x42, 0);reject_explicit = 1;
+    assert(!anchor_minigame_invites_transfer_to_yae_client(2));
+    assert(prepared_game == 4 && prepared_cid == 2);
+    reject_explicit = 0;
+    assert(anchor_minigame_invites_transfer_to_yae_client(2));
+    load_room(0x154);assert(anchor_minigame_invites_yae_requested());
+    /* A different load cancels the launch instead of starting it later. */
+    load_room(0x155);
+    assert(!anchor_minigame_invites_yae_requested() && anchor_minigame_invites_required_character() == -1);
+    assert(D_8015C5D8_15D1D8[1] == 0);
+
+    reset_yae_source(0x42, 2);
+    assert(anchor_minigame_invites_debug_start_yae());load_room(0x154);
+    before = return_destination_calls;
+    for (int frame = 0; frame < 601; ++frame) anchor_minigame_invites_update();
+    assert(anchor_minigame_invites_yae_cancel_pending());
+    anchor_minigame_invites_yae_finished();
+    assert(!anchor_minigame_invites_yae_requested() && return_destination_calls == before + 1);
+    assert(D_8015C5D8_15D1D8[1] == 2);
+    reset_yae_source(0x42, 3);
 }
 
 int main(void)
@@ -635,6 +773,7 @@ int main(void)
 
     test_source_waypoint();
     test_player_list_source_entry();
+    test_yae_scoped_entry();
     puts("minigame invitation coordinator: room edges, fixed destinations and source waypoints passed");
     return 0;
 }

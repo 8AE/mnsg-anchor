@@ -16,7 +16,7 @@ PACKET_TYPE = "MNSG_MINIGAME_SYNC"
 ACTION_TYPE = "MNSG_MINIGAME_ACTION"
 INPUT_TYPE = "MNSG_MINIGAME_INPUT"
 RESULT_TYPE = "MNSG_MINIGAME_RESULT"
-ROOMS = {1: 0x1e0, 2: 0x1e1, 3: 0x1e2}
+ROOMS = {1: 0x1e0, 2: 0x1e1, 3: 0x1e2, 4: 0x154}
 MAX_INT = 0x7fffffff
 PACKET_BYTES = 4096
 MAX_GRAPH_BYTES = 32 * 1024
@@ -278,6 +278,7 @@ class MinigameTransport:
         return p if (p and p.get("online") and p.get("isSaveLoaded") and
                      p.get("teamId") == ctx["team"] and
                      p.get("interactionSession") == session and
+                     (game != 4 or p.get("currentCharacter", p.get("character")) in (3, "3", "Yae")) and
                      p.get("roomId", p.get("currentRoomId")) == ROOMS[game]) else None
 
     def _members(self, ctx, t):
@@ -312,6 +313,8 @@ class MinigameTransport:
                     continue
                 character = peer.get("currentCharacter", peer.get("character"))
             if self.game == 2 and character not in (1, "1", "Ebisumaru"):
+                continue
+            if self.game == 4 and character not in (3, "3", "Yae"):
                 continue
             eligible.append(cid)
         return sorted(eligible)[:MAX_INPUT_MEMBERS]
@@ -683,6 +686,11 @@ class MinigameTransport:
                 not self.result_pending and not self.result_sent and
                 not (state and state["result"])):
             present = self._peer(ctx, self.o[0], self.o[1], game)
+            if game == 4 and present:
+                advertised = metadata(present.get(METADATA_KEY), self.o[1])
+                if (not advertised or not advertised["r"] or
+                        advertised["t"] != list(self.t) or advertised["x"]):
+                    present = None
             stale = now - self.received >= LEASE
             if not present or stale:
                 if self.missing_since is None:

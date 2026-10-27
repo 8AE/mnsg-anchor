@@ -94,6 +94,10 @@ static const AnchorMinigameAdapter adapter = {
     1, reset_native, capture_native, validate_native, apply_native,
     role_native, input_native, return_native, result_native
 };
+static const AnchorMinigameAdapter yae_adapter = {
+    4, reset_native, capture_native, validate_native, apply_native,
+    role_native, input_native, return_native, result_native
+};
 #if defined(DEBUG_BUTTON_ENABLED) && DEBUG_BUTTON_ENABLED
 static const AnchorMinigameAdapter ebi_adapter = {
     2, reset_native, capture_native, validate_native, apply_native,
@@ -683,8 +687,40 @@ static void test_ebi_diagnostics(void)
     anchor_minigame_sync_finish_load();assert(anchor_minigame_sync_bind(&adapter));
 }
 #endif
+static void test_yae_candidate_scope_and_codec(void)
+{
+    AnchorMinigameStatus status;
+    int before = calls;
+    anchor_minigame_sync_begin_load();D_800C7AB2 = 0x154;
+    anchor_minigame_sync_finish_load();expected_game = 4;
+    assert(anchor_minigame_sync_game() == 0);
+    anchor_minigame_sync_frame();assert(calls == before); /* Passive waterfall. */
+    assert(!anchor_minigame_sync_bind(&adapter));
+    assert(anchor_minigame_sync_bind(&yae_adapter));
+    assert(anchor_minigame_sync_game() == 4);
+    native_value = 10;capture_ok = capture_ready = 1;capture_inputs = invalid_generic = 0;
+    strcpy(response, "{\"ready\":1,\"owner\":7,\"isOwner\":1,\"token\":[4,7,1,1],"
+        "\"generation\":1,\"tick\":1,\"result\":0,\"inputs\":[]}");
+    assert(anchor_minigame_status_decode(response, &status) && status.token[0] == 4);
+    anchor_minigame_sync_frame();
+    assert(calls == before + 1 && anchor_minigame_sync_native_allowed(4));
+    unsigned int visit = anchor_minigame_sync_visit();
+    anchor_minigame_sync_begin_load();
+    assert(!anchor_minigame_sync_game());
+    anchor_minigame_sync_frame();assert(calls == before + 1);
+    /* A same-room sign restart gets another lifecycle without an old token. */
+    anchor_minigame_sync_finish_load();
+    assert(anchor_minigame_sync_visit() > visit && anchor_minigame_sync_bind(&yae_adapter));
+    strcpy(response, "{\"ready\":1,\"owner\":7,\"isOwner\":1,\"token\":[5,7,1,1],"
+        "\"generation\":1,\"tick\":1,\"result\":0}");
+    assert(!anchor_minigame_status_decode(response, &status));
+    anchor_minigame_sync_begin_load();D_800C7AB2 = 0x1e0;expected_game = 1;
+    anchor_minigame_sync_finish_load();
+}
+
 int main(void)
 {
+    test_yae_candidate_scope_and_codec();
     test_codec(); test_bridge_codec(); test_sync(); test_initial_owner_and_deferred_input();
     test_source_tick_codec(); test_source_tick_propagation();
     test_full_pool_graph();

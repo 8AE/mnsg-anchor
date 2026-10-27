@@ -54,6 +54,13 @@ int main(void)
     assert(func_801DD50C_59941C(s_task) == 1);
     assert(s_task[0x60] == 2 && s_swap_calls == 0 && s_skin_clears == 0);
 
+    /* Mermaid sessions force Yae even when her recruitment flag is absent. */
+    s_required = 3;s_task[0x60] = 3;D_8015C5D8_15D1D8[1] = 3;
+    anchor_set_current_character_if_needed();
+    assert(D_8015C5D8_15D1D8[1] == 3 && read_save_word(0x68) == 3);
+    assert(func_801DD50C_59941C(s_task) == 1 && s_task[0x60] == 3);
+    assert(s_swap_calls == 0 && s_skin_clears == 0);
+
     s_required = -1;
     anchor_set_current_character_if_needed();
     assert(D_8015C5D8_15D1D8[1] == 0);

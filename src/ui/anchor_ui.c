@@ -548,7 +548,7 @@ static void plist_clear_pending_transfer(void)
 static int plist_parse_transfer_target(const char *json,
                                        unsigned int requested_cid,
                                        unsigned short *room,
-                                       short *x, short *y, short *z)
+                                       short *x, short *y, short *z, int *game)
 {
     unsigned int parsed_cid;
     unsigned short parsed_room;
@@ -556,14 +556,23 @@ static int plist_parse_transfer_target(const char *json,
     int parsed_y;
     int parsed_z;
 
-    if (!json || !room || !x || !y || !z || !requested_cid ||
+    if (!json || !room || !x || !y || !z || !game || !requested_cid ||
         !mnsg_json_get_u32(json, "cid", &parsed_cid) ||
         parsed_cid != requested_cid ||
         !mnsg_json_get_u16(json, "room", &parsed_room) ||
         parsed_room > TRANSFER_MAX_ROOM_ID)
         return 0;
 
-    if (anchor_minigame_invites_is_room(parsed_room))
+    *game = 0;
+    if (mnsg_json_find_value(json, "game"))
+    {
+        if (!mnsg_json_get_s32(json, "game", game) ||
+            *game != ANCHOR_MINIGAME_YAE || parsed_room != 0x0154u)
+            return 0;
+    }
+
+    if (*game == ANCHOR_MINIGAME_YAE ||
+        anchor_minigame_invites_is_room(parsed_room))
     {
         *room = parsed_room;
         *x = *y = *z = 0;
@@ -596,6 +605,7 @@ static int plist_update_pending_transfer(void)
     short z;
     char *json;
     int valid;
+    int game;
 
     if (s_requested_transfer_cid)
     {
@@ -633,16 +643,18 @@ static int plist_update_pending_transfer(void)
     s_transfer_retry_timer = TRANSFER_RETRY_FRAMES;
 
     json = anchor_get_transfer_target_json(cid);
-    valid = plist_parse_transfer_target(json, cid, &room, &x, &y, &z);
+    valid = plist_parse_transfer_target(json, cid, &room, &x, &y, &z, &game);
     if (json)
         recomp_free(json);
     if (!valid || cid > 0x7fffffffu)
         return 0;
 
-    if (!anchor_minigame_invites_transfer_to_client(room, x, y, z, (int)cid))
+    if (!(game == ANCHOR_MINIGAME_YAE
+              ? anchor_minigame_invites_transfer_to_yae_client((int)cid)
+              : anchor_minigame_invites_transfer_to_client(room, x, y, z, (int)cid)))
         return 0;
 
-    if (anchor_minigame_invites_is_room(room))
+    if (game == ANCHOR_MINIGAME_YAE || anchor_minigame_invites_is_room(room))
         recomp_printf("[Anchor] Transferring to client %u: minigame room=0x%04X\n",
                       cid, (unsigned int)room);
     else
