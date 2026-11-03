@@ -119,3 +119,81 @@ unsigned int anchor_nameplate_bitmap_build(
         }
     return text_width;
 }
+
+unsigned int anchor_nameplate_health_bitmap_build(
+    unsigned short *out, unsigned int out_pixels, int health,
+    const unsigned char *heart_rgba, const unsigned char *glyphs,
+    const unsigned char *widths)
+{
+    unsigned char text[3];
+    unsigned int count = 0, value, cursor = 3u, text_width = 0, i, x, y;
+    if (!out || out_pixels < ANCHOR_NAMEPLATE_HEALTH_PIXELS)
+        return 0;
+    for (i = 0; i < ANCHOR_NAMEPLATE_HEALTH_PIXELS; ++i)
+        out[i] = 0;
+    if (health < 0 || health > 255 || !heart_rgba || !glyphs || !widths)
+        return 0;
+    value = (unsigned int)health;
+    if (value >= 100u)
+        text[count++] = (unsigned char)('0' + value / 100u);
+    if (value >= 10u)
+        text[count++] = (unsigned char)('0' + (value / 10u) % 10u);
+    text[count++] = (unsigned char)('0' + value % 10u);
+    for (i = 0; i < count; ++i)
+        text_width += glyph_width(widths, text[i]);
+    text_width += (count - 1u) * 2u;
+    /* Three widest digits, two 2px gaps, icon gap, 8px icon and 6px
+     * padding fit within the 64px strip. The native value stays an integer. */
+    for (i = 0; i < count; ++i)
+    {
+        unsigned int width = glyph_width(widths, text[i]);
+        for (y = 0; y < GLYPH_HEIGHT; ++y)
+            for (x = 0; x < width; ++x)
+                if (glyph_shade(glyphs, text[i], x, y))
+                    out[(y + 2u) * ANCHOR_NAMEPLATE_HEALTH_WIDTH +
+                        cursor + x] = 0xf801u;
+        cursor += width + 2u;
+    }
+    for (y = 1; y < ANCHOR_NAMEPLATE_HEALTH_HEIGHT - 1u; ++y)
+        for (x = 1; x < ANCHOR_NAMEPLATE_HEALTH_WIDTH - 1u; ++x)
+        {
+            unsigned int dst = y * ANCHOR_NAMEPLATE_HEALTH_WIDTH + x;
+            if (!out[dst] &&
+                (out[dst - 1u] == 0xf801u || out[dst + 1u] == 0xf801u ||
+                 out[dst - ANCHOR_NAMEPLATE_HEALTH_WIDTH] == 0xf801u ||
+                 out[dst + ANCHOR_NAMEPLATE_HEALTH_WIDTH] == 0xf801u))
+                out[dst] = 0x0001u;
+        }
+    cursor = 3u + text_width + 2u;
+    for (y = 0; y < 8u; ++y)
+        for (x = 0; x < 8u; ++x)
+        {
+            unsigned int src = (y * 8u + x) * 4u;
+            out[(y + 4u) * ANCHOR_NAMEPLATE_HEALTH_WIDTH + cursor + x] =
+                (unsigned short)(((heart_rgba[src] >> 3) << 11) |
+                                 ((heart_rgba[src + 1u] >> 3) << 6) |
+                                 ((heart_rgba[src + 2u] >> 3) << 1) |
+                                 (heart_rgba[src + 3u] >= 128u));
+        }
+    return 3u + text_width + 2u + 8u + 3u;
+}
+
+void anchor_nameplate_layout(unsigned int name_width,
+                             unsigned int health_width,
+                             AnchorNameplateLayout *layout)
+{
+    unsigned int box_left = (ANCHOR_NAMEPLATE_TEXTURE_WIDTH - name_width) / 2u -
+                            NAMEPLATE_BOX_PADDING;
+    unsigned int box_width = name_width + 2u * NAMEPLATE_BOX_PADDING;
+    int group_left;
+    layout->name_shift = 0;
+    layout->suffix_left = layout->backdrop_left = layout->backdrop_right = 0;
+    layout->backdrop_s = (short)((box_left + 1u) * 32u);
+    if (!health_width)
+        return;
+    group_left = -(int)((box_width + 4u + health_width) / 2u);
+    layout->name_shift = (short)(group_left + 128 - (int)box_left);
+    layout->backdrop_left = (short)(group_left + (int)box_width);
+    layout->suffix_left = (short)(layout->backdrop_left + 4);
+    layout->backdrop_right = (short)(layout->suffix_left + (int)health_width);
+}

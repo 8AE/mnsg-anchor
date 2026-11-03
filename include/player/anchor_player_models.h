@@ -101,6 +101,8 @@ typedef struct AnchorPlayerModelRemote
     int player_epoch;
     int interaction_session;
     int same_team;
+    /* Current health in half-hearts; -1 when the sender has no sample. */
+    int health;
     char name[32];
 } AnchorPlayerModelRemote;
 

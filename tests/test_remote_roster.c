@@ -145,6 +145,30 @@ static void escaped_names_and_legacy_defaults(void)
     assert(parse_lobby_positions(malformed) == 0);
 }
 
+static void health_samples_are_bounded_and_never_inherit(void)
+{
+    char samples[] = "[{\"cid\":1,\"h\":0},{\"cid\":2,\"h\":9},"
+                     "{\"cid\":3,\"h\":255},{\"cid\":4,\"h\":256},"
+                     "{\"cid\":5,\"h\":-2},{\"cid\":6,\"h\":true},"
+                     "{\"cid\":7,\"h\":9.0},{\"cid\":8,\"h\":\"9\"},"
+                     "{\"cid\":9,\"h\":2147483648},{\"cid\":10}]";
+    char legacy[] = "[{\"cid\":1},{\"cid\":2,\"h\":10}]";
+    RemotePlayer displayed;
+    int i;
+    assert(parse_lobby_positions(samples) == 10);
+    assert(s_remote_players[0].health == 0);
+    assert(s_remote_players[1].health == 9);
+    assert(s_remote_players[2].health == 255);
+    for (i = 3; i < 10; ++i)
+        assert(s_remote_players[i].health == -1);
+    /* A newer roster cannot leak the previous occupant or next row's health. */
+    assert(parse_lobby_positions(legacy) == 2);
+    assert(s_remote_players[0].health == -1);
+    assert(s_remote_players[1].health == 10);
+    smooth_remote_player(&s_remote_players[1], &displayed);
+    assert(displayed.health == 10);
+}
+
 static RemotePlayer frozen_remote(int cid)
 {
     RemotePlayer remote = {0};
@@ -265,6 +289,7 @@ int main(void)
 {
     large_roster_and_reuse();
     escaped_names_and_legacy_defaults();
+    health_samples_are_bounded_and_never_inherit();
     frozen_endpoint_follows_between_packets();
     locally_owned_cube_tracks_every_frame();
     frozen_lifecycle_resets_pose();

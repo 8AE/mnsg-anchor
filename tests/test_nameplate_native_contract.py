@@ -17,7 +17,7 @@ class NativeNameplateContractTests(unittest.TestCase):
     def test_ia8_strip_fits_tmem_and_quad_uv(self):
         words = display_words()
         commands = list(zip(words[::2], words[1::2]))
-        self.assertEqual(len(commands), 20)
+        self.assertEqual(len(commands), 33)
         load_image = next(c for c in commands if c[0] >> 24 == 0xFD)
         load_block = next(c for c in commands if c[0] >> 24 == 0xF3)
         set_tile = [c for c in commands if c[0] >> 24 == 0xF5]
@@ -35,11 +35,39 @@ class NativeNameplateContractTests(unittest.TestCase):
         self.assertEqual((set_tile[1][0] >> 9) & 0x1FF, 32)
         self.assertEqual(((tile_size[1] >> 12) & 0xFFF) // 4 + 1, 256)
         self.assertEqual((tile_size[1] & 0xFFF) // 4 + 1, 16)
-        self.assertEqual(vertex[1], 0x09001000)
+        self.assertEqual(vertex[1], 0x09001800)
         self.assertIn((0xFC129A25, 0xFF37FFFF), commands)
         self.assertIn((0xBA000C02, 0x00000000), commands)
-        self.assertIn("#define NAMEPLATE_MODEL 0x49001040u", SOURCE)
-        self.assertIn("sizeof(NameplateBankData) == 0x1150", SOURCE)
+        self.assertIn("#define NAMEPLATE_MODEL 0x490018c0u", SOURCE)
+        self.assertIn("sizeof(NameplateBankData) == 0x1a38", SOURCE)
+
+    def test_health_tile_fits_tmem_and_keeps_its_native_color(self):
+        words = display_words()
+        commands = list(zip(words[::2], words[1::2]))
+        image = [c for c in commands if c[0] >> 24 == 0xFD][1]
+        block = [c for c in commands if c[0] >> 24 == 0xF3][1]
+        render_tile = [c for c in commands if c[0] >> 24 == 0xF5][3]
+        tile_size = [c for c in commands if c[0] >> 24 == 0xF2][1]
+        self.assertEqual(image, (0xFD100000, 0x09001000))
+        self.assertEqual((image[0] >> 21) & 7, 0)  # RGBA
+        self.assertEqual((image[0] >> 19) & 3, 2)  # RGBA16
+        width, height, bytes_per_texel = 64, 16, 2
+        words_per_row = (width * bytes_per_texel + 7) // 8
+        # libultra CALC_DXT: round 2^11 up to a whole-word row step.
+        expected_dxt = ((1 << 11) + words_per_row - 1) // words_per_row
+        self.assertEqual((((block[1] >> 12) & 0xFFF) + 1) * 2,
+                         width * height * bytes_per_texel)
+        self.assertEqual(block[1] & 0xFFF, expected_dxt)
+        self.assertEqual((render_tile[0] >> 9) & 0x1FF, words_per_row)
+        self.assertEqual(((tile_size[1] >> 12) & 0xFFF) // 4 + 1, 64)
+        self.assertEqual((tile_size[1] & 0xFFF) // 4 + 1, 16)
+        suffix = commands.index(image)
+        white = commands.index((0xFB000000, 0xFFFFFFFF))
+        self.assertGreater(white, suffix)
+        self.assertLess(white, commands.index((0x0400103F, 0x09001880)))
+        self.assertIn("s_heart_loaded ? s_heart_rgba : 0", SOURCE)
+        self.assertIn("slot->health != health", SOURCE)
+        self.assertIn("data->display[38] = health_width ?", SOURCE)
 
     def test_nameplate_is_native_and_bank_owned(self):
         self.assertNotIn("recompui_", SOURCE)

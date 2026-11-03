@@ -380,7 +380,7 @@ _MOVEMENT_STATE_FIELDS: "tuple[str, ...]" = (
     "rotVelX", "rotVelY", "rotVelZ", "animStep100", "hasAnimStep",
     "collisionDisabled",
     "driveX", "driveZ", "playerEpoch", "interactionSession",
-    "jetVelocity100",
+    "jetVelocity100", "playerHealth",
 )
 JET_VELOCITY_100_UNAVAILABLE: int = -32768
 JET_VELOCITY_100_MIN: int = -10000
@@ -432,6 +432,53 @@ def _jet_velocity_100(value: object) -> int:
     return (value if type(value) is int and
             JET_VELOCITY_100_MIN <= value <= JET_VELOCITY_100_MAX
             else JET_VELOCITY_100_UNAVAILABLE)
+
+
+def _player_health(value: object) -> int:
+    """Read optional half-heart health without coercing untrusted types."""
+    return value if type(value) is int and 0 <= value <= 255 else -1
+
+
+def _health_metadata_context(
+    cid: int, state: dict, payload: dict
+) -> "tuple[int, int] | None":
+    """Keep a metadata identity fence independent of older hot movement."""
+    expected_session, expected_epoch = state.get("_healthContext", (0, 0))
+    current_session = state.get("interactionSession", 0)
+    session = payload.get("interactionSession")
+    valid_session = type(session) is int and 0 < session <= _POSITION_SEQUENCE_MASK
+    if valid_session and session not in _retired_interaction_sessions.get(cid, ()):
+        if session != current_session:
+            if session != expected_session:
+                expected_session, expected_epoch = session, 0
+        elif expected_session in (0, session):
+            expected_session = session
+    epoch = payload.get("playerEpoch")
+    sample_session = session if valid_session else current_session
+    if (type(epoch) is int and 0 < epoch <= _POSITION_SEQUENCE_MASK and
+            (not expected_session or sample_session == expected_session) and
+            epoch >= state.get("playerEpoch", 0)):
+        # Epoch counters belong to a connection; never apply an unbound
+        # predecessor's minimum to a successor whose counter starts at one.
+        if (not expected_session and type(current_session) is int and
+                0 < current_session <= _POSITION_SEQUENCE_MASK):
+            expected_session = current_session
+        if expected_session:
+            expected_epoch = max(expected_epoch, epoch)
+    return ((expected_session, expected_epoch)
+            if expected_session or expected_epoch else None)
+
+
+def _health_sample_matches_context(cid: int, state: dict, payload: dict) -> bool:
+    expected_session, expected_epoch = state.get("_healthContext", (0, 0))
+    session, epoch = (int(payload.get("interactionSession", 0)),
+                      int(payload.get("playerEpoch", 0)))
+    if expected_session in _retired_interaction_sessions.get(cid, ()):
+        # A genuinely accepted successor retires a prior metadata identity.
+        expected_session, expected_epoch = session, 0
+        state["_healthContext"] = (session, 0)
+    return ((not expected_session or session == expected_session) and
+            epoch >= expected_epoch)
 
 
 def _jet_context_changed(state: dict, payload: dict) -> bool:
@@ -601,6 +648,11 @@ def _merge_client_state(
         }
         _player_states[cid] = state
 
+    if not enforce_movement_order:
+        health_context = _health_metadata_context(cid, state, payload)
+        if health_context is not None:
+            state["_healthContext"] = health_context
+
     if enforce_movement_order:
         session = int(payload.get("interactionSession", 0))
         epoch = int(payload.get("playerEpoch", 0))
@@ -624,6 +676,11 @@ def _merge_client_state(
 
     if _jet_context_changed(state, payload):
         state.pop("jetVelocity100", None)
+        if (enforce_movement_order or
+                ("currentCharacter" in payload and
+                 str(payload["currentCharacter"]) != state.get("character", "")) or
+                not _health_sample_matches_context(cid, state, state)):
+            state.pop("playerHealth", None)
 
     if "currentRoomId" in payload:
         next_room = int(payload["currentRoomId"])
@@ -663,9 +720,17 @@ def _merge_client_state(
         state["eb"] = _normalize_enemy_bits(payload["eb"])
     _cache_map_snapshot(state, payload)
     for field in _MOVEMENT_STATE_FIELDS:
-        if field != "jetVelocity100" and field in payload:
+        if field not in ("jetVelocity100", "playerHealth") and field in payload:
             state[field] = int(payload[field])
     if enforce_movement_order or "posX" in payload:
+        # Health belongs to this ordered sample. Legacy or malformed values
+        # clear it, rather than preserving a preceding connection/life.
+        state["playerHealth"] = (
+            _player_health(payload.get("playerHealth"))
+            if state.get("online", True) and state.get("isSaveLoaded", False)
+            and _health_sample_matches_context(cid, state, payload)
+            else -1
+        )
         state["jetVelocity100"] = (_jet_velocity_100(payload.get("jetVelocity100"))
                                    if payload.get("action") == 0x9B
                                    else JET_VELOCITY_100_UNAVAILABLE)
@@ -797,6 +862,8 @@ def _merge_client_state(
         )
         if value and value[5] not in _retired_interaction_sessions.get(cid, ()):
             state[anchor_impact.METADATA_KEY] = value
+    if not state.get("online", True) or not state.get("isSaveLoaded", False):
+        state.pop("playerHealth", None)
     now_ms = int(time.monotonic() * 1000)
     if enforce_movement_order:
         # Sender monotonic timestamps are useful only for packet ordering; they
@@ -863,6 +930,9 @@ def _replace_all_client_states(states: list) -> None:
                 "eb": _normalize_enemy_bits(client_state.get("eb")),
             }
             _cache_map_snapshot(merged, client_state)
+            health_context = _health_metadata_context(cid, previous, client_state)
+            if health_context is not None:
+                merged["_healthContext"] = health_context
             if previous and int(previous.get("roomId", -1)) == room_id:
                 for field in _MOVEMENT_STATE_FIELDS:
                     if field in previous:
@@ -873,6 +943,13 @@ def _replace_all_client_states(states: list) -> None:
                     merged["appearanceFlags"] = previous["appearanceFlags"]
                 if _jet_context_changed(previous, client_state):
                     merged.pop("jetVelocity100", None)
+                    if (("currentCharacter" in client_state and
+                         str(client_state["currentCharacter"]) !=
+                         previous.get("character", "")) or
+                            not _health_sample_matches_context(cid, merged, previous)):
+                        merged.pop("playerHealth", None)
+                if not merged["online"] or not merged["isSaveLoaded"]:
+                    merged.pop("playerHealth", None)
             # A fresh handshake already identifies this live connection.
             # Arena events do not require movement to have started, but an
             # older room snapshot must not replace a newer motion session.
@@ -4104,6 +4181,7 @@ def set_position_anim(
     drive_z: int = 0,
     player_epoch: int = 0,
     jet_velocity_100: int = JET_VELOCITY_100_UNAVAILABLE,
+    player_health: int = -1,
 ) -> bool:
     """
     Broadcast world-space position and the live animation phase to teammates.
@@ -4148,6 +4226,7 @@ def set_position_anim(
         player_epoch: Positive local-player lifecycle counter.
         jet_velocity_100: Native Sasuke jet vertical speed times 100. The
             unavailable sentinel is omitted from the hot position packet.
+        player_health: Current half-heart health (0..255), or -1 unavailable.
 
     Returns True if the packet was sent.
     """
@@ -4267,6 +4346,9 @@ def set_position_anim(
     if (_local_character == "Sasuke" and int(action) == 0x9B and
             jet_velocity_100 != JET_VELOCITY_100_UNAVAILABLE):
         packet["jetVelocity100"] = jet_velocity_100
+    player_health = _player_health(player_health)
+    if player_health >= 0:
+        packet["playerHealth"] = player_health
     sent = _send_raw(packet)
     if not sent:
         return False
@@ -4317,6 +4399,7 @@ def set_position_anim(
             local["driveZ"] = drive_z
             local["playerEpoch"] = player_epoch
             local["interactionSession"] = _interaction_session
+            local["playerHealth"] = player_health
             local["jetVelocity100"] = packet.get(
                 "jetVelocity100", JET_VELOCITY_100_UNAVAILABLE
             )
@@ -4730,6 +4813,7 @@ def get_lobby_positions_json() -> str:
                alternative Ebisumaru skin bit 3, ice freeze bit 4, carried
                state bit 5, and weapon charge active/full bits 6 and 7.
       "cd"   – 1 while the sender requires cutscene/script collision bypass.
+      "h"    – current half-heart health (0..255), or -1 unavailable.
       "jv"   – Sasuke action 0x9B native jet vertical speed times 100,
                or -32768 when unavailable.
       "mr"   – gameplay room used by the Japan-map marker, -1 if unavailable.
@@ -4810,6 +4894,9 @@ def get_lobby_positions_json() -> str:
                 "cd": 1 if v.get("collisionDisabled", 0) else 0,
                 "dx": int(v.get("driveX", 0)),
                 "dz": int(v.get("driveZ", 0)),
+                "h": (_player_health(v.get("playerHealth"))
+                      if has_complete_pos and v.get("isSaveLoaded", False)
+                      else -1),
                 "jv": (_jet_velocity_100(v.get("jetVelocity100"))
                        if has_complete_pos and ch == 2 and
                        v.get("action") == 0x9B

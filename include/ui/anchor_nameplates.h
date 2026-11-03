@@ -14,9 +14,10 @@ void anchor_nameplates_hide(int cid);
 /* Called after the remote child task has finalized its displayed body pose.
  * The plate follows that exact render object and is submitted only if it is
  * visible in the current room. height is the rendered body's top above its
- * origin; the plate adds its own half-height and clearance. */
+ * origin; the plate adds its own half-height and clearance. health is the
+ * native half-heart count (0..255), or -1 when unavailable. */
 void anchor_nameplates_sync(int cid, const char *name, int same_team,
                             void *task, const void *body, unsigned short room,
-                            float height);
+                            float height, int health);
 
 #endif

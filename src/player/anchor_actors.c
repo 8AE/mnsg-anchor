@@ -13,6 +13,7 @@
 #include "core/anchor.h"
 #endif
 #include "ui/anchor_nameplates.h"
+#include "progression/item_sync.h"
 #include "core/anchor_dialog.h"
 #include "player/anchor_player_models.h"
 #include "world/anchor_minigame_invites.h"
@@ -106,6 +107,7 @@ typedef struct RemotePlayer
     int motion_phase_frames;
     int new_motion_sample;
     int same_team;
+    int health;
     char name[32];
 } RemotePlayer;
 
@@ -174,6 +176,7 @@ static int s_last_sent_collision_disabled = -1;
 static int s_last_sent_drive_x;
 static int s_last_sent_drive_z;
 static int s_last_sent_player_epoch;
+static int s_last_sent_health = -1;
 static unsigned int s_last_sent_room = 0xffffffffu;
 static int s_have_previous_frame_position;
 static float s_previous_frame_x;
@@ -352,6 +355,10 @@ static int parse_lobby_positions(char *json)
         s_remote_players[count].player_epoch = parse_int_after(p, "pe", 0);
         s_remote_players[count].interaction_session = parse_int_after(p, "ps", 0);
         s_remote_players[count].same_team = parse_int_after(p, "tm", 1);
+        s_remote_players[count].health = parse_int_after(p, "h", -1);
+        if (s_remote_players[count].health < 0 ||
+            s_remote_players[count].health > 255)
+            s_remote_players[count].health = -1;
         mnsg_json_copy_display_string(p, "n", s_remote_players[count].name,
                            (int)sizeof(s_remote_players[count].name));
         if (!s_remote_players[count].name[0])
@@ -587,6 +594,7 @@ static void reset_last_sent_state(void)
     s_last_sent_drive_x = 0;
     s_last_sent_drive_z = 0;
     s_last_sent_player_epoch = 0;
+    s_last_sent_health = -1;
     s_last_sent_room = 0xffffffffu;
     reset_frame_motion_baseline();
 }
@@ -614,6 +622,7 @@ static void publish_local_state(PlayerObject *local_obj)
     int drive_z = 0;
     int player_epoch;
     int jet_velocity_100 = ANCHOR_REMOTE_JET_SPEED_UNAVAILABLE;
+    int player_health;
     int velocity_x = 0;
     int velocity_y = 0;
     int velocity_z = 0;
@@ -698,6 +707,12 @@ static void publish_local_state(PlayerObject *local_obj)
         reset_frame_motion_baseline();
         return;
     }
+
+    /* The existing accessor reads half-heart units from loaded player state. */
+    player_health = item_sync_save_is_loaded() ?
+        (int)item_sync_local_player_health() : -1;
+    if (player_health < 0 || player_health > 255)
+        player_health = -1;
 
     if (local_obj != s_previous_frame_object ||
         D_801FC604_5B8514 != s_previous_frame_task)
@@ -899,7 +914,8 @@ static void publish_local_state(PlayerObject *local_obj)
         should_send_position =
             s_state_send_timer <= 0 &&
             ((dx * dx + dy * dy + dz * dz) >= POSITION_MIN_DELTA_SQ ||
-             s_position_keepalive_timer <= 0 || drive_x != 0 || drive_z != 0);
+             s_position_keepalive_timer <= 0 || drive_x != 0 || drive_z != 0 ||
+             player_health != s_last_sent_health);
     }
     anim_delta = frame_100 - s_last_sent_frame_100;
     if (anim_delta < 0)
@@ -936,7 +952,7 @@ static void publish_local_state(PlayerObject *local_obj)
                                  force_motion_edge, animation_step_100,
                                  has_animation_step, collision_disabled,
                                  drive_x, drive_z, player_epoch,
-                                 jet_velocity_100))
+                                 jet_velocity_100, player_health))
     {
         s_have_sent_position = 1;
         s_last_sent_x = x;
@@ -959,6 +975,7 @@ static void publish_local_state(PlayerObject *local_obj)
         s_last_sent_drive_x = drive_x;
         s_last_sent_drive_z = drive_z;
         s_last_sent_player_epoch = player_epoch;
+        s_last_sent_health = player_health;
         s_state_send_timer = POSITION_SEND_FRAMES;
         s_position_keepalive_timer = POSITION_KEEPALIVE_FRAMES;
     }
@@ -1074,6 +1091,7 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
             model->player_epoch = smoothed_remote.player_epoch;
             model->interaction_session = smoothed_remote.interaction_session;
             model->same_team = smoothed_remote.same_team;
+            model->health = smoothed_remote.health;
             __builtin_memcpy(model->name, smoothed_remote.name,
                              sizeof(model->name));
         }

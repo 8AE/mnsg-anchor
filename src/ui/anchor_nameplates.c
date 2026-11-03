@@ -4,11 +4,13 @@
  *
  * Each plate is a camera-facing kind-2 display record on a child of its remote
  * task. The game font is rasterized into a small IA8 texture
- * in original RDRAM. Every plate owns one texture/model/material set per
+ * in original RDRAM, with a separate RGBA16 health/heart strip.
+ * Every plate owns one texture/model/material set per
  * graphics bank, so changing a name never rewrites data still in flight.
  */
 
 #include "ui/anchor_nameplates.h"
+#include "ui/anchor_rom_icons.h"
 #include "anchor_nameplate_bitmap.h"
 #include "anchor_nameplate_budget.h"
 #include "player/anchor_player_models.h"
@@ -19,11 +21,11 @@
 #include "platform/recomputils.h"
 
 #define NAMEPLATE_BANKS 2u
-#define NAMEPLATE_MODEL 0x49001040u
+#define NAMEPLATE_MODEL 0x490018c0u
 #define NAMEPLATE_SCALE 0.33f
 #define NAMEPLATE_HALF_HEIGHT 8
 #define NAMEPLATE_CLEARANCE 2.0f
-#define NAMEPLATE_COMMANDS 20u
+#define NAMEPLATE_COMMANDS 33u
 
 #define NATIVE_BANK_BYTES 0x1d6d8u
 #define NATIVE_COMMAND_BYTES 0x14c80u
@@ -52,7 +54,8 @@ typedef struct NameplateVertex
 typedef struct NameplateBankData
 {
     unsigned char texture[ANCHOR_NAMEPLATE_TEXTURE_BYTES];
-    NameplateVertex vertices[4];
+    unsigned short health_texture[ANCHOR_NAMEPLATE_HEALTH_PIXELS];
+    NameplateVertex vertices[12];
     unsigned int display[NAMEPLATE_COMMANDS * 2u];
     unsigned int material_template[20];
     unsigned int material[8];
@@ -63,6 +66,7 @@ typedef struct NameplateSlot
     int cid;
     int active;
     int same_team;
+    int health;
     unsigned short room;
     void *owner_task;
     void *plate_task;
@@ -76,8 +80,14 @@ typedef struct NameplateSlot
 } NameplateSlot;
 
 _Static_assert(sizeof(NameplateVertex) == 16, "Native Vtx ABI");
-_Static_assert(sizeof(NameplateBankData) == 0x1150,
-               "Segment-9 nameplate offsets");
+_Static_assert(sizeof(NameplateBankData) == 0x1a38,
+               "Segment-9 nameplate bank stride");
+_Static_assert(__builtin_offsetof(NameplateBankData, health_texture) == 0x1000,
+               "Segment-9 health texture offset");
+_Static_assert(__builtin_offsetof(NameplateBankData, vertices) == 0x1800,
+               "Segment-9 nameplate vertex offset");
+_Static_assert(__builtin_offsetof(NameplateBankData, display) == 0x18c0,
+               "Segment-9 nameplate model offset");
 
 extern NameplateSceneResource D_80167FC0_168BC0[48];
 extern const unsigned char D_800629A0_635A0[];
@@ -106,6 +116,9 @@ static int s_capacity;
 static NameplateBankData *s_banks;
 static unsigned char *s_guard_object;
 static unsigned char s_guard_hidden;
+/* CPU-only source; every renderer-consumed copy lives in its selected bank. */
+static unsigned char s_heart_rgba[ANCHOR_NAMEPLATE_HEART_RGBA_BYTES];
+static int s_heart_loaded;
 #if DEBUG_BUTTON_ENABLED
 enum
 {
@@ -246,6 +259,8 @@ void anchor_nameplates_load_resources(void)
     int planned;
     int i;
     anchor_nameplates_reset();
+    s_heart_loaded = anchor_rom_load_icon_rgba32(
+        ANCHOR_ICON_HEART, s_heart_rgba, sizeof(s_heart_rgba));
     s_banks = 0;
     if (s_slots)
         recomp_free(s_slots);
@@ -351,7 +366,7 @@ void anchor_nameplates_hide(int cid)
 
 void anchor_nameplates_sync(int cid, const char *name, int same_team,
                             void *task, const void *body, unsigned short room,
-                            float height)
+                            float height, int health)
 {
     NameplateSlot *slot;
     unsigned char *object;
@@ -460,8 +475,10 @@ void anchor_nameplates_sync(int cid, const char *name, int same_team,
         slot->object[5] = 10u;
         slot->object[0x64] |= 1u;
     }
+    if (health < 0 || health > 255)
+        health = -1;
     changed = !slot->active || slot->cid != cid ||
-              slot->same_team != (same_team != 0);
+              slot->same_team != (same_team != 0) || slot->health != health;
     for (i = 0; i < sizeof(slot->name) - 1u; ++i)
     {
         unsigned char c = (unsigned char)name[i];
@@ -481,6 +498,7 @@ void anchor_nameplates_sync(int cid, const char *name, int same_team,
     slot->cid = cid;
     slot->active = 1;
     slot->same_team = same_team != 0;
+    slot->health = health;
     slot->room = room;
     slot->height = height;
     slot->object[0x64] |= 1u;
@@ -529,8 +547,23 @@ static void init_bank(NameplateBankData *data)
         0xba000e02u, 0x00000000u,
         0xba000c02u, 0x00000000u,
         0xfa000000u, 0x000000ffu,
-        0x0400103fu, 0x09001000u,
+        0x0400207fu, 0x09001800u,
         0xb1040200u, 0x00060400u,
+        /* Extended IA8 backdrop, sharing the name tile's half-alpha texel. */
+        0xb10c0a08u, 0x000e0c08u,
+        0xe7000000u, 0x00000000u,
+        0xfd100000u, 0x09001000u,
+        0xf5100000u, 0x07090280u,
+        0xe6000000u, 0x00000000u,
+        0xf3000000u, 0x073ff080u,
+        0xe7000000u, 0x00000000u,
+        0xf5102000u, 0x00090280u,
+        0xf2000000u, 0x000fc03cu,
+        /* Reset the name's team tint; the suffix contains native RGB. */
+        0xfb000000u, 0xffffffffu,
+        0x0400103fu, 0x09001880u,
+        0xb1040200u, 0x00060400u,
+        0xe7000000u, 0x00000000u,
         0xb8000000u, 0x00000000u,
     };
     static const unsigned int material_template[20] = {
@@ -546,16 +579,42 @@ static void init_bank(NameplateBankData *data)
         0xb8000000u, 0x00000000u,
     };
     unsigned int i;
-    /* A 256:16 rectangle in model space. The native model transform uses
-     * 0x8000 rotation sentinels to turn this plane toward the camera. */
-    set_vertex(&data->vertices[0], -128,  NAMEPLATE_HALF_HEIGHT, -16, -16);
-    set_vertex(&data->vertices[1],  128,  NAMEPLATE_HALF_HEIGHT, 8176, -16);
-    set_vertex(&data->vertices[2],  128, -NAMEPLATE_HALF_HEIGHT, 8176, 496);
-    set_vertex(&data->vertices[3], -128, -NAMEPLATE_HALF_HEIGHT, -16, 496);
+    /* The native transform's 0x8000 sentinels face every quad to the camera.
+     * Geometry is populated with the complete name/suffix layout on upload. */
     for (i = 0; i < NAMEPLATE_COMMANDS * 2u; ++i)
         data->display[i] = display[i];
     for (i = 0; i < 20u; ++i)
         data->material_template[i] = material_template[i];
+}
+
+static void write_geometry(NameplateBankData *data, unsigned int name_width,
+                            unsigned int health_width)
+{
+    AnchorNameplateLayout layout;
+    short left, right;
+    unsigned int i;
+    anchor_nameplate_layout(name_width, health_width, &layout);
+    left = (short)(-128 + layout.name_shift);
+    right = (short)(128 + layout.name_shift);
+    set_vertex(&data->vertices[0], left, 8, -16, -16);
+    set_vertex(&data->vertices[1], right, 8, 8176, -16);
+    set_vertex(&data->vertices[2], right, -8, 8176, 496);
+    set_vertex(&data->vertices[3], left, -8, -16, 496);
+    for (i = 4u; i < 8u; ++i)
+        set_vertex(&data->vertices[i],
+                   (i == 4u || i == 7u) ? layout.backdrop_left :
+                                         layout.backdrop_right,
+                   i < 6u ? 8 : -8, layout.backdrop_s, 0);
+    left = layout.suffix_left;
+    right = (short)(left + ANCHOR_NAMEPLATE_HEALTH_WIDTH);
+    set_vertex(&data->vertices[8], left, 8, -16, -16);
+    set_vertex(&data->vertices[9], right, 8, 2032, -16);
+    set_vertex(&data->vertices[10], right, -8, 2032, 496);
+    set_vertex(&data->vertices[11], left, -8, -16, 496);
+    /* An unknown health or failed native icon load leaves the original name
+     * draw intact and ends before touching the extra tile or geometry. */
+    data->display[38] = health_width ? 0xb10c0a08u : 0xb8000000u;
+    data->display[39] = health_width ? 0x000e0c08u : 0u;
 }
 
 static void write_material(NameplateBankData *data, int same_team)
@@ -636,9 +695,14 @@ void anchor_nameplates_refresh_bank(void)
         }
         if (slot->uploaded[bank] != slot->revision)
         {
-            anchor_nameplate_bitmap_build(
+            unsigned int name_width = anchor_nameplate_bitmap_build(
                 data->texture, sizeof(data->texture), slot->name,
                 D_800629A0_635A0, D_8005BB10_5C710);
+            unsigned int health_width = anchor_nameplate_health_bitmap_build(
+                data->health_texture, ANCHOR_NAMEPLATE_HEALTH_PIXELS,
+                slot->health, s_heart_loaded ? s_heart_rgba : 0,
+                D_800629A0_635A0, D_8005BB10_5C710);
+            write_geometry(data, name_width, health_width);
             write_material(data, slot->same_team);
             slot->uploaded[bank] = slot->revision;
         }

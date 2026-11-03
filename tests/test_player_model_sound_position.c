@@ -96,8 +96,8 @@ int anchor_alternative_patch_action(unsigned char *slice,unsigned int start,
 { (void)slice;(void)start;(void)size;(void)model;return 0; }
 void anchor_nameplates_hide(int cid) { (void)cid; }
 void anchor_nameplates_sync(int cid,const char *name,int same_team,
-                            void *task,const void *body,unsigned short room,float height)
-{ (void)cid;(void)name;(void)same_team;(void)task;(void)body;(void)room;(void)height; }
+                            void *task,const void *body,unsigned short room,float height,int health)
+{ (void)cid;(void)name;(void)same_team;(void)task;(void)body;(void)room;(void)height;(void)health; }
 int anchor_player_freeze_visual_has_cube(int cid,int session,int epoch)
 { (void)cid;(void)session;(void)epoch;return 0; }
 void anchor_player_effects_suspend(AnchorPlayerEffectState *state) { (void)state; }

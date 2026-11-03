@@ -2466,7 +2466,7 @@ static void sync_slot_nameplate(RemoteModelSlot *slot,
     }
     anchor_nameplates_sync(slot->cid, remote->name, remote->same_team,
                            slot->task, slot->object, slot->pending_room,
-                           height);
+                           height, remote->health);
 }
 
 static void remote_model_task_update(void *task, void *object)

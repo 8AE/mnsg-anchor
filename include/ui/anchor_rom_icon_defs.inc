@@ -39,3 +39,6 @@ ICON(RED_FISH, 0x8691u, 0x013F5660u, 0x0670u, 64u, 32u, 0u, 0u, 24u, 24u, 0, 0)
 ICON(BLUE_FISH, 0x8691u, 0x013F5660u, 0x0670u, 64u, 32u, 24u, 0u, 24u, 24u, 0, 0)
 ICON(YELLOW_FISH, 0x8692u, 0x013F5CD0u, 0x03B0u, 64u, 32u, 0u, 0u, 24u, 24u, 0, 0)
 ICON(BATTERY, 0x8697u, 0x013F7260u, 0x04E0u, 64u, 32u, 24u, 0u, 24u, 24u, 0, 0)
+
+/* Stock player HUD full red heart. */
+ICON(HEART, 0x8004u, 0x007E6C00u, 0x0500u, 64u, 32u, 0u, 24u, 8u, 8u, 0, 0)
