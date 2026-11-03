@@ -62,6 +62,12 @@ static int valid_hit_coordinate(float value)
 
 int anchor_player_damage_apply(float hit_x, float hit_y, float hit_z, int damage)
 {
+    return anchor_player_damage_apply_with_loss(hit_x, hit_y, hit_z, damage, 0);
+}
+
+int anchor_player_damage_apply_with_loss(float hit_x, float hit_y, float hit_z,
+                                         int damage, unsigned int *health_loss)
+{
     PlayerHitSource source;
     PlayerHitObject object;
     unsigned char *player = D_801FC604_5B8514;
@@ -73,6 +79,8 @@ int anchor_player_damage_apply(float hit_x, float hit_y, float hit_z, int damage
     unsigned int previous_invulnerability;
     int accepted;
 
+    if (health_loss)
+        *health_loss = 0;
     if ((damage != 1 && damage != 2 && damage != 3 &&
          damage != 4 && damage != 8) ||
         s_applying_hit || !anchor_is_connected() ||
@@ -134,6 +142,8 @@ int anchor_player_damage_apply(float hit_x, float hit_y, float hit_z, int damage
     if (accepted)
         func_801E8E24_5A4D34(player, 1);
     after_hp = item_sync_local_player_health();
+    if (health_loss && after_hp < before_hp)
+        *health_loss = before_hp - after_hp;
 
     /* Native type-1 intake applies the supplied half-heart damage through
      * armour handling. Sudden Impact doubles vulnerability in FUN_801DA758. Preserve the
@@ -153,4 +163,38 @@ int anchor_player_damage_apply(float hit_x, float hit_y, float hit_z, int damage
      * invulnerability and returns zero. Treat that as a consumed attack. */
     return accepted != 0 || after_hp < before_hp ||
            player[0xd4] != previous_invulnerability;
+}
+
+unsigned int anchor_player_damage_life_steal(unsigned int amount)
+{
+    unsigned char *player = D_801FC604_5B8514;
+    unsigned char *work;
+    void *backlink;
+    unsigned int before_hp, after_hp;
+    if (amount == 0 || amount > 16 || s_applying_hit ||
+        !anchor_is_connected() || !item_sync_save_is_loaded() ||
+        anchor_remote_collision_is_scripted() || D_800C7AE2 != 0 ||
+        (D_800C7AE0 != 0 && D_800C7AE0 != 4) ||
+        !is_rdram_pointer(player) ||
+        !is_rdram_pointer(D_801FC60C_5B851C))
+        return 0;
+    backlink = *(void **)(player + 0x04);
+    work = *(unsigned char **)(player + 0x5c);
+    if (!is_rdram_pointer(backlink) || *(void **)backlink != player ||
+        *(void **)(player + 0x18) != D_801FC60C_5B851C ||
+        !is_rdram_pointer(work) || player[0x60] != 1 || work[0x69] != 0)
+        return 0;
+    before_hp = item_sync_local_player_health();
+    if (!before_hp)
+        return 0;
+    s_applying_hit = 1;
+    (void)func_801DCD48_598C58((signed char)amount);
+    after_hp = item_sync_local_player_health();
+    s_applying_hit = 0;
+    if (D_801FC604_5B8514 != player ||
+        *(void **)(player + 0x18) != D_801FC60C_5B851C || after_hp <= before_hp)
+        return 0;
+    /* Private PvP healing must not heal the victim back through team sync. */
+    item_sync_exclude_loot_reward(after_hp - before_hp, 0);
+    return after_hp - before_hp;
 }

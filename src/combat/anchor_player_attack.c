@@ -5,7 +5,7 @@
 
 extern int anchor_send_player_hit(int target_cid, int target_epoch,
                                   float hit_x, float hit_y, float hit_z,
-                                  int hit_kind, int damage);
+                                  int hit_kind, int damage, int life_steal);
 
 typedef struct AttackHit
 {
@@ -95,6 +95,14 @@ int anchor_player_attack_damage_for_kind(unsigned int kind)
         case 0x22: return 8;
         default: return 1;
     }
+}
+
+int anchor_player_attack_is_meat_hammer(int is_player, unsigned int character,
+                                        unsigned int kind)
+{
+    /* Native func_801E3834_59F744's selected-weapon-2 table assigns 0x1d
+     * only to Ebisumaru. Ordinary mallet tiers use 0x15/0x16/0x17. */
+    return is_player && character == 1 && kind == 0x1d;
 }
 
 static int sphere_hits_body(const AnchorPlayerAttackSample *sample,
@@ -227,7 +235,10 @@ int anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
         if (anchor_send_player_hit(s_targets[i].cid, s_targets[i].epoch,
                                     sample->center.x, sample->center.y,
                                     sample->center.z, sample->hit_kind,
-                                    sample->damage))
+                                    sample->damage,
+                                    sample->life_steal && sample->is_player &&
+                                    !sample->is_projectile &&
+                                    !sample->is_impact_splash))
         {
             episode->hits[j].cid = s_targets[i].cid;
             episode->hits[j].epoch = s_targets[i].epoch;
@@ -358,6 +369,8 @@ void anchor_player_attack_native_sphere(void *object, void *task, void *victims)
     sample.hit_kind = sample.is_projectile ? anchor_projectiles_hit_kind(task) : 0;
     sample.damage = cube_impact ? 4 :
                     anchor_player_attack_damage_for_kind(actor[0x4c]);
+    sample.life_steal = anchor_player_attack_is_meat_hammer(
+        sample.is_player, actor[0x60], actor[0x4c]);
     func_80033898_34498(*(unsigned short *)(model + 0x14) & 0x3ff,
                        *(unsigned short *)(model + 0x16) & 0x3ff,
                        *(unsigned short *)(model + 0x18) & 0x3ff,

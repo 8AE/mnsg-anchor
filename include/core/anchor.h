@@ -385,10 +385,12 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
     * connection sessions, player lifetimes, ordering and queue age. */
    int anchor_send_player_hit(int target_cid, int target_epoch,
                                float hit_x, float hit_y, float hit_z,
-                               int hit_kind, int damage);
+                               int hit_kind, int damage, int life_steal);
    int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
                                float *x, float *y, float *z,
-                               int *hit_kind, int *damage);
+                               int *hit_kind, int *damage, int *receipt);
+   int anchor_finish_player_hit(int receipt, unsigned int health_loss);
+   int anchor_poll_player_hit_heal(int *epoch, int *amount);
 
    /* Direct, short-lived carry controls for a frozen player's ice cube. The
     * target remains authoritative for its playable body and freeze state. */

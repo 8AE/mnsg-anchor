@@ -1897,16 +1897,25 @@ static void receive_player_hits(void)
     int epoch;
     int hit_kind;
     int damage;
+    int receipt;
     int i;
     float x, y, z;
     int current_epoch = anchor_player_models_get_epoch();
     /* Drain even rejected hits instead of retaining them until control
      * resumes. The transport also bounds the queue by age and peer session. */
     for (i = 0; i < 16 && anchor_poll_player_hit(&sender, &epoch, &x, &y, &z,
-                                                 &hit_kind, &damage); ++i)
+                                                 &hit_kind, &damage, &receipt); ++i)
+    {
+        unsigned int health_loss = 0;
         if (epoch == current_epoch && s_interaction_alive &&
             !s_interaction_scripted)
-            (void)anchor_player_freeze_apply_hit(x, y, z, hit_kind, damage);
+            (void)anchor_player_freeze_apply_hit_with_loss(
+                x, y, z, hit_kind, damage, &health_loss);
+        (void)anchor_finish_player_hit(receipt, health_loss);
+    }
+    for (i = 0; i < 16 && anchor_poll_player_hit_heal(&epoch, &damage); ++i)
+        if (epoch == anchor_player_models_get_epoch())
+            (void)anchor_player_damage_life_steal((unsigned int)damage);
 }
 
 int anchor_player_models_get_freeze_visual_targets(

@@ -25,6 +25,8 @@ static int s_no_hit;
 static int s_armour;
 static int s_sudden_impact;
 static unsigned int s_hp;
+static unsigned int s_max_hp;
+static unsigned int s_private_healing;
 static int s_baseline;
 static unsigned int s_excluded;
 static int s_native_calls;
@@ -50,10 +52,19 @@ void item_sync_exclude_pvp_damage(unsigned int damage)
     s_baseline -= (int)damage;
 }
 
+void item_sync_exclude_loot_reward(unsigned int health, unsigned int ryo)
+{
+    (void)ryo;
+    s_private_healing += health;
+    s_baseline += (int)health;
+}
+
 int func_801DCD48_598C58(signed char delta)
 {
     int hp = (int)s_hp + delta;
     s_hp = hp < 0 ? 0u : (unsigned int)hp;
+    if (s_hp > s_max_hp)
+        s_hp = s_max_hp;
     return hp < 0;
 }
 
@@ -110,6 +121,8 @@ static void reset(void)
     s_cleanup_calls = D_800C7AE0 = D_800C7AE2 = 0;
     s_reentrant_result = -1;
     s_hp = s_baseline = 10;
+    s_max_hp = 20;
+    s_private_healing = 0;
     s_excluded = 0;
     s_expected_damage = 1;
 }
@@ -241,14 +254,70 @@ static int test_owner_change_restores_descriptor_and_stops_accounting(void)
     return 0;
 }
 
+static int test_life_steal_uses_native_loss_before_challenge_penalty(void)
+{
+    unsigned int loss = 99;
+    reset(); s_armour = 1;
+    CHECK(anchor_player_damage_apply_with_loss(12, 3, -4, 1, &loss) == 1);
+    CHECK(loss == 0);
+    reset(); s_player[0xd4] = 1;
+    CHECK(anchor_player_damage_apply_with_loss(12, 3, -4, 1, &loss) == 0);
+    CHECK(loss == 0);
+    reset(); s_sudden_impact = 1;
+    CHECK(anchor_player_damage_apply_with_loss(12, 3, -4, 1, &loss) == 1);
+    CHECK(loss == 2);
+    reset(); s_hp = 1; s_expected_damage = 4;
+    CHECK(anchor_player_damage_apply_with_loss(12, 3, -4, 4, &loss) == 1);
+    CHECK(loss == 1 && s_hp == 0);
+    reset(); s_no_hit = 1;
+    CHECK(anchor_player_damage_apply_with_loss(12, 3, -4, 1, &loss) == 1);
+    CHECK(loss == 1 && s_hp == 0 && s_excluded == 10);
+    reset(); s_replace_player = 1;
+    CHECK(anchor_player_damage_apply_with_loss(12, 3, -4, 1, &loss) == 0);
+    CHECK(loss == 0);
+    return 0;
+}
+
+static int test_life_steal_heals_only_living_ebi_and_preserves_team_deltas(void)
+{
+    reset(); s_hp = 7; /* unrelated 3 HP loss remains shareable */
+    CHECK(anchor_player_damage_life_steal(2) == 2);
+    CHECK(s_hp == 9 && s_private_healing == 2 && s_baseline == 12);
+    CHECK((int)s_hp - s_baseline == -3);
+    reset(); s_hp = 19;
+    CHECK(anchor_player_damage_life_steal(4) == 1);
+    CHECK(s_hp == 20 && s_private_healing == 1);
+    CHECK(anchor_player_damage_life_steal(4) == 0);
+    reset(); s_hp = 0;
+    CHECK(anchor_player_damage_life_steal(4) == 0 && s_hp == 0);
+    reset(); s_scripted = 1;
+    CHECK(anchor_player_damage_life_steal(1) == 0);
+    reset(); s_loaded = 0;
+    CHECK(anchor_player_damage_life_steal(1) == 0);
+    reset(); s_connected = 0;
+    CHECK(anchor_player_damage_life_steal(1) == 0);
+    reset(); s_work[0x69] = 1;
+    CHECK(anchor_player_damage_life_steal(1) == 0);
+    reset(); D_801FC60C_5B851C = 0;
+    CHECK(anchor_player_damage_life_steal(1) == 0);
+    reset(); *(void **)(s_memory + 0x4000) = 0;
+    CHECK(anchor_player_damage_life_steal(1) == 0);
+    reset(); s_player[0x60] = 0; /* reject before dereferencing the altered host work pointer */
+    CHECK(anchor_player_damage_life_steal(1) == 0);
+    reset();
+    CHECK(anchor_player_damage_life_steal(0) == 0);
+    CHECK(anchor_player_damage_life_steal(17) == 0);
+    return 0;
+}
+
 int main(void)
 {
     int failed;
     /* Preserve native low-address checks while the host mocks themselves
-     * use host-sized pointers. The upper word is 3, which is also a valid
+     * use host-sized pointers. The upper word is 1, Ebisumaru's valid
      * character byte in the host pointer stored at task+0x5c. The address
      * sits above macOS's protected 4-GiB page-zero region. */
-    s_memory = mmap((void *)0x380000000ull, 0x10000,
+    s_memory = mmap((void *)0x180000000ull, 0x10000,
                     PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
     if (s_memory == MAP_FAILED)
@@ -256,7 +325,7 @@ int main(void)
         perror("mmap native test arena");
         return 1;
     }
-    if (s_memory != (void *)0x380000000ull)
+    if (s_memory != (void *)0x180000000ull)
     {
         fprintf(stderr, "native test arena address unavailable\n");
         munmap(s_memory, 0x10000);
@@ -268,7 +337,9 @@ int main(void)
         test_guards_preserve_native_state() ||
         test_exclusion_preserves_environmental_loss_and_healing() ||
         test_no_hit_challenge_and_lethal_hits_do_not_echo() ||
-        test_owner_change_restores_descriptor_and_stops_accounting();
+        test_owner_change_restores_descriptor_and_stops_accounting() ||
+        test_life_steal_uses_native_loss_before_challenge_penalty() ||
+        test_life_steal_heals_only_living_ebi_and_preserves_team_deltas();
     munmap(s_memory, 0x10000);
     return failed;
 }

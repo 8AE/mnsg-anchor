@@ -794,7 +794,7 @@ int anchor_ack_projectile_spawn(int cid, int session, int epoch, int event_id)
 
 int anchor_send_player_hit(int target_cid, int target_epoch,
                            float hit_x, float hit_y, float hit_z,
-                           int hit_kind, int damage)
+                           int hit_kind, int damage, int life_steal)
 {
     REPY_FN_SETUP;
     REPY_FN_SET_S32("target_cid", target_cid);
@@ -805,10 +805,11 @@ int anchor_send_player_hit(int target_cid, int target_epoch,
     REPY_FN_SET_F32("hit_z", hit_z);
     REPY_FN_SET_S32("hit_kind", hit_kind);
     REPY_FN_SET_S32("damage", damage);
+    REPY_FN_SET_S32("life_steal", life_steal);
     REPY_FN_EXEC_CACHE(anchor_send_player_hit_code,
                        "import anchor_mnsg\n"
                        "result = anchor_mnsg.send_player_hit(\n"
-                       "    target_cid, target_epoch, hit_x, hit_y, hit_z, source_epoch, hit_kind, damage)\n");
+                       "    target_cid, target_epoch, hit_x, hit_y, hit_z, source_epoch, hit_kind, damage, life_steal)\n");
     int result = (int)REPY_FN_GET_BOOL("result");
     REPY_FN_CLEANUP;
     return result;
@@ -853,17 +854,17 @@ int anchor_poll_projectile_stop(int *cid, int *session, int *epoch, int *event_i
 
 int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
                            float *x, float *y, float *z,
-                           int *hit_kind, int *damage)
+                           int *hit_kind, int *damage, int *receipt)
 {
-    if (!sender_cid || !target_epoch || !x || !y || !z || !hit_kind || !damage)
+    if (!sender_cid || !target_epoch || !x || !y || !z || !hit_kind || !damage || !receipt)
         return 0;
     REPY_FN_SETUP;
     REPY_FN_EXEC_CACHE(anchor_poll_player_hit_code,
                        "import anchor_mnsg\n"
-                       "hit = anchor_mnsg.poll_player_hit()\n"
+                       "hit = anchor_mnsg.poll_player_hit(with_receipt=True)\n"
                        "has_hit = hit is not None\n"
                        "if has_hit:\n"
-                       "    sender_cid, target_epoch, hit_x, hit_y, hit_z, hit_kind_value, damage_value = hit\n");
+                       "    sender_cid, target_epoch, hit_x, hit_y, hit_z, hit_kind_value, damage_value, receipt_value = hit\n");
     int result = (int)REPY_FN_GET_BOOL("has_hit");
     if (result)
     {
@@ -874,6 +875,44 @@ int anchor_poll_player_hit(int *sender_cid, int *target_epoch,
         *z = REPY_FN_GET_F32("hit_z");
         *hit_kind = (int)REPY_FN_GET_S32("hit_kind_value");
         *damage = (int)REPY_FN_GET_S32("damage_value");
+        *receipt = (int)REPY_FN_GET_S32("receipt_value");
+    }
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_finish_player_hit(int receipt, unsigned int health_loss)
+{
+    if (receipt <= 0)
+        return 0;
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("receipt", receipt);
+    REPY_FN_SET_S32("health_loss", (int)health_loss);
+    REPY_FN_EXEC_CACHE(anchor_finish_player_hit_code,
+                       "import anchor_mnsg\n"
+                       "result = anchor_mnsg.finish_player_hit(receipt, health_loss)\n");
+    int result = (int)REPY_FN_GET_BOOL("result");
+    REPY_FN_CLEANUP;
+    return result;
+}
+
+int anchor_poll_player_hit_heal(int *epoch, int *amount)
+{
+    if (!epoch || !amount)
+        return 0;
+    REPY_FN_SETUP;
+    REPY_FN_SET_S32("source_epoch", anchor_player_models_get_epoch());
+    REPY_FN_EXEC_CACHE(anchor_poll_player_hit_heal_code,
+                       "import anchor_mnsg\n"
+                       "heal = anchor_mnsg.poll_player_hit_heal(source_epoch)\n"
+                       "has_heal = heal is not None\n"
+                       "if has_heal:\n"
+                       "    heal_epoch, heal_amount = heal\n");
+    int result = (int)REPY_FN_GET_BOOL("has_heal");
+    if (result)
+    {
+        *epoch = (int)REPY_FN_GET_S32("heal_epoch");
+        *amount = (int)REPY_FN_GET_S32("heal_amount");
     }
     REPY_FN_CLEANUP;
     return result;

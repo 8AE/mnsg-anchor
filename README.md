@@ -44,7 +44,7 @@ A multiplayer mod for [Mystical Ninja Starring Goemon: Recompiled](https://githu
 | Stat                                    | Behaviour                                                                                   |
 | --------------------------------------- | ------------------------------------------------------------------------------------------- |
 | HP Max                                  | Highest value wins; receiving an upgrade also refills current HP to the new maximum         |
-| Current HP                              | Player attacks damage their victim directly. The Team Damage Sync race challenge shares other damage and healing deltas; PvP damage is excluded to prevent feedback. |
+| Current HP                              | Player attacks damage their victim directly. Ebisumaru's Meat Hammer heals him for the victim's actual HP loss, up to his maximum HP. The Team Damage Sync race challenge shares other damage and healing deltas; PvP damage and life-steal healing are excluded to prevent feedback. |
 | Fortune Dolls (total & traded)          | Highest value wins                                                                          |
 | Ryo (money)                             | Standard multiplayer does not sync it; the Ryo Sync race challenge shares both earnings and spending deltas |
 | Fish counts (red / yellow / blue)       | Highest value wins                                                                          |

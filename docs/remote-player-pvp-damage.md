@@ -24,6 +24,45 @@ an older
 packet with no amount retains the former one-unit baseline. Both clients need
 this update for source-specific damage.
 
+## Ebisumaru meat-hammer life steal
+
+A meat-hammer strike on a remote player heals the attacking Ebisumaru by
+the HP that the victim's native hit intake actually removed. Armour and
+invulnerability grant no healing; lethal hits grant only the remaining HP,
+and Sudden Impact's native vulnerability multiplier is included. No Hit
+race mode's additional forced death is excluded from the weapon's damage.
+Native healing clamps at Ebisumaru's maximum HP and plays its normal sound.
+
+The sender identifies the real playable task, character byte `+0x60 == 1`,
+and native attack-kind byte `+0x4c == 0x1d`. Decompilation and disassembly of
+`func_801E3834_59F744` show selected-weapon-2 table `0x802046c8` assigning
+`[0x15, 0x1d, 0x1c, 0x15]` by character. Ordinary Ebisumaru mallets use
+`0x15/0x16/0x17`, so owning the hammer alone does not enable life steal.
+
+Only these strikes add `lifeSteal: 1` to `MNSG_PLAYER_HIT`. After applying
+the validated hit, the victim consumes a local receipt and sends one direct,
+transient `MNSG_PLAYER_HIT_RESULT` with the original room, sessions, epochs,
+hit sequence and measured `healthLoss`. The attacker accepts that result
+once against a pending outgoing hit, then applies healing only to the same
+living local Ebisumaru lifetime. A confirmed lethal result remains valid
+after the victim's death pose. Receipt and pending storage are bounded to
+64 entries, native drains to 16 per frame, and results expire after 1000 ms.
+If pending confirmation storage fills, additional hits retain ordinary PvP
+damage while omitting life-steal confirmation tracking for those hits.
+Both packet types have a 512-byte serialized budget; there are no retries,
+periodic sends, team broadcasts or durable queued events for this effect.
+
+The actual HP gained is excluded from team HP synchronization, preserving
+unrelated damage/healing in the same frame without healing the victim back.
+Both clients need this update for life steal; older clients continue their
+ordinary PvP behavior and do not produce healing confirmations.
+
+`bash tests/run_player_lifesteal.sh` exercises native loss/healing wrappers
+with mocked game functions and the production transport's two-peer
+hit/receipt/result flow. `bash tests/run_player_chain.sh` covers attack
+classification and per-target deduplication. These checks and MIPS builds
+do not establish fresh in-game two-client behavior.
+
 ## Chain-pipe player grapples
 
 Goemon's chain-pipe head and links treat a multiplayer player overlap as a

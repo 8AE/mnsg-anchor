@@ -15,6 +15,7 @@ static int s_send_ok;
 static int s_last_cid;
 static int s_last_epoch;
 static int s_last_damage;
+static int s_last_life_steal;
 static AnchorCollisionVec3 s_last_center;
 static int s_actor_ids[140];
 static int s_chain_observations;
@@ -51,7 +52,7 @@ int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacit
 }
 
 int anchor_send_player_hit(int cid, int epoch, float x, float y, float z,
-                           int kind, int damage)
+                           int kind, int damage, int life_steal)
 {
     assert(kind == 0);
     if (!s_send_ok)
@@ -60,6 +61,7 @@ int anchor_send_player_hit(int cid, int epoch, float x, float y, float z,
     s_last_cid = cid;
     s_last_epoch = epoch;
     s_last_damage = damage;
+    s_last_life_steal = life_steal;
     s_last_center = (AnchorCollisionVec3){x, y, z};
     return 1;
 }
@@ -79,6 +81,7 @@ static void setup(void)
     anchor_player_attack_reset();
     s_sent = 0;
     s_last_damage = 0;
+    s_last_life_steal = 0;
     s_chain_observations = s_chain_last_cid = 0;
     s_send_ok = 1;
     s_target_count = 1;
@@ -398,6 +401,33 @@ static void growing_roster_and_failed_dedup_reserve(void)
     assert(s_sent == 201); /* Shrinking the roster retains attack dedup. */
 }
 
+static void meat_hammer_only_marks_real_ebi_and_keeps_per_target_dedup(void)
+{
+    AnchorPlayerAttackSample a = sample(0);
+    unsigned int character, kind;
+    for (character = 0; character < 4; ++character)
+        for (kind = 0; kind < 0x25; ++kind)
+        {
+            assert(anchor_player_attack_is_meat_hammer(1, character, kind) ==
+                   (character == 1 && kind == 0x1d));
+            assert(!anchor_player_attack_is_meat_hammer(0, character, kind));
+        }
+    setup();
+    a.life_steal = 1;
+    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{2, 0, 0}, 5, 20}, 5};
+    s_target_count = 2;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 2 && s_last_life_steal == 1);
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 2);
+    setup(); a.is_player = 0; a.is_projectile = 1;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 1 && s_last_life_steal == 0);
+    setup(); a.is_player = 1; a.is_projectile = 0; a.life_steal = 0;
+    anchor_player_attack_observe(&a);
+    assert(s_sent == 1 && s_last_life_steal == 0);
+}
+
 int main(void)
 {
     actual_geometry_and_disabled_attack();
@@ -414,6 +444,7 @@ int main(void)
     stale_cube_splash_episode_releases_its_hit_history();
     growing_cache_and_invalid_spheres();
     growing_roster_and_failed_dedup_reserve();
+    meat_hammer_only_marks_real_ebi_and_keeps_per_target_dedup();
     puts("player attack geometry and episode tests passed");
     return 0;
 }

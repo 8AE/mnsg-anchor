@@ -5,6 +5,8 @@
  * status when the packet identifies Sasuke's native kunai hit. */
 int anchor_player_freeze_apply_hit(float x, float y, float z,
                                    int hit_kind, int damage);
+int anchor_player_freeze_apply_hit_with_loss(float x, float y, float z,
+    int hit_kind, int damage, unsigned int *health_loss);
 int anchor_player_freeze_active(void);
 /* Frozen visual pose; native gameplay animation continues to advance. */
 int anchor_player_freeze_visual_pose(int *action, float *frame);

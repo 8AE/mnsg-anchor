@@ -152,6 +152,10 @@ _interaction_session: int = 0
 _player_hit_seq: int = 0
 _player_hits = deque(maxlen=32)
 _player_hit_seen: "dict[int, tuple[int, int, int, int]]" = {}
+_player_hit_pending: "dict[int, tuple[int, dict]]" = {}
+_player_hit_receipts: "dict[int, tuple[int, dict]]" = {}
+_player_hit_receipt_seq: int = 0
+_player_hit_heals = deque(maxlen=64)
 _player_cube_seq: int = 0
 _player_cube_events = deque(maxlen=64)
 _player_cube_poses: "dict[int, tuple[int, dict]]" = {}
@@ -247,6 +251,7 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
     "MNSG_MINIGAME_INVITE": 256,
     "MNSG_PLAYER_POS": 640,
     "MNSG_PLAYER_HIT": 512,
+    "MNSG_PLAYER_HIT_RESULT": 512,
     "MNSG_PLAYER_CUBE_CTRL": 512,
     "MNSG_PLAYER_SOUND": 320,
     "MNSG_PLAYER_ICE_BREAK": 352,
@@ -272,6 +277,8 @@ HOT_PACKET_MAX_BYTES: "dict[str, int]" = {
 }
 PLAYER_HIT_MAX_AGE_MS: int = 500
 PLAYER_HIT_DAMAGE_VALUES = (1, 2, 3, 4, 8)
+PLAYER_HIT_RESULT_MAX_AGE_MS: int = 1000
+PLAYER_HIT_RECEIPT_COUNT: int = 64
 PLAYER_CUBE_MAX_AGE_MS: int = 500
 PLAYER_CUBE_POSE_INTERVAL_MS: int = 100
 PLAYER_CUBE_EVENT_COUNT: int = 64
@@ -1370,6 +1377,10 @@ def _recv_loop(sock: socket.socket) -> None:
                     _receive_player_hit(packet)
                     continue
 
+                if ptype == "MNSG_PLAYER_HIT_RESULT":
+                    _receive_player_hit_result(packet)
+                    continue
+
                 if ptype == "MNSG_PLAYER_CUBE_CTRL":
                     _receive_player_cube_control(packet)
                     continue
@@ -1561,6 +1572,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
         _player_states.clear()
         _player_hits.clear()
         _player_hit_seen.clear()
+        _reset_player_hit_results()
         _reset_player_cube()
         _reset_player_sounds()
         _reset_player_ice_breaks()
@@ -1667,6 +1679,7 @@ def connect(
     with _player_states_lock:
         _player_hits.clear()
         _player_hit_seen.clear()
+        _reset_player_hit_results()
         _reset_player_cube()
         _reset_player_sounds()
         _reset_player_ice_breaks()
@@ -1831,6 +1844,9 @@ def _player_hit_matches_live_state(packet: dict) -> bool:
         damage = packet.get("damage", 1)
         if type(damage) is not int or damage not in PLAYER_HIT_DAMAGE_VALUES:
             return False
+        life_steal = packet.get("lifeSteal", 0)
+        if type(life_steal) is not int or life_steal not in (0, 1) or (life_steal and hit_kind):
+            return False
         target = int(packet.get("targetClientId", 0))
         source = _player_states.get(sender, {})
         local = _player_states.get(_client_id, {})
@@ -1905,12 +1921,14 @@ def _receive_player_hit(packet: dict) -> bool:
 def send_player_hit(target_cid: int, target_epoch: int,
                     hit_x: float, hit_y: float, hit_z: float,
                     source_epoch: "int | None" = None,
-                    hit_kind: int = 0, damage: int = 1) -> bool:
+                    hit_kind: int = 0, damage: int = 1, life_steal: int = 0) -> bool:
     """Request one native hit on the target owner using current identities."""
     global _player_hit_seq
     if type(hit_kind) is not int or hit_kind not in (0, 1):
         return False
     if type(damage) is not int or damage not in PLAYER_HIT_DAMAGE_VALUES:
+        return False
+    if type(life_steal) is not int or life_steal not in (0, 1) or (life_steal and hit_kind):
         return False
     try:
         target_cid = int(target_cid)
@@ -1954,14 +1972,33 @@ def send_player_hit(target_cid: int, target_epoch: int,
             "damage": damage,
             "quiet": True,
         }
+        if life_steal:
+            _prune_player_hit_results(int(time.monotonic() * 1000))
+            if len(_player_hit_pending) >= PLAYER_HIT_RECEIPT_COUNT:
+                # This budget bounds transient confirmations only. Preserve
+                # ordinary PvP damage when no healing receipt can be tracked.
+                life_steal = 0
+            else:
+                packet["lifeSteal"] = 1
+                # Register before sendall: the receive thread may get the
+                # result before sendall returns to this thread.
+                _player_hit_pending[next_seq] = (packet["hitT"], dict(packet))
     if not _send_raw(packet):
+        if life_steal:
+            with _player_states_lock:
+                _player_hit_pending.pop(next_seq, None)
+                _player_hit_heals_copy = [entry for entry in _player_hit_heals
+                                          if entry[1]["hitSeq"] != next_seq]
+                _player_hit_heals.clear()
+                _player_hit_heals.extend(_player_hit_heals_copy)
         return False
     _player_hit_seq = next_seq
     return True
 
 
-def poll_player_hit():
+def poll_player_hit(with_receipt: bool = False):
     """Return a fresh owner-targeted hit tuple, or None, without any echo."""
+    global _player_hit_receipt_seq
     now_ms = int(time.monotonic() * 1000)
     with _player_states_lock:
         while _player_hits:
@@ -1969,9 +2006,117 @@ def poll_player_hit():
             if (now_ms - received_ms > PLAYER_HIT_MAX_AGE_MS or
                     not _player_hit_matches_live_state(packet)):
                 continue
-            return (int(packet["clientId"]), int(packet["targetEpoch"]),
+            result = (int(packet["clientId"]), int(packet["targetEpoch"]),
                     float(packet["hitX"]), float(packet["hitY"]), float(packet["hitZ"]),
                     packet.get("hitKind", 0), packet.get("damage", 1))
+            if not with_receipt:
+                return result
+            receipt = 0
+            if packet.get("lifeSteal", 0):
+                _prune_player_hit_results(now_ms)
+                if len(_player_hit_receipts) < PLAYER_HIT_RECEIPT_COUNT:
+                    _player_hit_receipt_seq = (_player_hit_receipt_seq % _POSITION_SEQUENCE_MASK) + 1
+                    receipt = _player_hit_receipt_seq
+                    _player_hit_receipts[receipt] = (now_ms, packet)
+            return (*result, receipt)
+    return None
+
+
+def _reset_player_hit_results() -> None:
+    _player_hit_pending.clear()
+    _player_hit_receipts.clear()
+    _player_hit_heals.clear()
+
+
+def _player_hit_attacker_live(packet: dict) -> bool:
+    """Check the original attacker's current identity, holding the state lock."""
+    local = _player_states.get(_client_id, {})
+    return (_connected and packet["clientId"] == _client_id and
+            packet["sourceSession"] == _interaction_session and
+            local.get("interactionSession") == _interaction_session and
+            packet["sourceEpoch"] == local.get("playerEpoch") and
+            packet["roomId"] == _local_room_id == local.get("roomId") and
+            not local.get("collisionDisabled", 0))
+
+
+def _prune_player_hit_results(now_ms: int) -> None:
+    for sequence, (sent_ms, packet) in tuple(_player_hit_pending.items()):
+        if (now_ms - sent_ms > PLAYER_HIT_RESULT_MAX_AGE_MS or
+                not _player_hit_attacker_live(packet)):
+            del _player_hit_pending[sequence]
+    for receipt, (received_ms, packet) in tuple(_player_hit_receipts.items()):
+        if (now_ms - received_ms > PLAYER_HIT_MAX_AGE_MS or not _connected or
+                packet["targetSession"] != _interaction_session or
+                packet["roomId"] != _local_room_id):
+            del _player_hit_receipts[receipt]
+
+
+def finish_player_hit(receipt: int, health_loss: int) -> bool:
+    """Consume one native hit receipt and report its actual HP loss once."""
+    if type(receipt) is not int or receipt <= 0:
+        return False
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        _prune_player_hit_results(now_ms)
+        entry = _player_hit_receipts.pop(receipt, None)
+        if entry is None:
+            return False
+        _, hit = entry
+        source = _player_states.get(hit["clientId"], {})
+        if (type(health_loss) is not int or not 0 < health_loss <= 2 * hit.get("damage", 1) or
+                not source.get("online", False) or
+                source.get("interactionSession") != hit["sourceSession"] or
+                source.get("roomId") != hit["roomId"]):
+            return False
+        # Epoch fields retain the ORIGINAL attack identities. A lethal hit
+        # may already have changed the victim's own current player epoch.
+        result = {field: hit[field] for field in
+                  ("roomId", "sourceSession", "targetSession", "sourceEpoch", "targetEpoch", "hitSeq")}
+        result.update(type="MNSG_PLAYER_HIT_RESULT", clientId=_client_id,
+                      targetClientId=hit["clientId"], healthLoss=health_loss, quiet=True)
+    return _send_raw(result)
+
+
+def _receive_player_hit_result(packet: dict) -> bool:
+    now_ms = int(time.monotonic() * 1000)
+    fields = ("clientId", "targetClientId", "roomId", "sourceSession",
+              "targetSession", "sourceEpoch", "targetEpoch", "hitSeq", "healthLoss")
+    if (type(packet) is not dict or packet.get("type") != "MNSG_PLAYER_HIT_RESULT" or
+            any(type(packet.get(field)) is not int for field in fields)):
+        return False
+    with _player_states_lock:
+        _prune_player_hit_results(now_ms)
+        entry = _player_hit_pending.get(packet["hitSeq"])
+        if entry is None:
+            return False
+        sent_ms, hit = entry
+        source = _player_states.get(packet["clientId"], {})
+        if (packet["clientId"] != hit["targetClientId"] or
+                packet["targetClientId"] != hit["clientId"] or
+                any(packet[field] != hit[field] for field in fields[2:-1]) or
+                not 0 < packet["healthLoss"] <= 2 * hit["damage"] or
+                not source.get("online", False) or
+                source.get("interactionSession") != hit["targetSession"] or
+                source.get("roomId") != hit["roomId"] or
+                not _player_hit_attacker_live(hit)):
+            return False
+        del _player_hit_pending[packet["hitSeq"]]
+        _player_hit_heals.append((sent_ms, hit, packet["healthLoss"]))
+    return True
+
+
+def poll_player_hit_heal(source_epoch: "int | None" = None):
+    """Consume confirmed healing only for the same living attacker lifetime."""
+    now_ms = int(time.monotonic() * 1000)
+    with _player_states_lock:
+        _prune_player_hit_results(now_ms)
+        while _player_hit_heals:
+            sent_ms, hit, amount = _player_hit_heals.popleft()
+            if (now_ms - sent_ms > PLAYER_HIT_RESULT_MAX_AGE_MS or
+                    not _player_hit_attacker_live(hit) or
+                    (source_epoch is not None and source_epoch != hit["sourceEpoch"])):
+                continue
+            return (hit["sourceEpoch"], amount)
     return None
 
 
@@ -4427,6 +4572,9 @@ def set_position_anim(
     if _client_id:
         with _player_states_lock:
             local = _player_states.setdefault(_client_id, {})
+            if (local.get("playerEpoch", player_epoch) != player_epoch or
+                    local.get("roomId", _local_room_id) != _local_room_id):
+                _reset_player_hit_results()
             local["posX"] = x
             local["posY"] = y
             local["posZ"] = z
@@ -4569,6 +4717,7 @@ def set_local_room(room_id: int, char_name: str = "") -> bool:
         # a same-room metadata refresh must preserve active remote visuals.
         if (previous_room >= 0 and previous_room != room_id) or \
                 _player_states.get(_client_id, {}).get("roomId") != room_id:
+            _reset_player_hit_results()
             _reset_player_cube()
             _projectile_spawns.clear()
             _reset_player_sounds()

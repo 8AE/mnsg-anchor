@@ -18,6 +18,7 @@ typedef struct AnchorPlayerAttackSample
     int hit_kind; /* 0 ordinary, 1 Sasuke ice kunai. */
     int is_projectile; /* Verified native thrown-weapon task. */
     int damage; /* Native half-heart units from the outgoing attack source. */
+    int life_steal; /* Verified real-player Ebisumaru meat-hammer strike. */
     int is_impact_splash; /* Frozen cube impact, hits every target once. */
     int episode_id; /* Carry identity for separate impacts by the same cube. */
     int splash_occupant_cid;
@@ -32,5 +33,7 @@ void anchor_player_attack_forget_task(const void *task);
 int anchor_player_attack_observe(const AnchorPlayerAttackSample *sample);
 /* Common native actor-damage table indexed by attacker kind byte +0x4c. */
 int anchor_player_attack_damage_for_kind(unsigned int kind);
+int anchor_player_attack_is_meat_hammer(int is_player, unsigned int character,
+                                        unsigned int kind);
 
 #endif

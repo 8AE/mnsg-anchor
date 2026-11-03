@@ -217,10 +217,18 @@ int anchor_player_freeze_visual_pose(int *action, float *frame)
 int anchor_player_freeze_apply_hit(float x, float y, float z,
                                    int hit_kind, int damage)
 {
+    return anchor_player_freeze_apply_hit_with_loss(x, y, z, hit_kind, damage, 0);
+}
+
+int anchor_player_freeze_apply_hit_with_loss(float x, float y, float z,
+    int hit_kind, int damage, unsigned int *health_loss)
+{
     int accepted;
+    if (health_loss)
+        *health_loss = 0;
     if (hit_kind != 0 && hit_kind != 1)
         return 0;
-    accepted = anchor_player_damage_apply(x, y, z, damage);
+    accepted = anchor_player_damage_apply_with_loss(x, y, z, damage, health_loss);
 #if DEBUG_BUTTON_ENABLED
     if (hit_kind == 1)
         recomp_printf("[player_ice] hit accepted=%d hp=%u\n", accepted,

@@ -84,6 +84,15 @@ int anchor_player_damage_apply(float x, float y, float z, int damage)
         --s_health;
     return 1;
 }
+int anchor_player_damage_apply_with_loss(float x, float y, float z, int damage,
+                                         unsigned int *health_loss)
+{
+    unsigned int before = s_health;
+    int accepted = anchor_player_damage_apply(x, y, z, damage);
+    if (health_loss)
+        *health_loss = before - s_health;
+    return accepted;
+}
 int anchor_is_connected(void) { return s_connected; }
 int item_sync_save_is_loaded(void) { return s_loaded; }
 unsigned int item_sync_local_player_health(void) { return s_health; }
