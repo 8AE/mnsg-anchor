@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <string.h>
+#include <math.h>
 
 #define ANCHOR_PLAYER_EFFECTS_HOST_TEST
 #include "../src/player/anchor_player_effects.c"
@@ -16,8 +17,19 @@ static int resources_ready = 1;
 static int install_native_post;
 static int native_post_calls;
 short D_800C7A72_C8672;
-static unsigned char charge_object_storage[8][0x98];
+static unsigned char charge_object_storage[64][0x98];
+static void *display_record_next[64];
 static int charge_objects_created;
+static int object_failure_after = -1;
+static int remote_pair_valid = 1;
+static int dialog_active;
+static int freeze_prompt_active;
+static unsigned char graphics_storage[2 * 0x1d6d8];
+unsigned char *D_8015C5C8_15D1C8;
+unsigned int *D_8015C5CC_15D1CC;
+unsigned char *D_80168504_169104;
+int D_801684F8_1690F8;
+int D_801684FC_1690FC;
 static unsigned char aura_task_storage[ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT + 2][6][0xf0];
 static unsigned char aura_object_storage[ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT + 2][6][0x98];
 static unsigned char purple_task_storage[ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT + 2][4][0xf0];
@@ -87,6 +99,7 @@ void *func_80034E08_35A08(void *parent, void (*update)(void *, void *),
     assert(managers_created < ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT + 2);
     memset(manager_storage[managers_created], 0,
            sizeof(manager_storage[managers_created]));
+    put_pointer(manager_storage[managers_created], 0x0c, (void *)update);
     return manager_storage[managers_created++];
 }
 
@@ -107,13 +120,50 @@ void *func_8000DBF0_E7F0(void *task, unsigned int model,
     short rx, short ry, short rz, float sx, float sy, float sz,
     short file8, short file9)
 {
-    (void)task; (void)model; (void)material;
+    unsigned char *object;
+    (void)model; (void)material;
     (void)x; (void)y; (void)z;
     (void)rx; (void)ry; (void)rz;
     (void)sx; (void)sy; (void)sz;
     (void)file8; (void)file9;
-    assert(charge_objects_created < 8);
-    return charge_object_storage[charge_objects_created++];
+    if (object_failure_after >= 0 && charge_objects_created >= object_failure_after)
+        return 0;
+    assert(charge_objects_created < 64);
+    object = charge_object_storage[charge_objects_created++];
+    memset(object, 0, 0x98);
+    display_record_next[charge_objects_created - 1] = read_task_pointer(task, 0x18);
+    put_pointer(object, 0, read_task_pointer(task, 0x18));
+    put_pointer(task, 0x18, object);
+    return object;
+}
+
+void *anchor_player_effects_test_record_next(const void *object)
+{
+    int i;
+    for (i = 0; i < charge_objects_created; ++i)
+        if (object == charge_object_storage[i])
+            return display_record_next[i];
+    assert(0);
+    return 0;
+}
+
+int anchor_player_models_is_remote_pair(const void *task, const void *object)
+{
+    return remote_pair_valid && task && read_task_pointer(task, 0x18) == object;
+}
+
+int anchor_dialog_busy(void) { return dialog_active; }
+int anchor_freeze_prompt_visible(void) { return freeze_prompt_active; }
+
+void func_80033898_34498(unsigned short rx, unsigned short ry,
+                        unsigned short rz, float *x, float *y, float *z)
+{
+    float angle = (float)(ry & 0x3ffu) * 0.006135923151542565f;
+    float original_x = *x;
+    (void)y;
+    assert((rx & 0x3ffu) == 0 && (rz & 0x3ffu) == 0);
+    *x = original_x * cosf(angle) + *z * sinf(angle);
+    *z = *z * cosf(angle) - original_x * sinf(angle);
 }
 
 int func_801E8C44_5A4B54(void *manager, unsigned char kind)
@@ -733,6 +783,231 @@ static void test_hidden_owner_defers_manager_cleanup(void)
     anchor_player_effects_reset(&state, 1);
 }
 
+static void chain_fixture(void *task, void *object, void *broad)
+{
+    anchor_player_effects_load_resources();
+    managers_created = charge_objects_created = 0;
+    effect_children_live = aura_children_live = 0;
+    object_failure_after = -1;
+    remote_pair_valid = 1;
+    dialog_active = freeze_prompt_active = 0;
+    put_pointer(task, 0x18, object);
+    put_pointer(object, 0x40, broad);
+    *(unsigned short *)((unsigned char *)object + 0x3c) = 0x120;
+    D_800C7A72_C8672 = 0;
+    D_8015C5C8_15D1C8 = graphics_storage;
+    D_8015C5CC_15D1CC = (unsigned int *)graphics_storage;
+    D_80168504_169104 = graphics_storage + 0x14c80;
+    D_801684F8_1690F8 = 0;
+    D_801684FC_1690FC = 0;
+}
+
+static AnchorPlayerModelRemote chain_remote(void)
+{
+    AnchorPlayerModelRemote remote = remote_state(0, 0x70);
+    remote.chain[0] = 1;
+    remote.chain[1] = 1000;
+    remote.chain[2] = 2400;
+    remote.chain[3] = 13000;
+    return remote;
+}
+
+static void test_chain_native_geometry_and_phase(void)
+{
+    AnchorPlayerEffectState state = {0};
+    AnchorPlayerModelRemote remote = chain_remote();
+    unsigned char task[0xf0] = {0}, object[0x98] = {0}, broad[4] = {0};
+    unsigned char *head, *link;
+    int i;
+    chain_fixture(task, object, broad);
+    *(float *)(object + 8) = 10;
+    *(float *)(object + 0xc) = 20;
+    *(float *)(object + 0x10) = 30;
+    apply(&state, task, object, &remote, 10);
+    assert(managers_created == 1 && charge_objects_created == 9);
+    assert(s_manager_count == 1);
+    assert(*(unsigned int *)((unsigned char *)state.manager + 0x30) == 0);
+    assert(*(unsigned int *)((unsigned char *)state.manager + 0x34) == 0);
+    assert(*(unsigned int *)((unsigned char *)state.manager + 0x38) == 0);
+    assert(*(unsigned int *)((unsigned char *)state.manager + 0x48) == 0);
+    head = state.chain_object[0];
+    assert(*(unsigned int *)(head + 0x2c) == 0x49009020u);
+    assert(*(float *)(head + 8) == 10 && *(float *)(head + 0xc) == 24);
+    assert(*(float *)(head + 0x10) == 130);
+    assert(*(float *)(head + 0x1c) == 0.09f);
+    for (i = 1; i < 9; ++i)
+    {
+        float expected = 44.0f + (float)(9 - i) / 9.0f * (130 - 44 - 2.5f);
+        link = state.chain_object[i];
+        assert(*(unsigned int *)(link + 0x2c) == 0x49009348u);
+        assert(*(unsigned int *)(link + 0x30) == 0xc006d920u);
+        assert(*(unsigned short *)(link + 0x3c) == 0x120u);
+        assert(*(unsigned int *)(link + 0x40) == (unsigned int)(unsigned long)broad);
+        assert(*(unsigned short *)(link + 0x44) == 0x152u);
+        assert(*(unsigned short *)(link + 0x14) == 0x8000u);
+        assert(*(unsigned short *)(link + 0x16) == 0x8000u);
+        assert(*(unsigned short *)(link + 0x18) == 0x8000u);
+        assert(*(float *)(link + 0x1c) == 0.045f && link[5] == 10);
+        assert(fabsf(*(float *)(link + 0x10) - expected) < 0.0001f);
+        assert(!(link[0x64] & 1u));
+    }
+    apply(&state, task, object, &remote, 10);
+    assert(managers_created == 1 && charge_objects_created == 9);
+    remote.chain[0] = 3; /* Native latch hides head, preserves all links. */
+    remote.action = 0x73;
+    apply(&state, task, object, &remote, 10);
+    assert(head[0x64] & 1u);
+    assert(*(unsigned int *)(head + 0x2c) == 0);
+    assert(!((unsigned char *)state.chain_object[1])[0x64]);
+    remote.chain[3] = 16000;
+    apply(&state, task, object, &remote, 10);
+    assert(state.chain_head[2] == 140);
+    apply(&state, task, object, &remote, 10);
+    apply(&state, task, object, &remote, 10);
+    assert(state.chain_head[2] == 160);
+    remote.action = 0x77;
+    apply(&state, task, object, &remote, 10);
+    link = state.chain_object[1];
+    assert(fabsf(*(float *)(link + 0xc) - (23.0f + 8.0f / 9.0f)) < 0.0001f);
+    assert(fabsf(*(float *)(link + 0x10) -
+                  (41.5f + 8.0f / 9.0f * (160 - 41.5f - 2.5f))) < 0.0001f);
+    remote.chain[0] = 4;
+    apply(&state, task, object, &remote, 10);
+    assert(state.manager == 0 && s_manager_count == 0);
+    anchor_player_effects_reset(&state, 1);
+}
+
+static void test_chain_missing_resources_partial_pool_and_identity(void)
+{
+    AnchorPlayerEffectState state = {0};
+    AnchorPlayerModelRemote remote = chain_remote();
+    unsigned char task[0xf0] = {0}, object[0x98] = {0}, broad[4] = {0};
+    unsigned char *textures;
+    int i, before;
+    chain_fixture(task, object, broad);
+    textures = s_charge_textures;
+    s_charge_textures = 0;
+    apply(&state, task, object, &remote, 10);
+    assert(state.manager == 0 && charge_objects_created == 0);
+    s_charge_textures = textures;
+    object_failure_after = 4;
+    apply(&state, task, object, &remote, 10);
+    assert(state.manager && charge_objects_created == 4);
+    for (i = 0; i < 4; ++i)
+        assert(((unsigned char *)state.chain_object[i])[0x64] & 1u);
+    apply(&state, task, object, &remote, 10);
+    assert(charge_objects_created == 4 && managers_created == 1);
+    object_failure_after = -1;
+    apply(&state, task, object, &remote, 10);
+    assert(charge_objects_created == 9 && managers_created == 1);
+    before = managers_destroyed;
+    ++remote.player_epoch;
+    apply(&state, task, object, &remote, 10);
+    assert(managers_destroyed == before + 1 && managers_created == 2);
+    ++remote.interaction_session;
+    apply(&state, task, object, &remote, 10);
+    assert(managers_destroyed == before + 2 && managers_created == 3);
+    apply(&state, task, object, &remote, 11);
+    assert(managers_destroyed == before + 3 && managers_created == 4);
+    remote.chain[0] = 0;
+    apply(&state, task, object, &remote, 11);
+    assert(state.manager == 0 && managers_destroyed == before + 4);
+    remote.chain[0] = 1;
+    remote.chain[1] = 1000000001;
+    apply(&state, task, object, &remote, 11);
+    assert(state.manager == 0);
+    remote.chain[1] = 1000;
+    remote.action = 0x6f;
+    apply(&state, task, object, &remote, 11);
+    assert(state.manager == 0);
+    anchor_player_effects_reset(&state, 1);
+}
+
+static void test_chain_draw_budget_and_owner_reuse(void)
+{
+    AnchorPlayerEffectState state = {0};
+    AnchorPlayerModelRemote remote = chain_remote();
+    unsigned char task[0xf0] = {0}, object[0x98] = {0}, broad[4] = {0};
+    unsigned char unrelated[0x98] = {0};
+    unsigned char *head;
+    chain_fixture(task, object, broad);
+    apply(&state, task, object, &remote, 10);
+    head = state.chain_object[0];
+    anchor_player_chain_draw_begin(head);
+    assert(!(head[0x64] & 1u));
+    anchor_player_chain_draw_end();
+    D_8015C5CC_15D1CC = (unsigned int *)(graphics_storage + 0x14c80 - 512 * 8 - 96 * 8 + 8);
+    anchor_player_chain_draw_begin(head);
+    assert(head[0x64] & 1u);
+    anchor_player_chain_draw_end();
+    assert(!(head[0x64] & 1u));
+    D_8015C5CC_15D1CC = (unsigned int *)graphics_storage;
+    D_80168504_169104 = graphics_storage + 0x1d380 - 6 * 64 + 1;
+    anchor_player_chain_draw_begin(head);
+    assert(head[0x64] & 1u);
+    anchor_player_chain_draw_end();
+    D_80168504_169104 = graphics_storage + 0x14c80;
+    D_801684F8_1690F8 = 33;
+    anchor_player_chain_draw_begin(head);
+    assert(head[0x64] & 1u);
+    anchor_player_chain_draw_end();
+    D_801684F8_1690F8 = 0;
+    dialog_active = 1;
+    D_8015C5CC_15D1CC = (unsigned int *)(graphics_storage + 0x14c80 - 512 * 8 - 96 * 8);
+    anchor_player_chain_draw_begin(head);
+    assert(head[0x64] & 1u);
+    anchor_player_chain_draw_end();
+    dialog_active = 0;
+    D_8015C5CC_15D1CC = (unsigned int *)graphics_storage;
+    *(unsigned int *)(head + 0x30) = 0x1234u;
+    anchor_player_chain_draw_begin(head);
+    assert(head[0x64] & 1u); /* Unknown material cannot use this bound. */
+    anchor_player_chain_draw_end();
+    *(unsigned int *)(head + 0x30) = 0xc006d920u;
+    remote_pair_valid = 0;
+    anchor_player_chain_draw_begin(head);
+    assert(!(head[0x64] & 1u)); /* Stale owner cannot edit a reused object. */
+    anchor_player_chain_draw_end();
+    remote_pair_valid = 1;
+    anchor_player_chain_draw_begin(unrelated);
+    assert(unrelated[0x64] == 0);
+    anchor_player_chain_draw_end();
+    anchor_player_effects_suspend(&state);
+    assert(head[0x64] & 1u);
+    anchor_player_effects_set_context(&state, task, &remote, 10);
+    assert(state.manager == 0);
+    anchor_player_effects_reset(&state, 1);
+}
+
+static void test_chain_manager_cap_and_scene_reset(void)
+{
+    AnchorPlayerEffectState state[ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT + 1] = {0};
+    unsigned char task[ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT + 1][0xf0] = {{0}};
+    unsigned char object[ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT + 1][0x98] = {{0}};
+    unsigned char broad[4] = {0};
+    AnchorPlayerModelRemote remote = chain_remote();
+    int i, before;
+    chain_fixture(task[0], object[0], broad);
+    for (i = 0; i < ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT + 1; ++i)
+    {
+        put_pointer(task[i], 0x18, object[i]);
+        put_pointer(object[i], 0x40, broad);
+        *(unsigned short *)(object[i] + 0x3c) = 0x120;
+        remote.cid = i + 2;
+        apply(&state[i], task[i], object[i], &remote, 10);
+    }
+    assert(managers_created == ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT);
+    assert(charge_objects_created == 9 * ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT);
+    assert(state[ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT].manager == 0);
+    before = managers_destroyed;
+    anchor_player_effects_load_resources();
+    anchor_player_effects_reset(&state[0], 0);
+    assert(managers_destroyed == before);
+    for (i = 1; i < ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT + 1; ++i)
+        anchor_player_effects_reset(&state[i], 0);
+    assert(s_manager_count == 0);
+}
+
 int main(void)
 {
     anchor_player_effects_load_resources();
@@ -750,5 +1025,9 @@ int main(void)
     test_sudden_aura_retry_expires();
     test_sudden_aura_pool_is_bounded();
     test_hidden_owner_defers_manager_cleanup();
+    test_chain_native_geometry_and_phase();
+    test_chain_missing_resources_partial_pool_and_identity();
+    test_chain_draw_budget_and_owner_reuse();
+    test_chain_manager_cap_and_scene_reset();
     return 0;
 }

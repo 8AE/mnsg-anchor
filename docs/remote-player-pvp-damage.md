@@ -24,6 +24,90 @@ an older
 packet with no amount retains the former one-unit baseline. Both clients need
 this update for source-specific damage.
 
+## Chain-pipe player grapples
+
+Goemon's chain-pipe head and links treat a multiplayer player overlap as a
+grapple opportunity. When A chains B, the native block-grapple latch pulls A
+toward B using the ground pull/release actions `0x73`/`0x74` or the airborne
+actions `0x7A`/`0x7B`. Chain contacts never send `MNSG_PLAYER_HIT`, including
+when a grapple is declined. Ordinary native block and enemy contacts retain
+precedence across every victim group in the collision pass; the copied remote
+contact commits only at the following native chain-head update.
+
+The latch receives temporary target records containing copied coordinates.
+They are never registered as native actors or victims, and the native latch
+retains no target pointer. Its native vertical alignment places A's feet at
+B's feet. During the pull, the native chain endpoint and horizontal steering
+follow the current B position. Contact between the two player bodies starts
+native release, since the native block arrival radius is smaller than solid
+multiplayer bodies. A changed target session/epoch, vanished or ineligible
+target, scripted control, vertical movement beyond the native arrival
+tolerance, or a 180-tick blocked pull also releases the chain. Local hurt and
+character-change states retain control of their own native actions.
+
+The existing player-pose stream carries the chain phase and endpoint for
+remote presentation. The chain head and links are excluded from thrown-shot
+capture, consumption and stop messages; other projectile families retain
+their existing handling.
+
+`bash tests/run_player_chain.sh` checks attack damage suppression, real native
+wrapper calls with mocked native behavior, collision-group precedence,
+session/lifetime changes, moving targets, native release, and projectile
+exclusion. These host checks and MIPS compilation do not verify fresh
+two-client grapple motion or animation playback in the game.
+
+### Comparing native pull speed
+
+The native latch writes acceleration `1.5606060028` to player work `+0x04`
+and speed caps `18.7272720337` to task `+0xE4/+0xE8`. Work mode `3` supplies
+the forced pull heading. The multiplayer wrapper uses this native latch;
+it does not multiply those values. The host fixture checks these exact native
+values across ground, alternate and airborne action entry and target updates.
+
+A firing-client diagnostic captured a floor-level pull whose speed stayed at
+one acceleration step despite retaining mode, acceleration and caps. Native
+`func_801CD310_589220` explains that result: on floor types `0x95` and `0x9A`,
+a derived input magnitude below `0.1` discards accumulated velocity even when
+forced movement mode is active. It then adds the native acceleration again,
+producing the observed `1.560606` speed plateau with neutral stick input.
+
+For an eligible active player grapple on those two floor types, the wrapper
+temporarily supplies the existing native forced acceleration as that physics
+call's non-dead input magnitude. Native code still calculates velocity using
+its own heading, acceleration, collision and caps. The original input float
+is restored bit-for-bit on return, including when the player changes during
+the call. Other movement, native block pulls, raw controller records and
+cached inputs retain their existing values. No speed multiplier is applied.
+The host physics fixture reproduces the old plateau and checks accumulation
+to the native cap with neutral input across ground, alternate and air pulls;
+a fresh in-game run remains necessary to confirm the corrected travel rate.
+
+The debug package records `[chain_pull]` diagnostics for player and ordinary
+block grapples. To compare them, manually launch the game with its output
+redirected, perform one player grapple and one ordinary chain-block grapple
+in the same session, then inspect `/private/tmp/mnsg-chain-pull.log`:
+
+```sh
+"/Applications/Goemon64Recompiled.app/Contents/MacOS/Goemon64Recompiled" > /private/tmp/mnsg-chain-pull.log 2>&1
+```
+
+Records identify `peer` or `block` and pair `before`/`after` movement samples.
+They include action, chain phase, movement mode, the player `+0x61` movement
+bypass state, work `+0x69` action lock, gravity, derived input magnitude,
+acceleration, caps, velocity,
+previous velocity magnitude (`b0_1000`), collision flags, ground contact and
+surface normal. `*1000` fields use native units multiplied by 1000;
+`xyz100` and `delta100` use native world units multiplied by 100. A nonfinite
+or out-of-range diagnostic value is printed as `2147483647`.
+
+Each pull records the first 12 movement ticks, then ticks 30, 60, 90, 120, 150
+and 180, with a player-latch commit/release record when available. Release
+packages omit the diagnostic hooks and logging import. These records expose
+the firing client's actual movement; a post-fix recording can confirm native
+velocity accumulation and compare it with the chain-block baseline.
+
+## Frozen cube impacts
+
 The thrown frozen cube arms a fixed native impact sphere with kind `0x17`,
 the gold tier's four-unit native damage in the common actor intake. Its PvP
 splash sends four units per intersecting remote player other than its frozen

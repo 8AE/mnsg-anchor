@@ -14,12 +14,19 @@ players or invoke attack, damage, collision or item award callbacks.
 | Sasuke jetpack smoke | file_11 `func_801EDC08_5A9B18`, selector `0x16`, `0x490026B0` puffs | Visual-only twin emitter with bounded puffs. Each puff carries the native camera-facing `0x8000` rotation markers. The position snapshot carries native task `+0xA4` vertical speed in hundredths during Sasuke action `0x9B`. Active smoke uses the native drift formula; departing smoke uses the native fade drift. The native callback writes player work and queues a sound stop, so it is not replayed. |
 | Ryo pickup burst | file_12 `func_8021804C_5D351C`, slot-8 child effect | An accepted fresh room coin tombstone starts this visual constructor on the still-live mapped coin actor before removal. It never invokes the pickup callback that awards currency. |
 | Thrown Fire Ryo trail | file_11 `func_801ED1F0_5A9100` and `func_801ED26C_5A917C`, model `0x4900B878` | Native kind `0x12` coin is captured after its first flight tick and sent through the existing transient room projectile route. The receiver simulates the visual coin, impact and up to four trail particles. Its trail binds the staged remote Goemon file `0x120` and resident texture file `0x152`; it never runs the coin's native collision callback. |
+| Goemon chain pipe | file_11 `func_801EA00C_5A5F1C` head and `func_801EA4E8_5A63F8` links | Nine inert display records reproduce head `0x49009020` and eight `0x49009348` links using the staged remote Goemon broad file. The endpoint comes from the current position snapshot. Native latch hides the head while the eight links remain visible; completion, missing samples and owner changes retire the visual. The attack-arming constructor and gameplay callbacks never run remotely. |
 
 `MNSG_PLAYER_POS` is latest-state room traffic. Charge start, full, and release
 edges bypass the normal movement cadence without per-frame particle packets.
 The optional `jetVelocity100` scalar uses the same position route and cadence.
 Missing or invalid values clear the prior sample; older clients retain the
 previous jet smoke fallback. New clients use the transmitted native speed.
+The optional `chain` array contains native phase plus one and endpoint XYZ in
+hundredths. Start, stop and phase changes use the same position route's edge
+updates; endpoint travel uses its existing cadence. Receivers clear missing or
+invalid samples and interpolate endpoint travel over three native ticks, with
+phase changes applied immediately. The body action and animation remain the
+ordinary player-state sample. Chain visuals add no interaction or damage event.
 `MNSG_PROJECTILE_SPAWN` remains a quiet transient room broadcast; Fire Ryo uses
 the existing bounded payload, TTL, peer session/epoch validation and event ID
 deduplication. Its visual trail adds no network messages. The receiver can
@@ -31,6 +38,14 @@ banks of 20 records, purple managers at four bursts of four, charge at two
 three-object groups, and aura at two six-object groups. Smoke tasks release
 their bank at frame end after their last puff retires. Native constructors and
 visual object allocation can decline when the game's pool has no free record.
+Chain visuals share the four-manager cap, allowing at most four sets of nine
+display records. Partial allocations remain hidden and retry without duplicating
+records. The fixed chain material `0xC006D920` is already resident; the renderer
+does not create a task-owned material buffer. Each chain draw checks current
+owner and record membership, with headroom for 96 commands and six matrices in
+the native graphics bank, retaining the HUD and dialog tail. A frame with
+insufficient storage skips that draw and restores the record's visibility for
+the next frame.
 
 Ryo pickup particles run under the independent native category-8 task list.
 The source coin supplies pose and metadata, so removing that coin does not

@@ -98,6 +98,8 @@ typedef struct AnchorPlayerModelRemote
     int drive_z;
     /* Native Sasuke task+0xA4 vertical speed, scaled by 100 for action 0x9B. */
     int jet_velocity_100;
+    /* Native chain phase plus one, then head XYZ in hundredths; zero inactive. */
+    int chain[4];
     int player_epoch;
     int interaction_session;
     int same_team;
@@ -111,6 +113,8 @@ typedef struct AnchorPlayerHitTarget
     int cid;
     int epoch;
     AnchorCollisionBody body;
+    /* Reconnect identity for interactions retained beyond one collision pass. */
+    int session;
 } AnchorPlayerHitTarget;
 
 typedef struct AnchorBossTarget

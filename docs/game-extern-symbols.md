@@ -516,8 +516,12 @@ render contract used by `src/combat/anchor_projectile_models.c`.
   `-32768` on the wire; `80019D40` explicitly tests it before building the
   camera-facing matrix. Model frame is object float `+0x28`.
 - Goemon coin binding `801E92A4` uses model `0x49009498`; `801E9504` changes
-  it to `0x1900065c` on impact. Charged binding `801EA00C` uses `0x49009020`,
-  with `801E9AE0` adding `0x49009238` and `0x49009348` display records.
+  it to `0x1900065c` on impact. Chain-pipe binding `801EA00C` uses
+  `0x49009020`, with `801E9AE0` adding `0x49009238` and `0x49009348`
+  display records. Its head callback `801EA0D8` and link callback `801EA4E8`
+  are chain geometry, not charged-coin projectiles. Multiplayer publishes
+  their live endpoint with the player pose rather than throwing a mirrored
+  projectile.
   Ebisumaru's descriptor at `80204B98` selects `0x49007c40` and file `0x124`.
   Sasuke's `801EBDC4`, `801EB454`, and `801EC414` bind `0x19000064`,
   `0x49007f90`, and `0x49008470` using file `0x128` and the player's broad

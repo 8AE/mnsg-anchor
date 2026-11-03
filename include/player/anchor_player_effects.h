@@ -9,12 +9,18 @@
 #define ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT 4
 #define ANCHOR_REMOTE_CHARGE_LIMIT 2
 #define ANCHOR_REMOTE_AURA_LIMIT 2
+#define ANCHOR_REMOTE_CHAIN_OBJECT_COUNT 9
 
 typedef struct AnchorPlayerEffectState
 {
     void *manager;
     void *owner_task;
     void *charge_object[3];
+    void *chain_object[ANCHOR_REMOTE_CHAIN_OBJECT_COUNT];
+    float chain_head[3];
+    float chain_target[3];
+    unsigned char chain_phase;
+    unsigned char chain_interpolation;
     int cid;
     int session;
     int epoch;

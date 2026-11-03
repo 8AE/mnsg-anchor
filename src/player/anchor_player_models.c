@@ -1786,6 +1786,7 @@ int anchor_player_models_get_hit_targets(AnchorPlayerHitTarget *out, int capacit
             continue;
         out[count].cid = slot->cid;
         out[count].epoch = slot->pending_remote.player_epoch;
+        out[count].session = slot->pending_remote.interaction_session;
         out[count++].body = slot->collision_body;
     }
     return count;

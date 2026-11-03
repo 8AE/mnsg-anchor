@@ -1,4 +1,5 @@
 #include "combat/anchor_player_attack.h"
+#include "combat/anchor_player_chain.h"
 #include "player/anchor_player_models.h"
 #include "utils/array_utils.h"
 
@@ -201,6 +202,14 @@ int anchor_player_attack_observe(const AnchorPlayerAttackSample *sample)
             continue;
         if (!sphere_hits_body(sample, &s_targets[i].body))
             continue;
+        if (sample->is_chain_pipe)
+        {
+            /* A missed or cancelled grapple must never become PvP damage.
+             * The native chain adapter chooses a target after the ordinary
+             * native collision pass has had a chance to hit a block/enemy. */
+            anchor_player_chain_observe(sample, &s_targets[i]);
+            continue;
+        }
         for (j = 0; j < episode->hit_count; ++j)
         {
             if (episode->hits[j].cid == s_targets[i].cid &&
@@ -287,6 +296,7 @@ void anchor_player_attack_native_sphere_return(void)
         *(void **)(s_suppressed_projectile + 0x34) = 0;
         s_suppressed_projectile = 0;
     }
+    anchor_player_chain_sphere_end();
 }
 
 RECOMP_HOOK("func_80033404_34004")
@@ -300,6 +310,8 @@ void anchor_player_attack_native_sphere(void *object, void *task, void *victims)
     int cube_target_epoch = 0;
     int cube_impact;
     (void)victims;
+
+    anchor_player_chain_sphere_begin(task);
 
     /* The generic collision scanner already decoded the active animation
      * sphere (or a projectile's fixed sphere) into these four float globals.
@@ -330,6 +342,7 @@ void anchor_player_attack_native_sphere(void *object, void *task, void *victims)
     sample.episode_id = cube_impact_id;
     sample.splash_occupant_cid = cube_target_cid;
     sample.splash_occupant_epoch = cube_target_epoch;
+    sample.is_chain_pipe = anchor_player_chain_is_native(task);
     if (sample.is_projectile && actor[0x65])
     {
         /* Already queued for native teardown: this scanner can still run

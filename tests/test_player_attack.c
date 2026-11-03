@@ -17,6 +17,16 @@ static int s_last_epoch;
 static int s_last_damage;
 static AnchorCollisionVec3 s_last_center;
 static int s_actor_ids[140];
+static int s_chain_observations;
+static int s_chain_last_cid;
+
+void anchor_player_chain_observe(const AnchorPlayerAttackSample *attack,
+                                  const AnchorPlayerHitTarget *target)
+{
+    assert(attack->is_chain_pipe);
+    ++s_chain_observations;
+    s_chain_last_cid = target->cid;
+}
 
 void *recomp_alloc(unsigned long size)
 {
@@ -57,8 +67,9 @@ int anchor_send_player_hit(int cid, int epoch, float x, float y, float z,
 static AnchorPlayerAttackSample sample(int actor)
 {
     AnchorPlayerAttackSample result = {
-        &s_actor_ids[actor], &s_actor_ids[actor], 0x900157c, 0x60010000,
-        0, 1, {0, 10, 0}, 2};
+        .task = &s_actor_ids[actor], .object = &s_actor_ids[actor],
+        .descriptor = 0x900157c, .animation = 0x60010000,
+        .is_player = 1, .center = {0, 10, 0}, .radius = 2};
     result.damage = 1;
     return result;
 }
@@ -68,9 +79,10 @@ static void setup(void)
     anchor_player_attack_reset();
     s_sent = 0;
     s_last_damage = 0;
+    s_chain_observations = s_chain_last_cid = 0;
     s_send_ok = 1;
     s_target_count = 1;
-    s_targets[0] = (AnchorPlayerHitTarget){17, 3, {{0, 0, 0}, 5, 20}};
+    s_targets[0] = (AnchorPlayerHitTarget){17, 3, {{0, 0, 0}, 5, 20}, 5};
     anchor_player_attack_begin_frame(1, 9);
 }
 
@@ -103,13 +115,37 @@ static void actual_geometry_and_disabled_attack(void)
     assert(s_last_center.x == 7 && s_last_center.y == 22);
 }
 
+static void chain_contacts_offer_grapples_without_damage(void)
+{
+    AnchorPlayerAttackSample a = sample(0);
+    setup();
+    a.is_chain_pipe = 1;
+    a.is_player = 0; /* Native owned chain helper, not the playable task. */
+    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{2, 0, 0}, 5, 20}, 5};
+    s_target_count = 2;
+    assert(anchor_player_attack_observe(&a) == 0);
+    assert(s_chain_observations == 2 && s_chain_last_cid == 18);
+    assert(s_sent == 0);
+    /* The adapter may decline every candidate; no damage fallback or shot
+     * consumption is allowed, including on repeated animated spheres. */
+    assert(anchor_player_attack_observe(&a) == 0);
+    assert(s_chain_observations == 4 && s_sent == 0);
+    a.center.x = 100;
+    anchor_player_attack_observe(&a);
+    assert(s_chain_observations == 4 && s_sent == 0);
+    a.center.x = 0;
+    anchor_player_attack_begin_frame(0, 9);
+    anchor_player_attack_observe(&a);
+    assert(s_chain_observations == 4 && s_sent == 0);
+}
+
 static void one_hit_per_swing_and_target(void)
 {
     AnchorPlayerAttackSample a = sample(0);
     int frame;
     int sphere;
     setup();
-    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{2, 0, 0}, 5, 20}};
+    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{2, 0, 0}, 5, 20}, 5};
     s_target_count = 2;
     for (frame = 0; frame < 8; ++frame)
     {
@@ -160,7 +196,7 @@ static void projectile_stops_at_first_remote_player(void)
     setup();
     a.is_player = 0;
     a.is_projectile = 1;
-    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{0, 0, 0}, 5, 20}};
+    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{0, 0, 0}, 5, 20}, 5};
     s_target_count = 2;
     assert(anchor_player_attack_observe(&a) == 1);
     assert(s_sent == 1);
@@ -178,7 +214,7 @@ static void nonprojectile_helper_remains_multitarget(void)
     setup();
     a.is_player = 0;
     a.is_projectile = 0;
-    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{0, 0, 0}, 5, 20}};
+    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{0, 0, 0}, 5, 20}, 5};
     s_target_count = 2;
     assert(anchor_player_attack_observe(&a) == 0);
     assert(s_sent == 2);
@@ -254,7 +290,7 @@ static void cube_splash_hits_each_player_once_for_gold_damage(void)
     a.splash_occupant_cid = 17;
     a.splash_occupant_epoch = 3;
     a.damage = 4;
-    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{0, 0, 0}, 5, 20}};
+    s_targets[1] = (AnchorPlayerHitTarget){18, 7, {{0, 0, 0}, 5, 20}, 5};
     s_target_count = 2;
     assert(anchor_player_attack_observe(&a) == 0);
     assert(s_sent == 1 && s_last_cid == 18 && s_last_damage == 4);
@@ -338,7 +374,7 @@ static void growing_roster_and_failed_dedup_reserve(void)
     setup();
     s_target_count = 100;
     for (i = 0; i < 200; ++i)
-        s_targets[i] = (AnchorPlayerHitTarget){i + 1, 3, {{0, 0, 0}, 5, 20}};
+        s_targets[i] = (AnchorPlayerHitTarget){i + 1, 3, {{0, 0, 0}, 5, 20}, 5};
     anchor_player_attack_observe(&a);
     assert(s_sent == 100);
     anchor_player_attack_observe(&a);
@@ -365,6 +401,7 @@ static void growing_roster_and_failed_dedup_reserve(void)
 int main(void)
 {
     actual_geometry_and_disabled_attack();
+    chain_contacts_offer_grapples_without_damage();
     one_hit_per_swing_and_target();
     projectile_lifetime_and_rearm();
     projectile_stops_at_first_remote_player();

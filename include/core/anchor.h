@@ -346,6 +346,10 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
     * @param jet_velocity_100 Native Sasuke jet task+0xA4 vertical speed times
     *                         100, or ANCHOR_REMOTE_JET_SPEED_UNAVAILABLE.
     * @param player_health    Current half-heart health (0..255), or -1 unknown.
+    * @param chain_phase     Native chain phase plus one (1..4), or zero inactive.
+    * @param chain_x100      Chain head world X in hundredths.
+    * @param chain_y100      Chain head world Y in hundredths.
+    * @param chain_z100      Chain head world Z in hundredths.
     * @return 1 if sent, 0 otherwise.
     */
    int anchor_set_position_anim(int pos_x, int pos_y, int pos_z,
@@ -361,7 +365,9 @@ char *anchor_impact_sounds_update(int ready, unsigned int stage,
                                 int has_animation_step,
                                 int collision_disabled,
                                 int drive_x, int drive_z, int player_epoch,
-                                int jet_velocity_100, int player_health);
+                                int jet_velocity_100, int player_health,
+                                int chain_phase, int chain_x100,
+                                int chain_y100, int chain_z100);
 
    /* One compact event per throw. Capture stamps the connection session and
     * owner epoch; a failed send can retry the same bounded JSON event/id.

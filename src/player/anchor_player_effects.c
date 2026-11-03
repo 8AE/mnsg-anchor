@@ -12,6 +12,17 @@
 
 #include "player/anchor_player_effects.h"
 #include "player/anchor_remote_model_pool.h"
+#include "core/anchor_dialog.h"
+#include "ui/anchor_freeze_prompt.h"
+#ifndef ANCHOR_PLAYER_EFFECTS_HOST_TEST
+#include "platform/modding.h"
+#else
+#define RECOMP_HOOK(name)
+#define RECOMP_HOOK_RETURN(name)
+/* Native display records have a four-byte next pointer followed by kind and
+ * draw-mode bytes. The 64-bit host fixture keeps that link separately. */
+extern void *anchor_player_effects_test_record_next(const void *object);
+#endif
 
 #define CHARACTER_EBISUMARU 1
 #define CHARACTER_YAE 3
@@ -45,6 +56,11 @@ extern void *func_80034E08_35A08(void *parent, void (*update)(void *, void *),
 extern void func_80034EF8_35AF8(void *task);
 extern void *func_800141C4_14DC4(unsigned int file_id);
 extern short D_800C7A72_C8672;
+extern unsigned char *D_8015C5C8_15D1C8;
+extern unsigned int *D_8015C5CC_15D1CC;
+extern unsigned char *D_80168504_169104;
+extern int D_801684F8_1690F8;
+extern int D_801684FC_1690FC;
 extern int func_801E8C44_5A4B54(void *manager, unsigned char kind);
 extern void func_801F11F0_5AD100(void *manager, unsigned int kind);
 extern void func_801F15E0_5AD4F0(void *manager, unsigned int kind);
@@ -52,6 +68,8 @@ extern void *func_8000DBF0_E7F0(void *task, unsigned int model,
     unsigned int material, float x, float y, float z,
     short rx, short ry, short rz, float sx, float sy, float sz,
     short file8, short file9);
+extern void func_80033898_34498(unsigned short rx, unsigned short ry,
+    unsigned short rz, float *x, float *y, float *z);
 #ifndef ANCHOR_PLAYER_EFFECTS_HOST_TEST
 extern void *func_80013B14_14714(unsigned int file_id);
 typedef struct EffectSceneResource
@@ -83,6 +101,18 @@ typedef struct EffectMaterialRecord
 } EffectMaterialRecord;
 static EffectMaterialRecord s_material_records
     [ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT][EFFECT_CHILD_LIMIT];
+
+typedef struct ChainDrawRecord
+{
+    void *object;
+    void *manager;
+    void *owner;
+    void *owner_object;
+} ChainDrawRecord;
+static ChainDrawRecord s_chain_records
+    [ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT][ANCHOR_REMOTE_CHAIN_OBJECT_COUNT];
+static unsigned char *s_chain_draw_hidden;
+static unsigned char s_chain_draw_visibility;
 
 static void clear_material_records(void *storage, unsigned int bytes)
 {
@@ -126,6 +156,8 @@ void anchor_player_effects_load_resources(void)
     if (!s_material_generation)
         ++s_material_generation;
     clear_material_records(s_material_records, sizeof(s_material_records));
+    clear_material_records(s_chain_records, sizeof(s_chain_records));
+    s_chain_draw_hidden = 0;
     s_manager_count = 0;
     s_aura_count = 0;
     s_charge_banks = 0;
@@ -202,6 +234,8 @@ static void release_manager(AnchorPlayerEffectState *state, int owner_live)
     {
         clear_material_records(s_material_records[state->material_bank],
                                sizeof(s_material_records[state->material_bank]));
+        clear_material_records(s_chain_records[state->material_bank],
+                               sizeof(s_chain_records[state->material_bank]));
         s_material_banks &= ~(1u << state->material_bank);
     }
     if (current && state->aura_occupied && s_aura_count > 0)
@@ -211,6 +245,10 @@ static void release_manager(AnchorPlayerEffectState *state, int owner_live)
     state->manager = 0;
     for (i = 0; i < CHARGE_OBJECT_COUNT; ++i)
         state->charge_object[i] = 0;
+    for (i = 0; i < ANCHOR_REMOTE_CHAIN_OBJECT_COUNT; ++i)
+        state->chain_object[i] = 0;
+    state->chain_phase = 0;
+    state->chain_interpolation = 0;
     state->charge_bank = -1;
     state->material_bank = -1;
     state->charge_alpha = 0;
@@ -391,6 +429,15 @@ void anchor_player_effects_suspend(AnchorPlayerEffectState *state)
             object[0x64] |= 1u;
         }
     state->charge_alpha = 0;
+    for (i = 0; i < ANCHOR_REMOTE_CHAIN_OBJECT_COUNT; ++i)
+        if (state->chain_object[i])
+        {
+            unsigned char *object = state->chain_object[i];
+            *(unsigned int *)(object + 0x2c) = 0;
+            object[0x64] |= 1u;
+        }
+    state->chain_phase = 0;
+    state->chain_interpolation = 0;
     state->purple_pending_action = -1;
     state->purple_retry_frames = 0;
     if (!state->manager)
@@ -423,6 +470,7 @@ static int purple_transform_action(int ch, int action)
 
 void anchor_player_effects_reset(AnchorPlayerEffectState *state, int owner_live)
 {
+    int i;
     if (!state)
         return;
     /* A live manager never self-deletes; its inert callback leaves the exact
@@ -443,6 +491,10 @@ void anchor_player_effects_reset(AnchorPlayerEffectState *state, int owner_live)
     state->charge_alpha = 0;
     state->charge_scale = 0;
     state->charge_spin = 0;
+    for (i = 0; i < ANCHOR_REMOTE_CHAIN_OBJECT_COUNT; ++i)
+        state->chain_object[i] = 0;
+    state->chain_phase = 0;
+    state->chain_interpolation = 0;
     state->aura_spawned = 0;
     state->aura_drop_pending = 0;
     state->aura_occupied = 0;
@@ -450,6 +502,18 @@ void anchor_player_effects_reset(AnchorPlayerEffectState *state, int owner_live)
     state->aura_retry_frames = 0;
     state->room = 0;
     state->initialized = 0;
+}
+
+static int chain_snapshot_active(const AnchorPlayerModelRemote *remote)
+{
+    int i;
+    if (remote->ch != 0 || remote->action < 0x70 || remote->action > 0x7b ||
+        remote->chain[0] < 1 || remote->chain[0] > 3)
+        return 0;
+    for (i = 1; i < 4; ++i)
+        if (remote->chain[i] < -1000000000 || remote->chain[i] > 1000000000)
+            return 0;
+    return 1;
 }
 
 void anchor_player_effects_set_context(AnchorPlayerEffectState *state,
@@ -470,6 +534,7 @@ void anchor_player_effects_set_context(AnchorPlayerEffectState *state,
         release_manager(state, 1);
     if (state->manager && state->owner_task == remote_task &&
         !(remote->appearance_flags & ANCHOR_APPEARANCE_WEAPON_CHARGE) &&
+        !chain_snapshot_active(remote) &&
         state->charge_alpha == 0 &&
         func_801E8C44_5A4B54(state->manager,
                              NATIVE_PURPLE_EFFECT_KIND) == 0 &&
@@ -537,6 +602,11 @@ static int ensure_manager(AnchorPlayerEffectState *state, void *remote_task)
                                           effect_manager_update, 0);
     if (!state->manager)
         return 0;
+    *(unsigned int *)((unsigned char *)state->manager + 0x30) = 0;
+    *(unsigned int *)((unsigned char *)state->manager + 0x34) = 0;
+    *(unsigned int *)((unsigned char *)state->manager + 0x38) = 0;
+    *(unsigned int *)((unsigned char *)state->manager + 0x3c) = 0;
+    *(unsigned int *)((unsigned char *)state->manager + 0x48) = 0;
     write_task_pointer(state->manager, 0x5c, remote_task);
     state->material_bank = bank;
     s_material_banks |= 1u << bank;
@@ -686,6 +756,243 @@ static void apply_charge(AnchorPlayerEffectState *state, void *remote_task,
         object[0x64] &= ~1u;
         object[0x65] = 0;
     }
+}
+
+static void hide_chain(AnchorPlayerEffectState *state)
+{
+    int i;
+    for (i = 0; i < ANCHOR_REMOTE_CHAIN_OBJECT_COUNT; ++i)
+        if (state->chain_object[i])
+        {
+            unsigned char *object = state->chain_object[i];
+            *(unsigned int *)(object + 0x2c) = 0;
+            object[0x64] |= 1u;
+        }
+    state->chain_phase = 0;
+    state->chain_interpolation = 0;
+}
+
+static void apply_chain(AnchorPlayerEffectState *state, void *remote_task,
+                        const void *remote_object,
+                        const AnchorPlayerModelRemote *remote)
+{
+    const unsigned char *owner = remote_object;
+    float target[3], hand[3], trim[3], delta[3];
+    unsigned short rotation[3];
+    void *broad;
+    int i, j, changed = 0;
+    if (!chain_snapshot_active(remote) || !s_charge_textures)
+    {
+        hide_chain(state);
+        return;
+    }
+    broad = read_task_pointer(owner, 0x40);
+    if (*(const unsigned short *)(owner + 0x3c) != 0x120u ||
+        !resident_pointer(broad))
+    {
+        hide_chain(state);
+        return;
+    }
+    for (i = 0; i < 3; ++i)
+    {
+        target[i] = (float)remote->chain[i + 1] / 100.0f;
+        delta[i] = target[i] - *(const float *)(owner + 8 + i * 4);
+        rotation[i] = *(const unsigned short *)(owner + 0x14 + i * 2);
+        if (target[i] != state->chain_target[i])
+            changed = 1;
+    }
+    /* Native range is much shorter. Reject a stale or malformed endpoint
+     * crossing the room instead of producing unbounded chain transforms. */
+    if (!(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]
+            <= 1000000.0f) || !ensure_manager(state, remote_task))
+    {
+        hide_chain(state);
+        return;
+    }
+    for (i = 0; i < ANCHOR_REMOTE_CHAIN_OBJECT_COUNT; ++i)
+        if (!state->chain_object[i])
+        {
+            unsigned char *object = func_8000DBF0_E7F0(state->manager,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            state->chain_object[i] = object;
+            if (!object)
+            {
+                /* Keep partial allocations hidden and retry the missing
+                 * records. The manager owns every successful allocation. */
+                hide_chain(state);
+                return;
+            }
+            *(unsigned int *)(object + 0x2c) = 0;
+            object[0x64] |= 1u;
+        }
+    if (state->chain_phase != remote->chain[0])
+    {
+        for (i = 0; i < 3; ++i)
+            state->chain_head[i] = state->chain_target[i] = target[i];
+        state->chain_interpolation = 0;
+    }
+    else if (changed)
+    {
+        for (i = 0; i < 3; ++i)
+            state->chain_target[i] = target[i];
+        state->chain_interpolation = 3;
+    }
+    if (state->chain_interpolation)
+    {
+        for (i = 0; i < 3; ++i)
+            state->chain_head[i] +=
+                (state->chain_target[i] - state->chain_head[i]) /
+                (float)state->chain_interpolation;
+        --state->chain_interpolation;
+    }
+    state->chain_phase = (unsigned char)remote->chain[0];
+
+    /* Exact func_801EA4E8 placement. These are world-space native offsets,
+     * not model-space offsets multiplied by the player's display scale. */
+    hand[0] = 0;
+    hand[1] = remote->action == 0x77 || remote->action == 0x78 ? 3.0f : 4.0f;
+    hand[2] = remote->action == 0x77 || remote->action == 0x78 ? 11.5f : 14.0f;
+    trim[0] = trim[1] = 0;
+    trim[2] = 2.5f;
+    func_80033898_34498(rotation[0], rotation[1], rotation[2],
+                       &hand[0], &hand[1], &hand[2]);
+    func_80033898_34498(rotation[0], rotation[1], rotation[2],
+                       &trim[0], &trim[1], &trim[2]);
+    for (i = 0; i < 3; ++i)
+        hand[i] += *(const float *)(owner + 8 + i * 4);
+    for (i = 0; i < ANCHOR_REMOTE_CHAIN_OBJECT_COUNT; ++i)
+    {
+        unsigned char *object = state->chain_object[i];
+        float scale = i ? 0.045f : 0.09f;
+        ChainDrawRecord *record = &s_chain_records[state->material_bank][i];
+        record->object = object;
+        record->manager = state->manager;
+        record->owner = remote_task;
+        record->owner_object = (void *)remote_object;
+        if (!i && remote->chain[0] == 3)
+        {
+            *(unsigned int *)(object + 0x2c) = 0;
+            object[0x64] |= 1u;
+            continue;
+        }
+        *(unsigned int *)(object + 0x2c) = i ? 0x49009348u : 0x49009020u;
+        *(unsigned int *)(object + 0x30) = 0xc006d920u;
+        *(unsigned short *)(object + 0x34) = 0;
+        *(unsigned int *)(object + 0x38) = 0;
+        *(unsigned short *)(object + 0x3c) = 0x120;
+        write_task_pointer(object, 0x40, broad);
+        *(unsigned short *)(object + 0x44) = 0x152;
+        write_task_pointer(object, 0x48, s_charge_textures);
+        *(unsigned short *)(object + 0x4c) = 0;
+        *(unsigned int *)(object + 0x50) = 0;
+        *(unsigned short *)(object + 0x54) = 0;
+        *(unsigned int *)(object + 0x58) = 0;
+        *(unsigned short *)(object + 0x5c) = 0;
+        *(unsigned int *)(object + 0x60) = 0;
+        for (j = 0; j < 3; ++j)
+        {
+            float position = i ? hand[j] + (float)(9 - i) / 9.0f *
+                (state->chain_head[j] - hand[j] - trim[j]) :
+                state->chain_head[j];
+            *(float *)(object + 8 + j * 4) = position;
+            *(unsigned short *)(object + 0x14 + j * 2) =
+                i ? 0x8000u : rotation[j];
+            *(float *)(object + 0x1c + j * 4) = scale;
+        }
+        *(float *)(object + 0x28) = 0;
+        object[5] = 10;
+        object[0x64] &= ~1u;
+        object[0x65] = 0;
+    }
+}
+
+static int chain_record_is_owned(const ChainDrawRecord *record)
+{
+    void *object;
+    int i;
+    if (!cpu_record_pointer(record->manager) ||
+        !cpu_record_pointer(record->owner) ||
+        !cpu_record_pointer(record->owner_object) ||
+        !anchor_player_models_is_remote_pair(record->owner, record->owner_object) ||
+        read_task_pointer(record->manager, 0x5c) != record->owner ||
+        read_task_pointer(record->manager, 0x0c) != (void *)effect_manager_update)
+        return 0;
+    object = read_task_pointer(record->manager, 0x18);
+    /* At most nine chain records and three fading charge records. A reused
+     * manager or record is never made part of this draw-only whitelist. */
+    for (i = 0; object && i < ANCHOR_REMOTE_CHAIN_OBJECT_COUNT + 3; ++i)
+    {
+        if (!cpu_record_pointer(object))
+            return 0;
+        if (object == record->object)
+            return 1;
+#ifdef ANCHOR_PLAYER_EFFECTS_HOST_TEST
+        object = anchor_player_effects_test_record_next(object);
+#else
+        object = read_task_pointer(object, 0);
+#endif
+    }
+    return 0;
+}
+
+RECOMP_HOOK("func_80016C44_17844")
+void anchor_player_chain_draw_begin(void *pointer)
+{
+    unsigned char *object = pointer;
+    unsigned char *bank_start;
+    unsigned int command_tail;
+    unsigned int model;
+    int bank, i, found = 0;
+    s_chain_draw_hidden = 0;
+    if (!object)
+        return;
+    for (bank = 0; bank < ANCHOR_REMOTE_EFFECT_MANAGER_LIMIT && !found; ++bank)
+        for (i = 0; i < ANCHOR_REMOTE_CHAIN_OBJECT_COUNT; ++i)
+            if (s_chain_records[bank][i].object == object &&
+                chain_record_is_owned(&s_chain_records[bank][i]))
+            {
+                found = 1;
+                break;
+            }
+    if (!found || (object[0x64] & 1u) || (signed char)object[0x65] < 0)
+        return;
+    s_chain_draw_hidden = object;
+    s_chain_draw_visibility = object[0x64] & 1u;
+    object[0x64] |= 1u;
+    model = *(unsigned int *)(object + 0x2c);
+    if ((model != 0x49009020u && model != 0x49009348u) ||
+        *(unsigned int *)(object + 0x30) != 0xc006d920u)
+        return;
+    if (!D_8015C5C8_15D1C8 || D_800C7A72_C8672 < 0 ||
+        D_800C7A72_C8672 > 1 || D_801684F8_1690F8 < -1 ||
+        D_801684F8_1690F8 > 32 || D_801684FC_1690FC < 0 ||
+        D_801684FC_1690FC > 32)
+        return;
+    bank_start = D_8015C5C8_15D1C8 +
+        (unsigned int)D_800C7A72_C8672 * 0x1d6d8u;
+    command_tail = (512u +
+        (anchor_dialog_busy() || anchor_freeze_prompt_visible() ? 2048u : 0u)) * 8u;
+    /* Verified native case 4 with these exact even model commands and this
+     * direct material: camera/light setup, root transform, one model G_DL,
+     * and pop. 96 commands and six matrices cover its complete CPU writes. */
+    if ((unsigned char *)D_8015C5CC_15D1CC < bank_start ||
+        (unsigned char *)D_8015C5CC_15D1CC >
+            bank_start + 0x14c80u - command_tail - 96u * 8u ||
+        D_80168504_169104 < bank_start + 0x14c80u ||
+        D_80168504_169104 > bank_start + 0x1d380u - 6u * 64u)
+        return;
+    object[0x64] = (unsigned char)((object[0x64] & 0xfeu) |
+                                   s_chain_draw_visibility);
+}
+
+RECOMP_HOOK_RETURN("func_80016C44_17844")
+void anchor_player_chain_draw_end(void)
+{
+    if (s_chain_draw_hidden)
+        s_chain_draw_hidden[0x64] =
+            (unsigned char)((s_chain_draw_hidden[0x64] & 0xfeu) |
+                            s_chain_draw_visibility);
+    s_chain_draw_hidden = 0;
 }
 
 static int aura_child_object(void *task, void *owner_task, void *broad,
@@ -862,6 +1169,7 @@ void anchor_player_effects_apply(AnchorPlayerEffectState *state,
 
     apply_sudden_aura(state, remote_task, remote_object, remote);
     apply_charge(state, remote_task, remote_object, remote);
+    apply_chain(state, remote_task, remote_object, remote);
     old_action = state->last_action;
     if (remote->action != old_action)
     {

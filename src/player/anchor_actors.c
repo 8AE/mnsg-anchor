@@ -22,6 +22,7 @@
 #include "combat/anchor_player_freeze.h"
 #include "combat/anchor_player_freeze_visual.h"
 #include "combat/anchor_player_cube.h"
+#include "combat/anchor_player_chain.h"
 #include "player/anchor_player_sounds.h"
 #include "player/anchor_remote_animation.h"
 #include "combat/anchor_remote_collision.h"
@@ -102,6 +103,7 @@ typedef struct RemotePlayer
     int drive_x;
     int drive_z;
     int jet_velocity_100;
+    int chain[4];
     int player_epoch;
     int interaction_session;
     int motion_phase_frames;
@@ -177,6 +179,7 @@ static int s_last_sent_drive_x;
 static int s_last_sent_drive_z;
 static int s_last_sent_player_epoch;
 static int s_last_sent_health = -1;
+static int s_last_sent_chain[4];
 static unsigned int s_last_sent_room = 0xffffffffu;
 static int s_have_previous_frame_position;
 static float s_previous_frame_x;
@@ -352,6 +355,30 @@ static int parse_lobby_positions(char *json)
             s_remote_players[count].jet_velocity_100 > 10000)
             s_remote_players[count].jet_velocity_100 =
                 ANCHOR_REMOTE_JET_SPEED_UNAVAILABLE;
+        s_remote_players[count].chain[0] = parse_int_after(p, "cp", 0);
+        s_remote_players[count].chain[1] =
+            parse_int_after(p, "cx", (-2147483647 - 1));
+        s_remote_players[count].chain[2] =
+            parse_int_after(p, "cy", (-2147483647 - 1));
+        s_remote_players[count].chain[3] =
+            parse_int_after(p, "cz", (-2147483647 - 1));
+        if (ch != CHARACTER_GOEMON || s_remote_players[count].collision_disabled ||
+            s_remote_players[count].action < 0x70 ||
+            s_remote_players[count].action > 0x7b ||
+            s_remote_players[count].chain[0] < 1 ||
+            s_remote_players[count].chain[0] > 4 ||
+            s_remote_players[count].chain[1] < -1000000000 ||
+            s_remote_players[count].chain[1] > 1000000000 ||
+            s_remote_players[count].chain[2] < -1000000000 ||
+            s_remote_players[count].chain[2] > 1000000000 ||
+            s_remote_players[count].chain[3] < -1000000000 ||
+            s_remote_players[count].chain[3] > 1000000000)
+        {
+            s_remote_players[count].chain[0] = 0;
+            s_remote_players[count].chain[1] = 0;
+            s_remote_players[count].chain[2] = 0;
+            s_remote_players[count].chain[3] = 0;
+        }
         s_remote_players[count].player_epoch = parse_int_after(p, "pe", 0);
         s_remote_players[count].interaction_session = parse_int_after(p, "ps", 0);
         s_remote_players[count].same_team = parse_int_after(p, "tm", 1);
@@ -595,6 +622,8 @@ static void reset_last_sent_state(void)
     s_last_sent_drive_z = 0;
     s_last_sent_player_epoch = 0;
     s_last_sent_health = -1;
+    s_last_sent_chain[0] = s_last_sent_chain[1] = 0;
+    s_last_sent_chain[2] = s_last_sent_chain[3] = 0;
     s_last_sent_room = 0xffffffffu;
     reset_frame_motion_baseline();
 }
@@ -623,6 +652,7 @@ static void publish_local_state(PlayerObject *local_obj)
     int player_epoch;
     int jet_velocity_100 = ANCHOR_REMOTE_JET_SPEED_UNAVAILABLE;
     int player_health;
+    int chain[4] = {0, 0, 0, 0};
     int velocity_x = 0;
     int velocity_y = 0;
     int velocity_z = 0;
@@ -758,6 +788,10 @@ static void publish_local_state(PlayerObject *local_obj)
     /* Read the stable player task/model fields after the game frame so peers
      * receive the action boundary, animation phase, and final rotations. */
     action = (int)read_u8_at(D_801FC604_5B8514, 0xcc);
+    if (!anchor_player_chain_visual_snapshot(chain))
+    {
+        chain[0] = chain[1] = chain[2] = chain[3] = 0;
+    }
     if (char_idx == CHARACTER_SASUKE && action == 0x9b)
     {
         float speed_100 =
@@ -929,6 +963,7 @@ static void publish_local_state(PlayerObject *local_obj)
         action != s_last_sent_action ||
         appearance_flags != s_last_sent_appearance_flags ||
         collision_disabled != s_last_sent_collision_disabled ||
+        chain[0] != s_last_sent_chain[0] ||
         player_epoch != s_last_sent_player_epoch ||
         frame_restarted ||
         (s_state_send_timer <= 0 &&
@@ -936,7 +971,10 @@ static void publish_local_state(PlayerObject *local_obj)
           frame_count_100 != s_last_sent_frame_count_100 ||
           rot_x != s_last_sent_rot_x ||
           rot_y != s_last_sent_rot_y ||
-          rot_z != s_last_sent_rot_z));
+          rot_z != s_last_sent_rot_z ||
+          (chain[0] && (chain[1] != s_last_sent_chain[1] ||
+                        chain[2] != s_last_sent_chain[2] ||
+                        chain[3] != s_last_sent_chain[3]))));
     if (!should_send_position && !should_send_animation)
     {
         if (!force_motion_edge)
@@ -952,7 +990,8 @@ static void publish_local_state(PlayerObject *local_obj)
                                  force_motion_edge, animation_step_100,
                                  has_animation_step, collision_disabled,
                                  drive_x, drive_z, player_epoch,
-                                 jet_velocity_100, player_health))
+                                 jet_velocity_100, player_health,
+                                 chain[0], chain[1], chain[2], chain[3]))
     {
         s_have_sent_position = 1;
         s_last_sent_x = x;
@@ -976,6 +1015,10 @@ static void publish_local_state(PlayerObject *local_obj)
         s_last_sent_drive_z = drive_z;
         s_last_sent_player_epoch = player_epoch;
         s_last_sent_health = player_health;
+        s_last_sent_chain[0] = chain[0];
+        s_last_sent_chain[1] = chain[1];
+        s_last_sent_chain[2] = chain[2];
+        s_last_sent_chain[3] = chain[3];
         s_state_send_timer = POSITION_SEND_FRAMES;
         s_position_keepalive_timer = POSITION_KEEPALIVE_FRAMES;
     }
@@ -1088,6 +1131,10 @@ static void update_remote_cutscene_models(PlayerObject *local_obj)
             model->drive_x = smoothed_remote.drive_x;
             model->drive_z = smoothed_remote.drive_z;
             model->jet_velocity_100 = smoothed_remote.jet_velocity_100;
+            model->chain[0] = smoothed_remote.chain[0];
+            model->chain[1] = smoothed_remote.chain[1];
+            model->chain[2] = smoothed_remote.chain[2];
+            model->chain[3] = smoothed_remote.chain[3];
             model->player_epoch = smoothed_remote.player_epoch;
             model->interaction_session = smoothed_remote.interaction_session;
             model->same_team = smoothed_remote.same_team;

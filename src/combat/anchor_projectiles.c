@@ -6,6 +6,7 @@
 #include "combat/anchor_projectile_source.h"
 #include "combat/anchor_projectile_capture.h"
 #include "combat/anchor_player_attack.h"
+#include "combat/anchor_player_chain.h"
 #include "combat/anchor_player_freeze_visual.h"
 #include "progression/item_sync.h"
 #include "platform/modding.h"
@@ -54,7 +55,7 @@ static int linked(const void *task)
 int anchor_projectiles_is_native_throw(const void *task)
 {
     const unsigned char *child = task;
-    if (!linked(task) ||
+    if (!linked(task) || anchor_player_chain_is_native(task) ||
         *(void *const *)(child + 0x5c) != D_801FC604_5B8514)
         return 0;
     /* All locally captured thrown-weapon families use these native kinds.
@@ -129,7 +130,8 @@ static void capture_throw(void *pointer)
     void *object;
     AnchorProjectileSpawn spawn;
     int publish;
-    if (!linked(task) || *(void **)(task + 0x5c) != D_801FC604_5B8514 ||
+    if (!linked(task) || anchor_player_chain_is_native(task) ||
+        *(void **)(task + 0x5c) != D_801FC604_5B8514 ||
         task[0x65] != 0)
         return;
     object = *(void **)(task + 0x18);
@@ -146,7 +148,7 @@ static void capture_throw(void *pointer)
 }
 
 /* Save task arguments at ENTRY: return hooks cannot assume the original a0
- * survives the native call. These six common update bodies cover actual
+ * survives the native call. These common update bodies cover actual
  * successful weapon activations, including delayed bomb initialization.
  * No animation inference, display-list parsing or full-scene scan is needed. */
 static void *s_coin_task;
@@ -177,19 +179,6 @@ void anchor_projectile_fire_ryo_return(void)
 {
     capture_throw(s_fire_ryo_task);
     s_fire_ryo_task = 0;
-}
-
-static void *s_charged_task;
-RECOMP_HOOK("func_801EA0D8_5A5FE8")
-void anchor_projectile_charged_entry(void *task)
-{
-    s_charged_task = rdram(task) && anchor_projectile_capture_first_update(task) ? task : 0;
-}
-RECOMP_HOOK_RETURN("func_801EA0D8_5A5FE8")
-void anchor_projectile_charged_return(void)
-{
-    capture_throw(s_charged_task);
-    s_charged_task = 0;
 }
 
 static void *s_camera_task;

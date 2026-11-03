@@ -141,6 +141,7 @@ _last_position_appearance_flags: int = -1
 _last_position_collision_disabled: int = -1
 _last_position_drive: "tuple[int, int]" = (0, 0)
 _last_position_epoch: int = 0
+_last_position_chain_phase: int = 0
 # Durable last-gameplay transform used only while the local client is in the
 # World Map room.  currentRoomId must remain 0x226 for gameplay isolation, so
 # this separate snapshot lets late joiners place the player on Japan's map.
@@ -380,8 +381,11 @@ _MOVEMENT_STATE_FIELDS: "tuple[str, ...]" = (
     "rotVelX", "rotVelY", "rotVelZ", "animStep100", "hasAnimStep",
     "collisionDisabled",
     "driveX", "driveZ", "playerEpoch", "interactionSession",
-    "jetVelocity100", "playerHealth",
+    "jetVelocity100", "playerHealth", "chain",
 )
+CHAIN_COORD_LIMIT: int = 1000000000
+# Native Goemon chain launch, flight, pull and release action families.
+CHAIN_ACTIONS = frozenset(range(0x70, 0x7C))
 JET_VELOCITY_100_UNAVAILABLE: int = -32768
 JET_VELOCITY_100_MIN: int = -10000
 JET_VELOCITY_100_MAX: int = 10000
@@ -437,6 +441,18 @@ def _jet_velocity_100(value: object) -> int:
 def _player_health(value: object) -> int:
     """Read optional half-heart health without coercing untrusted types."""
     return value if type(value) is int and 0 <= value <= 255 else -1
+
+
+def _chain_visual(value: object, character: object, action: object) -> "tuple[int, int, int, int]":
+    """Read a complete optional chain endpoint without coercing peer data."""
+    if (character != "Goemon" or type(action) is not int or
+            action not in CHAIN_ACTIONS or
+            type(value) not in (list, tuple) or len(value) != 4 or
+            any(type(field) is not int for field in value) or
+            not 1 <= value[0] <= 4 or
+            any(abs(field) > CHAIN_COORD_LIMIT for field in value[1:])):
+        return (0, 0, 0, 0)
+    return tuple(value)
 
 
 def _health_metadata_context(
@@ -676,6 +692,7 @@ def _merge_client_state(
 
     if _jet_context_changed(state, payload):
         state.pop("jetVelocity100", None)
+        state.pop("chain", None)
         if (enforce_movement_order or
                 ("currentCharacter" in payload and
                  str(payload["currentCharacter"]) != state.get("character", "")) or
@@ -706,12 +723,15 @@ def _merge_client_state(
     if "online" in payload:
         state["online"] = bool(payload["online"])
         if not state["online"]:
+            state.pop("chain", None)
             _drop_projectile_spawns(cid)
             _drop_player_cube(cid)
             _drop_player_sounds(cid)
             _drop_player_ice_breaks(cid)
     if "isSaveLoaded" in payload:
         state["isSaveLoaded"] = bool(payload["isSaveLoaded"])
+        if not state["isSaveLoaded"]:
+            state.pop("chain", None)
     if "er" in payload:
         state["er"] = _bounded_int(payload["er"], -1, 0xFFFF, -1)
     if "es" in payload:
@@ -720,7 +740,7 @@ def _merge_client_state(
         state["eb"] = _normalize_enemy_bits(payload["eb"])
     _cache_map_snapshot(state, payload)
     for field in _MOVEMENT_STATE_FIELDS:
-        if field not in ("jetVelocity100", "playerHealth") and field in payload:
+        if field not in ("jetVelocity100", "playerHealth", "chain") and field in payload:
             state[field] = int(payload[field])
     if enforce_movement_order or "posX" in payload:
         # Health belongs to this ordered sample. Legacy or malformed values
@@ -745,6 +765,17 @@ def _merge_client_state(
         for field in ("playerEpoch", "interactionSession"):
             value = int(payload.get(field, 0))
             state[field] = value if 0 < value <= _POSITION_SEQUENCE_MASK else 0
+        # A chain endpoint belongs to this ordered room/life sample. Omission
+        # by an older peer and malformed data both retire the preceding chain.
+        state["chain"] = (
+            _chain_visual(payload.get("chain"), state.get("character"),
+                          payload.get("action"))
+            if state.get("online", True) and state.get("isSaveLoaded", False) and
+            state["playerEpoch"] > 0 and state["interactionSession"] > 0 and
+            not state["collisionDisabled"] and
+            _health_sample_matches_context(cid, state, payload)
+            else (0, 0, 0, 0)
+        )
         # Optional animation rate belongs to the same sample, including an
         # atomic room change. A legacy sender must clear any retained rate.
         if enforce_movement_order:
@@ -943,6 +974,7 @@ def _replace_all_client_states(states: list) -> None:
                     merged["appearanceFlags"] = previous["appearanceFlags"]
                 if _jet_context_changed(previous, client_state):
                     merged.pop("jetVelocity100", None)
+                    merged.pop("chain", None)
                     if (("currentCharacter" in client_state and
                          str(client_state["currentCharacter"]) !=
                          previous.get("character", "")) or
@@ -950,6 +982,7 @@ def _replace_all_client_states(states: list) -> None:
                         merged.pop("playerHealth", None)
                 if not merged["online"] or not merged["isSaveLoaded"]:
                     merged.pop("playerHealth", None)
+                    merged.pop("chain", None)
             # A fresh handshake already identifies this live connection.
             # Arena events do not require movement to have started, but an
             # older room snapshot must not replace a newer motion session.
@@ -1478,6 +1511,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
     global _last_position_drive, _last_position_epoch, _local_map_snapshot
+    global _last_position_chain_phase
     global _local_map_snapshot_explicit
     global _interaction_session
     global _player_hit_seq, _player_cube_seq, _player_sound_seq
@@ -1507,6 +1541,7 @@ def _do_disconnect(expected_sock: "socket.socket | None" = None) -> None:
     _last_position_collision_disabled = -1
     _last_position_drive = (0, 0)
     _last_position_epoch = 0
+    _last_position_chain_phase = 0
     _local_map_snapshot = None
     _local_map_snapshot_explicit = False
     _interaction_session = 0
@@ -1577,6 +1612,7 @@ def connect(
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
     global _last_position_drive, _last_position_epoch, _local_map_snapshot
+    global _last_position_chain_phase
     global _local_map_snapshot_explicit
     global _interaction_session
     global _player_hit_seq, _player_cube_seq, _player_sound_seq
@@ -1611,6 +1647,7 @@ def connect(
     _last_position_collision_disabled = -1
     _last_position_drive = (0, 0)
     _last_position_epoch = 0
+    _last_position_chain_phase = 0
     _local_map_snapshot = None
     _local_map_snapshot_explicit = False
     _interaction_session = secrets.randbelow(_POSITION_SEQUENCE_MASK) + 1
@@ -4182,6 +4219,10 @@ def set_position_anim(
     player_epoch: int = 0,
     jet_velocity_100: int = JET_VELOCITY_100_UNAVAILABLE,
     player_health: int = -1,
+    chain_phase: int = 0,
+    chain_x100: int = 0,
+    chain_y100: int = 0,
+    chain_z100: int = 0,
 ) -> bool:
     """
     Broadcast world-space position and the live animation phase to teammates.
@@ -4227,6 +4268,8 @@ def set_position_anim(
         jet_velocity_100: Native Sasuke jet vertical speed times 100. The
             unavailable sentinel is omitted from the hot position packet.
         player_health: Current half-heart health (0..255), or -1 unavailable.
+        chain_phase: Native chain phase plus one (1..4), or zero inactive.
+        chain_x100, chain_y100, chain_z100: Chain head XYZ in hundredths.
 
     Returns True if the packet was sent.
     """
@@ -4235,6 +4278,7 @@ def set_position_anim(
     global _last_position_action, _last_position_frame_100
     global _last_position_appearance_flags, _last_position_collision_disabled
     global _last_position_drive, _last_position_epoch, _local_map_snapshot
+    global _last_position_chain_phase
     global _local_map_snapshot_explicit
 
     if not _connected:
@@ -4256,6 +4300,11 @@ def set_position_anim(
         (_last_position_drive[1] != 0 and drive_z == 0)
     )
     epoch_changed = player_epoch != _last_position_epoch
+    chain = _chain_visual((chain_phase, chain_x100, chain_y100, chain_z100),
+                          _local_character, action)
+    if collision_disabled or not player_epoch:
+        chain = (0, 0, 0, 0)
+    chain_phase_changed = chain[0] != _last_position_chain_phase
     frame_restarted = (
         not action_changed
         and int(frame_100) + ANIMATION_RESTART_DELTA_100 < _last_position_frame_100
@@ -4269,6 +4318,7 @@ def set_position_anim(
         and not collision_changed
         and not drive_stopped
         and not epoch_changed
+        and not chain_phase_changed
         and not frame_restarted
         and not bool(force_motion_edge)
     ):
@@ -4349,6 +4399,8 @@ def set_position_anim(
     player_health = _player_health(player_health)
     if player_health >= 0:
         packet["playerHealth"] = player_health
+    if chain[0]:
+        packet["chain"] = chain
     sent = _send_raw(packet)
     if not sent:
         return False
@@ -4362,6 +4414,7 @@ def set_position_anim(
     _last_position_collision_disabled = collision_disabled
     _last_position_drive = (drive_x, drive_z)
     _last_position_epoch = player_epoch
+    _last_position_chain_phase = chain[0]
     _position_seq = next_seq
     if (_valid_map_room_id(_local_room_id) and
             not _local_map_snapshot_explicit):
@@ -4403,6 +4456,7 @@ def set_position_anim(
             local["jetVelocity100"] = packet.get(
                 "jetVelocity100", JET_VELOCITY_100_UNAVAILABLE
             )
+            local["chain"] = chain
             local["roomId"] = _local_room_id
             identity = (_interaction_session, player_epoch, _local_room_id)
             frozen = bool(appearance_flags & APPEARANCE_FROZEN)
@@ -4816,6 +4870,8 @@ def get_lobby_positions_json() -> str:
       "h"    – current half-heart health (0..255), or -1 unavailable.
       "jv"   – Sasuke action 0x9B native jet vertical speed times 100,
                or -32768 when unavailable.
+      "cp","cx","cy","cz" – optional native chain phase plus one and
+               head XYZ in hundredths; all zero when inactive.
       "mr"   – gameplay room used by the Japan-map marker, -1 if unavailable.
       "mx","my","mz" – signed fixed-point map position in hundredths.
       "mhp"  – 1 when mr/mx/my/mz form a complete usable map snapshot.
@@ -4860,6 +4916,9 @@ def get_lobby_positions_json() -> str:
                 has_map_pos = 1
             char_lookup = {"Goemon": 0, "Ebisumaru": 1, "Sasuke": 2, "Yae": 3}
             ch = char_lookup.get(v.get("character", ""), -1)
+            chain = (_chain_visual(v.get("chain"), v.get("character"),
+                                   v.get("action"))
+                     if has_complete_pos else (0, 0, 0, 0))
             result.append({
                 "cid": cid,
                 "n": v.get("name", f"Player{cid}"),
@@ -4901,6 +4960,8 @@ def get_lobby_positions_json() -> str:
                        if has_complete_pos and ch == 2 and
                        v.get("action") == 0x9B
                        else JET_VELOCITY_100_UNAVAILABLE),
+                "cp": chain[0], "cx": chain[1],
+                "cy": chain[2], "cz": chain[3],
                 "pe": int(v.get("playerEpoch", 0)),
                 "ps": int(v.get("interactionSession", 0)),
                 "tm": 1 if v.get("teamId", "") == _team_id else 0,

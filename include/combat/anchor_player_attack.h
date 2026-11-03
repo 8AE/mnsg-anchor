@@ -22,6 +22,7 @@ typedef struct AnchorPlayerAttackSample
     int episode_id; /* Carry identity for separate impacts by the same cube. */
     int splash_occupant_cid;
     int splash_occupant_epoch;
+    int is_chain_pipe; /* Native chain helper: local grapple, never PvP damage. */
 } AnchorPlayerAttackSample;
 
 void anchor_player_attack_reset(void);
