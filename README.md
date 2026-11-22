@@ -84,9 +84,12 @@ All options are available in the mod settings menu inside the game:
 | Room ID                 | *(blank)*         | Required private code that keeps multiplayer sessions separate                 |
 | Player Name             | `Player`          | Display name shown to other players                                            |
 | Show NET Button         | Enabled           | Show the NET button in the bottom-left corner                                  |
+| Event Dialogs           | Enabled           | Show invitations to join other players in boss fights and character minigames |
 | Show Item Notifications | Enabled           | Show a toast when items or flags are received or found                         |
 | Show Room ID (Hex)      | Disabled          | Display the raw hexadecimal room ID next to the area name in the player list   |
 | Show Player Positions   | Disabled          | Display each player's X, Y, Z world position next to their name                |
+
+To change Event Dialogs in the config file, set `anchor_show_event_dialogs` to `"Enabled"` or `"Disabled"` inside the `storage` object in `mod_config/mnsg_multiplayer_anchor.json` in Recompiled's config directory. You can still join manually through the player list with Event Dialogs disabled.
 
 ### Dependencies
 

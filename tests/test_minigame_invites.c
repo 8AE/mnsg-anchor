@@ -73,7 +73,13 @@ static AnchorDialogResult choice = ANCHOR_DIALOG_PENDING;
 static AnchorDialogOwner owner = ANCHOR_DIALOG_OWNER_NONE;
 static const char *packet;
 static char shown_name[257], shown_game[64];
+static unsigned long event_dialogs_option;
 
+unsigned long recomp_get_config_u32(const char *key)
+{
+    assert(strcmp(key, "anchor_show_event_dialogs") == 0);
+    return event_dialogs_option;
+}
 int anchor_is_connected(void) { return connected; }
 int anchor_is_disabled(void) { return disabled; }
 int item_sync_save_is_loaded(void) { return loaded; }
@@ -476,6 +482,7 @@ int main(void)
     /* Player-list transfers share the invite's fixed minigame starts. A
      * busy native gate leaves the request retryable; ordinary rooms retain
      * the remote's exact signed coordinates. */
+    event_dialogs_option = 1;
     for (int i = 0; i < 3; ++i) {
         assert(anchor_minigame_invites_is_room(rooms[i]));
         before = warps;
@@ -509,6 +516,7 @@ int main(void)
     assert(warps == before + 1 && prepared_game == 1 &&
            prepared_cid == 0 && prepared_session == 0 && prepared_visit == 0);
     connected = 1;
+    event_dialogs_option = 0;
 
     anchor_minigame_invites_update();
     assert(published_game == 0);
@@ -758,6 +766,22 @@ int main(void)
     assert(anchor_minigame_invites_transfer_to_room(rooms[1], 0, 0, 0));
     assert(prepared_cid == 0);
     reject_explicit = 0;
+
+    /* The setting suppresses new prompts and closes an open one. */
+    load_room(rooms[0]);
+    int peeks_before = peeks, cancels_before = cancels;
+    before = warps;
+    event_dialogs_option = 1;
+    begin(1);
+    assert(!modal && peeks == peeks_before && published_game == 1);
+    event_dialogs_option = 0;
+    anchor_minigame_invites_update();
+    assert(modal && anchor_minigame_invites_active());
+    event_dialogs_option = 1;
+    anchor_minigame_invites_update();
+    assert(!modal && !packet && !anchor_minigame_invites_active());
+    assert(cancels == cancels_before + 1 && warps == before);
+    event_dialogs_option = 0;
 
     /* Older invitation JSON lacks gameVisit; the bridge discovers it from
      * current host metadata when C passes zero. */

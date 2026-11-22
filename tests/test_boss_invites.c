@@ -19,8 +19,14 @@ static AnchorDialogResult choice = ANCHOR_DIALOG_PENDING;
 static AnchorDialogOwner dialog_owner = ANCHOR_DIALOG_OWNER_NONE;
 static int sign_pending;
 static int minigame_invite_active;
+static unsigned long event_dialogs_option;
 static const char invite[] = "{\"cid\":2,\"session\":123,\"seq\":7,\"arena\":1,\"name\":\"Ahmad\"}";
 
+unsigned long recomp_get_config_u32(const char *key)
+{
+    assert(strcmp(key, "anchor_show_event_dialogs") == 0);
+    return event_dialogs_option;
+}
 int anchor_is_connected(void) { return connected; }
 int anchor_is_disabled(void) { return disabled; }
 int item_sync_save_is_loaded(void) { return loaded; }
@@ -316,6 +322,22 @@ int main(void)
     anchor_boss_invites_update();
     assert(cancels == prior_cancels && dialog_owner == ANCHOR_DIALOG_OWNER_CASTLE_RETURN);
     assert(modal && !packet);
+
+    /* Disabling local prompts still publishes the local arena. */
+    modal = 0;
+    dialog_owner = ANCHOR_DIALOG_OWNER_NONE;
+    current_arena = 2;
+    packet = invite;
+    int prior_peeks = peeks;
+    event_dialogs_option = 1;
+    anchor_boss_invites_update();
+    assert(peeks == prior_peeks && !modal && published_arena == 2);
+    event_dialogs_option = 0;
+    begin();
+    event_dialogs_option = 1;
+    anchor_boss_invites_update();
+    assert(!modal && !packet && !anchor_boss_invites_active());
+    assert(cancels == prior_cancels + 1 && warps == prior_warps);
 
     puts("boss invitation coordinator: deferred UI, Yes/No, cancellation and native warp ordering passed");
     return 0;

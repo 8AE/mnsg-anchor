@@ -167,6 +167,8 @@ char *anchor_update_minigame(int game,int visit,const char *state)
 { assert(!game && !visit && !strcmp(state,"null"));return 0; }
 int anchor_update_minigame_active(int game,int visit)
 { (void)visit;++broadcasts;announced_game=game;return connected; }
+unsigned long recomp_get_config_u32(const char *key)
+{ assert(strcmp(key, "anchor_show_event_dialogs") == 0); return 0; }
 int anchor_minigame_prepare_join(int game,int cid,int session,int visit)
 {
     assert(game==4);++prepare_calls;prepared_cid=cid;prepared_session=session;prepared_visit=visit;

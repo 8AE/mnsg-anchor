@@ -8,7 +8,7 @@
 id = "mnsg_multiplayer_anchor"
 
 # Version of this mod.
-version = "2.1.0"
+version = "3.0.0"
 
 # The name that will show up for this mod in the mod menu. This should be human readable.
 display_name = "Anchor Multiplayer"
@@ -147,6 +147,14 @@ default = "Enabled"
 id = "anchor_show_boss_health_bar"
 name = "Show Boss Health Bar"
 description = "Show native boss names and heart health bars during boss encounters."
+type = "Enum"
+options = ["Enabled", "Disabled"]
+default = "Enabled"
+
+[[manifest.config_options]]
+id = "anchor_show_event_dialogs"
+name = "Event Dialogs"
+description = "Show invitations to join other players in boss fights and character minigames."
 type = "Enum"
 options = ["Enabled", "Disabled"]
 default = "Enabled"

@@ -8,9 +8,11 @@ extern char *anchor_update_minigame(int game, int visit, const char *state_json)
 extern char *anchor_get_minigame_invitation_json(void);
 extern int anchor_minigame_invitation_is_current(int cid, int session, int seq);
 extern void anchor_dismiss_minigame_invitation(int cid, int session, int seq);
+extern unsigned long recomp_get_config_u32(const char *key);
 extern void recomp_free(void *memory);
 #else
 #include "platform/modding.h"
+#include "platform/recompconfig.h"
 #include "platform/recomputils.h"
 #include "core/anchor.h"
 #endif
@@ -920,9 +922,11 @@ void anchor_minigame_invites_update(void)
                         !item_sync_save_is_loaded()))
         return;
 
+    int show_event_dialogs = recomp_get_config_u32("anchor_show_event_dialogs") == 0;
     if (s_invitation.cid)
     {
-        if (!s_room_loaded || s_loaded_room != D_800C7AB2 ||
+        if (!show_event_dialogs ||
+            !s_room_loaded || s_loaded_room != D_800C7AB2 ||
             s_invitation.local_room != D_800C7AB2 ||
             s_invitation.local_visit != s_visit ||
             !anchor_minigame_invitation_is_current(s_invitation.cid,
@@ -957,8 +961,9 @@ void anchor_minigame_invites_update(void)
         return;
     }
 
-    if (!anchor_boss_invite_world_can_prompt() || anchor_dialog_busy() ||
-        anchor_boss_invites_active() || anchor_castle_return_sign_pending())
+    if (!show_event_dialogs || !anchor_boss_invite_world_can_prompt() ||
+        anchor_dialog_busy() || anchor_boss_invites_active() ||
+        anchor_castle_return_sign_pending())
         return;
     json = anchor_get_minigame_invitation_json();
     if (!json)
